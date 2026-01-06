@@ -5,6 +5,7 @@ import { AppService } from './app.service';
 import { DatabaseModule } from './database/database.module';
 import { AuthModule } from './auth/auth.module';
 import { UsersModule } from './users/users.module';
+import { EmployeeTimeSheetModule } from './employeeTimeSheet/employeeTimeSheet.module';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -33,6 +34,7 @@ function getEnvFiles(): string[] {
     DatabaseModule,
     UsersModule,
     AuthModule,
+    EmployeeTimeSheetModule,
   ],
   controllers: [AppController],
   providers: [AppService],
