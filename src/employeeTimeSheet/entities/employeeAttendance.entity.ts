@@ -11,6 +11,7 @@ export enum AttendanceStatus {
   HALF_DAY = 'Half Day',
   LEAVE = 'Leave',
   PENDING = 'Pending',
+  NOT_UPDATED = 'Not Updated'
 }
 
 @Entity('employee_attendance')
