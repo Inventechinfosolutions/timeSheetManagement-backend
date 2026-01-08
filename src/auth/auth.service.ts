@@ -2,17 +2,20 @@ import {
   Injectable,
   UnauthorizedException,
   ConflictException,
+  Inject,
+  forwardRef,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
-import { UsersService } from '../users/users.service';
+import { UsersService } from '../users/service/user.service';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { AuthResponseDto } from './dto/auth-response.dto';
-import { User } from '../entities/user.entity';
+import { User } from '../users/entities/user.entity';
 
 @Injectable()
 export class AuthService {
   constructor(
+    @Inject(forwardRef(() => UsersService))
     private usersService: UsersService,
     private jwtService: JwtService,
   ) {}
@@ -20,20 +23,20 @@ export class AuthService {
   async register(registerDto: RegisterDto): Promise<AuthResponseDto> {
     try {
       const user = await this.usersService.create({
-        name: registerDto.name,
-        email: registerDto.email,
+        aliasLoginName: registerDto.name,
+        loginId: registerDto.email,
         password: registerDto.password,
       });
 
-      const payload = { sub: user.id, email: user.email };
+      const payload = { sub: user.id, loginId: user.loginId };
       const access_token = this.jwtService.sign(payload);
 
       return {
         access_token,
         user: {
           id: user.id,
-          name: user.name,
-          email: user.email,
+          name: user.aliasLoginName,
+          email: user.loginId,
         },
       };
     } catch (error) {
@@ -45,7 +48,7 @@ export class AuthService {
   }
 
   async login(loginDto: LoginDto): Promise<AuthResponseDto> {
-    const user = await this.usersService.findByEmail(loginDto.email);
+    const user = await this.usersService.findByLoginId(loginDto.email);
 
     if (!user) {
       throw new UnauthorizedException('Invalid credentials');
@@ -60,21 +63,30 @@ export class AuthService {
       throw new UnauthorizedException('Invalid credentials');
     }
 
-    const payload = { sub: user.id, email: user.email };
+    const payload = { sub: user.id, loginId: user.loginId };
     const access_token = this.jwtService.sign(payload);
 
     return {
       access_token,
       user: {
         id: user.id,
-        name: user.name,
-        email: user.email,
+        name: user.aliasLoginName,
+        email: user.loginId,
       },
     };
   }
 
   async validateUser(userId: string): Promise<User | null> {
     return await this.usersService.findById(userId);
+  }
+
+  async generateJWTTokenWithRefresh(payload: any) {
+    const access_token = this.jwtService.sign(payload);
+    const refresh_token = this.jwtService.sign(payload, {
+      secret: process.env.JWT_REFRESH_SECRET || 'your-refresh-secret-key',
+      expiresIn: process.env.JWT_REFRESH_EXPIRATION || '7d',
+    } as any);
+    return { accessToken: access_token, refreshToken: refresh_token };
   }
 }
 
