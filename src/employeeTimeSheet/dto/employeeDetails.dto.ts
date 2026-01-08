@@ -41,4 +41,15 @@ export class EmployeeDetailsDto {
   @IsNotEmpty()
   @MaxLength(255)
   email: string;
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(255)
+  @IsOptional()
+  password?: string;
+
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(255)
+  @IsOptional()
+  confirmPassword?: string;
 }

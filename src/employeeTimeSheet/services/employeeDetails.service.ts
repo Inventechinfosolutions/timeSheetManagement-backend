@@ -8,6 +8,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Not, Repository } from 'typeorm';
+import * as bcrypt from 'bcrypt';
 import { EmployeeDetails } from '../entities/employeeDetails.entity';
 import { EmployeeDetailsDto } from '../dto/employeeDetails.dto';
 
@@ -48,8 +49,22 @@ export class EmployeeDetailsService {
         );
       }
 
+      // Password validation
+      if (createEmployeeDetailsDto.password) {
+        if (createEmployeeDetailsDto.password !== createEmployeeDetailsDto.confirmPassword) {
+          throw new BadRequestException('Passwords do not match');
+        }
+        
+        // Hash password
+        const salt = await bcrypt.genSalt(10);
+        createEmployeeDetailsDto.password = await bcrypt.hash(createEmployeeDetailsDto.password, salt);
+      }
+
+      // Remove confirmPassword as it's not in the entity
+      const { confirmPassword, ...employeeData } = createEmployeeDetailsDto;
+
       const employee = this.employeeDetailsRepository.create(
-        createEmployeeDetailsDto,
+        employeeData,
       );
       const result = await this.employeeDetailsRepository.save(employee);
       this.logger.log(`Employee created successfully with ID: ${result.id}`);
@@ -172,7 +187,17 @@ export class EmployeeDetailsService {
         }
       }
 
-      Object.assign(employee, updateData);
+      // Password validation and hashing if updated
+      if (updateData.password) {
+        if (updateData.password !== updateData.confirmPassword) {
+          throw new BadRequestException('Passwords do not match');
+        }
+        const salt = await bcrypt.genSalt(10);
+        updateData.password = await bcrypt.hash(updateData.password, salt);
+      }
+
+      const { confirmPassword, ...updateFields } = updateData;
+      Object.assign(employee, updateFields);
       const result = await this.employeeDetailsRepository.save(employee);
       this.logger.log(`Employee ${id} updated successfully`);
       return result;
