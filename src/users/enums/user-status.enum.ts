@@ -1,0 +1,6 @@
+export enum UserStatus {
+  DRAFT = 'DRAFT',
+  ACTIVE = 'ACTIVE',
+  RESET_REQUIRED = 'RESET_REQUIRED',
+  INACTIVE = 'INACTIVE',
+}
