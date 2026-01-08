@@ -20,6 +20,6 @@ export class EmployeeDetails {
   @Column({ name: 'email', unique: true, length: 255 })
   email: string;
 
-  @Column({ name: 'password', length: 255, nullable: true, select: false })
+  @Column({ name: 'password', length: 255, nullable: true })
   password: string;
 }

@@ -135,7 +135,7 @@ export class EmployeeAttendanceController {
   @ApiOperation({ summary: 'Post login time for an employee' })
   async postLoginTime(
     @Param('employeeId') employeeId: string,
-    @Body() body: { workingDate: Date; loginTime: string },
+    @Body() body: { workingDate: string; loginTime: string },
   ) {
     return this.employeeAttendanceService.postLoginTime(employeeId, body);
   }
@@ -144,7 +144,7 @@ export class EmployeeAttendanceController {
   @ApiOperation({ summary: 'Post logout time for an employee' })
   async postLogoutTime(
     @Param('employeeId') employeeId: string,
-    @Body() body: { workingDate: Date; logoutTime: string },
+    @Body() body: { workingDate: string; logoutTime: string },
   ) {
     return this.employeeAttendanceService.postLogoutTime(employeeId, body);
   }
