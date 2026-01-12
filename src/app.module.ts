@@ -8,6 +8,11 @@ import { UsersModule } from './users/users.module';
 import { EmployeeTimeSheetModule } from './employeeTimeSheet/employeeTimeSheet.module';
 import * as fs from 'fs';
 import * as path from 'path';
+import { ScheduleModule } from '@nestjs/schedule';
+import { TypeOrmModule } from '@nestjs/typeorm';
+import { AttendanceCronService } from './cron/attendance.cron.service';
+import { EmployeeAttendance } from './employeeTimeSheet/entities/employeeAttendance.entity';
+import { EmployeeDetails } from './employeeTimeSheet/entities/employeeDetails.entity';
 
 function getEnvFiles(): string[] {
   const envPath = path.join(process.cwd(), '.env');
@@ -35,8 +40,10 @@ function getEnvFiles(): string[] {
     UsersModule,
     AuthModule,
     EmployeeTimeSheetModule,
+    ScheduleModule.forRoot(),
+    TypeOrmModule.forFeature([EmployeeAttendance, EmployeeDetails]),
   ],
   controllers: [AppController],
-  providers: [AppService],
+  providers: [AppService, AttendanceCronService],
 })
 export class AppModule {}

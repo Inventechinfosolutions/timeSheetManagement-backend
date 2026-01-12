@@ -44,6 +44,7 @@ export class EmployeeAttendanceController {
     return this.employeeAttendanceService.create(createEmployeeAttendanceDto);
   }
 
+ 
   @Get('/all')
   @ApiOperation({ summary: 'Get all employee attendance records' })
   @ApiResponse({
@@ -131,21 +132,17 @@ export class EmployeeAttendanceController {
     return this.employeeAttendanceService.remove(id);
   }
 
-  @Post('login-time/:employeeId')
-  @ApiOperation({ summary: 'Post login time for an employee' })
-  async postLoginTime(
-    @Param('employeeId') employeeId: string,
-    @Body() body: { workingDate: string; loginTime: string },
-  ) {
-    return this.employeeAttendanceService.postLoginTime(employeeId, body);
-  }
 
-  @Put('logout-time/:employeeId')
-  @ApiOperation({ summary: 'Post logout time for an employee' })
-  async postLogoutTime(
-    @Param('employeeId') employeeId: string,
-    @Body() body: { workingDate: string; logoutTime: string },
-  ) {
-    return this.employeeAttendanceService.postLogoutTime(employeeId, body);
+  
+  @Post('attendence-data/:employeeId')
+  @ApiOperation({ summary: 'Bulk create/update attendance records' })
+  @ApiBody({ type: [EmployeeAttendanceDto] })
+  async createBulk(@Body() createDtos: EmployeeAttendanceDto[]) {
+    return this.employeeAttendanceService.createBulk(createDtos);
   }
 }
+
+// Add this method to your Controller class
+
+
+
