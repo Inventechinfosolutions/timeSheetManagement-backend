@@ -12,11 +12,11 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { ILike, Repository } from 'typeorm';
 import * as bcrypt from 'bcrypt';
 import * as crypto from 'crypto';
-import { EmployeeDetails } from '../entities/employeeDetails.entity';
-import { User } from '../../users/entities/user.entity';
-import { UserStatus } from '../../users/enums/user-status.enum';
+import { EmployeeDetails } from '../../employeeTimeSheet/entities/employeeDetails.entity';
+import { User } from '../entities/user.entity';
+import { UserStatus } from '../enums/user-status.enum';
 import { JwtService } from '@nestjs/jwt'; 
-import { ResetPasswordDto } from '../dto/resetPassword.dto';
+import { ResetPasswordDto } from '../../employeeTimeSheet/dto/resetPassword.dto';
 import { AuthService } from '../../auth/auth.service';
 
 @Injectable()
@@ -60,8 +60,9 @@ export class EmployeeLinkService {
         throw new BadRequestException('Employee ID or Token is required');
       }
 
+      // Case-insensitive lookup
       const employee = await this.employeeDetailsRepository.findOne({ 
-        where: [{ employeeId: ILike(employeeId) }, { id: !isNaN(Number(employeeId)) ? Number(employeeId) : -1 }] 
+        where: { employeeId: ILike(employeeId) } 
       });
 
       if (!employee) {
@@ -109,7 +110,7 @@ export class EmployeeLinkService {
 
       const employeeId = payload.sub;
       const employee = await this.employeeDetailsRepository.findOne({ 
-        where: [{ employeeId: ILike(employeeId) }, { id: !isNaN(Number(employeeId)) ? Number(employeeId) : -1 }]
+        where: { employeeId: ILike(employeeId) } 
       });
 
       if (!employee) {
@@ -148,10 +149,19 @@ export class EmployeeLinkService {
     try {
       let employee: EmployeeDetails | null = null;
       
-      // Support finding by numeric ID or string employeeId
-      employee = await this.employeeDetailsRepository.findOne({
-        where: [{ employeeId: ILike(identifier) }, { id: !isNaN(Number(identifier)) ? Number(identifier) : -1 }]
-      });
+      // Try to find by numeric ID first if identifier is a number
+      if (!isNaN(Number(identifier))) {
+        employee = await this.employeeDetailsRepository.findOne({
+          where: { id: Number(identifier) },
+        });
+      }
+
+      // If not found by numeric ID, try finding by string employeeId
+      if (!employee) {
+        employee = await this.employeeDetailsRepository.findOne({
+          where: { employeeId: ILike(identifier) },
+        });
+      }
 
       if (!employee) {
         this.logger.warn(`Employee with identifier ${identifier} not found`);
@@ -184,7 +194,7 @@ export class EmployeeLinkService {
         expiresIn: '24h' 
       });
       
-      const activationLink = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/fcManager/activate?token=${token}`;
+      const activationLink = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/auth/login?token=${token}`;
 
       this.logger.log(`
         ---------------------------------------------------
@@ -200,7 +210,7 @@ export class EmployeeLinkService {
         ---------------------------------------------------
       `);
 
-      this.logger.log(`Activation link generated and sent for employee identifier: ${identifier}`);
+      this.logger.log(`Activation link generated and sent for employee: ${identifier}`);
       this.logger.log(`COPY THIS LINK: ${activationLink}`);
 
       return {

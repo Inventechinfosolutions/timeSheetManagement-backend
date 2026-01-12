@@ -13,7 +13,7 @@ import {
   ApiInternalServerErrorResponse,
   ApiBearerAuth,
 } from '@nestjs/swagger';
-import { EmployeeLinkService } from '../services/employeeLink.service';
+import { EmployeeLinkService } from '../service/employee-link.service';
 
 @ApiTags('Employee Link Management')
 @Controller('employee-link')

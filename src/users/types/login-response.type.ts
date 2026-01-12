@@ -4,4 +4,6 @@ export class LoginResponse {
   email: string;
   accessToken: string;
   refreshToken: string;
+  resetRequired?: boolean;
+  status?: string;
 }
