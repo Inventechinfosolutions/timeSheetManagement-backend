@@ -9,7 +9,6 @@ import {
 } from 'class-validator';
 import {
   AttendanceStatus,
-  OfficeLocation,
 } from '../entities/employeeAttendance.entity';
 
 export class EmployeeAttendanceDto {
@@ -27,19 +26,7 @@ export class EmployeeAttendanceDto {
   @IsNotEmpty()
   workingDate: Date;
 
-  @IsString()
-  @Transform(({ value }) => value?.trim())
-  @IsOptional()
-  loginTime: string;
 
-  @IsString()
-  @Transform(({ value }) => value?.trim())
-  @IsOptional()
-  logoutTime: string;
-
-  @IsEnum(OfficeLocation)
-  @IsOptional()
-  location: OfficeLocation;
 
   @IsNumber()
   @IsOptional()
