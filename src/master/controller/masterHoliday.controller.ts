@@ -3,6 +3,7 @@ import {
   Get,
   Post,
   Body,
+  Put,
   Patch,
   Param,
   Delete,
@@ -52,6 +53,15 @@ export class MasterHolidayController {
   async create(@Body() createHolidayDto: CreateHolidayDto) {
     this.logger.log('POST /master-holidays');
     return await this.masterHolidayService.create(createHolidayDto);
+  }
+
+  @Post('holidays')
+  @ApiOperation({ summary: 'Create multiple holidays' })
+  @ApiBody({ type: [CreateHolidayDto] })
+  @ApiResponse({ status: 201, description: 'Holidays have been successfully created.' })
+  @HttpCode(HttpStatus.CREATED)
+  async createBulk(@Body() dtos: CreateHolidayDto[]) {
+    return await this.masterHolidayService.createBulk(dtos);
   }
 
   @Post('upload-file/entityId/:entityId/refId/:refId')
@@ -176,9 +186,20 @@ export class MasterHolidayController {
     return result;
   }
 
+  @Get('date-range/from/:fromDate/to/:toDate')
+  @ApiOperation({ summary: 'Get holidays between two dates' })
+  @ApiResponse({ status: 200, description: 'Return holidays within the specified date range.' })
+  async getHolidaysByDateRange(
+    @Param('fromDate') fromDate: string,
+    @Param('toDate') toDate: string,
+  ) {
+    this.logger.log(`GET /master-holidays/date-range/from/${fromDate}/to/${toDate}`);
+    return await this.masterHolidayService.findByDateRange(fromDate, toDate);
+  }
+
   @Post('date-range')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Get holidays by date range' })
+  @ApiOperation({ summary: 'Get holidays by date range (POST)' })
   @ApiBody({ type: HolidayDateRangeDto })
   @ApiResponse({ status: 200, description: 'Return holidays within the specified date range.' })
   async findByDateRange(@Body() dateRangeDto: HolidayDateRangeDto) {
@@ -194,6 +215,30 @@ export class MasterHolidayController {
     return await this.masterHolidayService.findAll();
   }
 
+  @Get('month/:month')
+  @ApiOperation({ summary: 'Get holidays for a specific month' })
+  @ApiResponse({ status: 200, description: 'Returns holidays for the specified month' })
+  async findByMonth(@Param('month', ParseIntPipe) month: number) {
+    return await this.masterHolidayService.findByMonth(month);
+  }
+
+  @Get('month/:month/year/:year')
+  @ApiOperation({ summary: 'Get holidays for a specific month and year' })
+  @ApiResponse({ status: 200, description: 'Returns holidays for the specified month and year' })
+  async findByMonthAndYear(
+    @Param('month', ParseIntPipe) month: number,
+    @Param('year', ParseIntPipe) year: number,
+  ) {
+    return await this.masterHolidayService.findByMonthAndYear(month, year);
+  }
+
+  @Get('weekends/:year')
+  @ApiOperation({ summary: 'Get all 2nd and 4th Saturdays for a specific year' })
+  @ApiResponse({ status: 200, description: 'Returns all 2nd and 4th Saturdays for the year' })
+  async getYearWeekends(@Param('year', ParseIntPipe) year: number) {
+    return await this.masterHolidayService.getYearWeekends(year);
+  }
+
   @Get(':id')
   @ApiOperation({ summary: 'Get a holiday by id' })
   @ApiResponse({ status: 200, description: 'Return a single holiday.' })
@@ -202,11 +247,20 @@ export class MasterHolidayController {
     return await this.masterHolidayService.findOne(+id);
   }
 
-  @Patch(':id')
+  @Put(':id')
   @ApiOperation({ summary: 'Update a holiday' })
   @ApiBody({ type: UpdateHolidayDto })
   @ApiResponse({ status: 200, description: 'The holiday has been successfully updated.' })
   async update(@Param('id') id: string, @Body() updateHolidayDto: UpdateHolidayDto) {
+    this.logger.log(`PUT /master-holidays/${id}`);
+    return await this.masterHolidayService.update(+id, updateHolidayDto);
+  }
+
+  @Patch(':id')
+  @ApiOperation({ summary: 'Update a holiday (Patch)' })
+  @ApiBody({ type: UpdateHolidayDto })
+  @ApiResponse({ status: 200, description: 'The holiday has been successfully updated.' })
+  async patch(@Param('id') id: string, @Body() updateHolidayDto: UpdateHolidayDto) {
     this.logger.log(`PATCH /master-holidays/${id}`);
     return await this.masterHolidayService.update(+id, updateHolidayDto);
   }
