@@ -16,6 +16,7 @@ async function bootstrap() {
     credentials: true,
   });
 
+  app.setGlobalPrefix('api/v1');
   // Enable validation pipes
   app.useGlobalPipes(
     new ValidationPipe({
@@ -29,6 +30,6 @@ async function bootstrap() {
                configService.get<number>('APP_PORT') || 
                3000;
   await app.listen(port);
-  console.log(`Application is running on: http://localhost:${port}`);
+  //console.log(`Application is running on: http://localhost:${port}`);
 }
 bootstrap();
