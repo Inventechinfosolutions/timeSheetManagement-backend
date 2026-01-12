@@ -14,6 +14,7 @@ import {
   Req,
 } from '@nestjs/common';
 import { EmployeeDetailsDto } from '../dto/employeeDetails.dto';
+import { ResetPasswordDto } from '../dto/resetPassword.dto';
 import { EmployeeDetailsService } from '../services/employeeDetails.service';
 import {
   ApiBadRequestResponse,
@@ -119,5 +120,30 @@ export class EmployeeDetailsController {
     const loginId = req.user?.userId ?? 'system';
     this.logger.log(`Partially updating employee ${id} with data: ${JSON.stringify(updateData)}`);
     return this.employeeDetailsService.partialUpdateEmployee(id, updateData, loginId);
+  }
+
+  @Post('reset-password')
+  @ApiOperation({ summary: 'Reset password for employee' })
+  @ApiBody({ type: ResetPasswordDto })
+  @ApiOkResponse({ description: 'Password reset successful' })
+  @ApiInternalServerErrorResponse({ description: 'Internal server error' })
+  async resetPassword(@Body() resetPasswordDto: ResetPasswordDto, @Req() req: any): Promise<{ message: string }> {
+    try {
+      // Logic to fallback to authenticated user's ID if loginId not provided in body
+      if (!resetPasswordDto.loginId && req.user?.employeeId) {
+         resetPasswordDto.loginId = req.user.employeeId;
+      }
+      // If logic requires loginId to be present
+        if (!resetPasswordDto.loginId) {
+            // If no auth and no body param, this might be an error or allowed if public (usually not public without token)
+            // Assuming for now it's either provided in body or via auth context
+        }
+
+      this.logger.log(`Resetting password for employee: ${resetPasswordDto.loginId || 'unknown'}`);
+      return await this.employeeDetailsService.resetPassword(resetPasswordDto);
+    } catch (error) {
+       this.logger.error(`Error resetting password: ${error.message}`, error.stack);
+       throw error;
+    }
   }
 }

@@ -11,6 +11,11 @@ import { Not, Repository } from 'typeorm';
 import * as bcrypt from 'bcrypt';
 import { EmployeeDetails } from '../entities/employeeDetails.entity';
 import { EmployeeDetailsDto } from '../dto/employeeDetails.dto';
+import { ResetPasswordDto } from '../dto/resetPassword.dto';
+import { UsersService } from '../../users/service/user.service';
+import { UserType } from '../../users/enums/user-type.enum';
+import { UserStatus } from '../../users/enums/user-status.enum';
+import { EmployeeLinkService } from './employeeLink.service';
 
 @Injectable()
 export class EmployeeDetailsService {
@@ -19,11 +24,13 @@ export class EmployeeDetailsService {
   constructor(
     @InjectRepository(EmployeeDetails)
     private readonly employeeDetailsRepository: Repository<EmployeeDetails>,
+    private readonly usersService: UsersService,
+    private readonly employeeLinkService: EmployeeLinkService,
   ) {}
 
   async createEmployee(
     createEmployeeDetailsDto: EmployeeDetailsDto,
-  ): Promise<EmployeeDetails> {
+  ): Promise<any> {
     try {
       this.logger.log(
         `Creating new employee: ${JSON.stringify(createEmployeeDetailsDto)}`,
@@ -67,8 +74,39 @@ export class EmployeeDetailsService {
         employeeData,
       );
       const result = await this.employeeDetailsRepository.save(employee);
-      this.logger.log(`Employee created successfully with ID: ${result.id}`);
-      return result;
+      
+      // Also create User entity for authentication
+      try {
+        await this.usersService.create({
+          loginId: result.employeeId,
+          aliasLoginName: result.fullName,
+          password: createEmployeeDetailsDto.password || 'Initial@123', // Admin can provide or it will be reset
+          userType: UserType.EMPLOYEE,
+          status: UserStatus.DRAFT,
+          resetRequired: true,
+        });
+        this.logger.log(`Associated user record created for employee: ${result.employeeId}`);
+      } catch (userError) {
+        this.logger.error(`Failed to create associated user record: ${userError.message}`);
+      }
+
+      // Generate activation link and credentials
+      const activationInfo = await this.employeeLinkService.generateActivationLink(result.employeeId);
+
+      this.logger.log(`Employee created and activation link generated for: ${result.employeeId}`);
+      
+      return {
+          id: result.id,
+          fullName: result.fullName,
+          employeeId: result.employeeId,
+          email: result.email,
+          department: result.department,
+          designation: result.designation,
+          loginId: activationInfo.loginId,
+          password: activationInfo.password,
+          activationLink: activationInfo.activationLink,
+          message: 'Employee registered successfully'
+      };
     } catch (error) {
       if (error instanceof HttpException) throw error;
       this.logger.error(`Error creating employee: ${error.message}`, error.stack);
@@ -240,6 +278,37 @@ export class EmployeeDetailsService {
         'Failed to delete employee',
         HttpStatus.INTERNAL_SERVER_ERROR,
       );
+    }
+  }
+
+  async resetPassword(resetPasswordDto: ResetPasswordDto): Promise<{ message: string; employeeId: string }> {
+    this.logger.log(`Resetting password for employee: ${resetPasswordDto.loginId}`);
+    try {
+      const employee = await this.employeeDetailsRepository.findOne({
+        where: { employeeId: resetPasswordDto.loginId },
+      });
+
+      if (!employee) {
+        this.logger.warn(`Employee not found with ID: ${resetPasswordDto.loginId}`);
+        throw new NotFoundException('Employee not found');
+      }
+
+      const salt = await bcrypt.genSalt(10);
+      employee.password = await bcrypt.hash(resetPasswordDto.password, salt);
+      // employee.resetRequired = false; // Entity doesn't have this field yet
+      // employee.mobileVerification = true; // Entity doesn't have this field yet
+
+      await this.employeeDetailsRepository.save(employee);
+      this.logger.log(`Password reset successfully for employee: ${resetPasswordDto.loginId}`);
+      
+      return {
+        message: 'Password successfully updated.',
+        employeeId: employee.employeeId,
+      };
+    } catch (error) {
+      this.logger.error(`Error resetting password: ${error.message}`, error.stack);
+      if (error instanceof HttpException) throw error;
+      throw new HttpException(`Error resetting password: ${error.message}`, HttpStatus.INTERNAL_SERVER_ERROR);
     }
   }
 }

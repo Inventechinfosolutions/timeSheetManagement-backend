@@ -92,12 +92,18 @@ export class UsersService {
       const payload = { sub: user.id, loginId: user.loginId };
       const tokens = await this.authService.generateJWTTokenWithRefresh(payload);
 
+      // Update last logged in
+      user.lastLoggedIn = new Date();
+      await this.usersRepository.save(user);
+
       return {
         userId: user.id,
         name: user.aliasLoginName,
         email: user.loginId,
         accessToken: tokens.accessToken,
-        refreshToken: tokens.refreshToken
+        refreshToken: tokens.refreshToken,
+        resetRequired: user.resetRequired,
+        status: user.status
       };
 
     } catch (error) {
@@ -124,7 +130,9 @@ export class UsersService {
         name: user.aliasLoginName,
         email: user.loginId,
         accessToken: tokens.accessToken,
-        refreshToken: tokens.refreshToken
+        refreshToken: tokens.refreshToken,
+        resetRequired: user.resetRequired,
+        status: user.status
       };
   } catch (error) {
       throw new HttpException('Unauthorized', HttpStatus.UNAUTHORIZED);
