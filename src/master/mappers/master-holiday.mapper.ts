@@ -6,8 +6,6 @@ export class MasterHolidayMapper {
     const holiday = new MasterHolidays();
     holiday.date = new Date(dto.date);
     holiday.name = dto.name;
-    if (dto.type) holiday.type = dto.type;
-    holiday.isWeekendHoliday = dto.isWeekendHoliday || false;
     return holiday;
   }
 
@@ -16,8 +14,6 @@ export class MasterHolidayMapper {
       id: entity.id,
       date: entity.date,
       name: entity.name,
-      type: entity.type,
-      isWeekendHoliday: entity.isWeekendHoliday,
       createdAt: entity.createdAt,
       updatedAt: entity.updatedAt,
       createdBy: entity.createdBy,

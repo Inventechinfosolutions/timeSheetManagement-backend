@@ -25,17 +25,25 @@ export class MasterHolidayService {
       const holiday = MasterHolidayMapper.toEntity(createHolidayDto);
       const savedHoliday = await this.holidayRepository.save(holiday);
       
-      return {
-        success: true,
-        message: 'Holiday created successfully',
-        data: MasterHolidayMapper.toResponseDto(savedHoliday),
-      };
+      return MasterHolidayMapper.toResponseDto(savedHoliday);
     } catch (error) {
       if (error.code === 'ER_DUP_ENTRY' || error.errno === 1062) {
         throw new ConflictException('Holiday already exists for this date');
       }
       this.logger.error(`Error creating holiday: ${error.message}`, error.stack);
       throw new InternalServerErrorException('Error creating holiday');
+    }
+  }
+
+  async createBulk(createHolidayDtos: CreateHolidayDto[]): Promise<any[]> {
+    try {
+      this.logger.log(`Creating ${createHolidayDtos.length} holidays`);
+      const holidays = createHolidayDtos.map(dto => MasterHolidayMapper.toEntity(dto));
+      const savedHolidays = await this.holidayRepository.save(holidays);
+      return savedHolidays.map(holiday => MasterHolidayMapper.toResponseDto(holiday));
+    } catch (error) {
+       this.logger.error(`Error creating bulk holidays: ${error.message}`, error.stack);
+       throw new InternalServerErrorException('Error creating bulk holidays');
     }
   }
 
@@ -103,16 +111,13 @@ export class MasterHolidayService {
     }
   }
 
-  async findAll(): Promise<any> {
+  async findAll(): Promise<any[]> {
     try {
       this.logger.log('Fetching all holidays');
       const holidays = await this.holidayRepository.find({
         order: { date: 'ASC' }
       });
-      return {
-        success: true,
-        data: holidays.map(holiday => MasterHolidayMapper.toResponseDto(holiday)),
-      };
+      return holidays.map(holiday => MasterHolidayMapper.toResponseDto(holiday));
     } catch (error) {
       this.logger.error(`Error fetching holidays: ${error.message}`, error.stack);
       throw new InternalServerErrorException('Error fetching holidays');
@@ -128,10 +133,7 @@ export class MasterHolidayService {
         throw new NotFoundException(`Holiday with ID ${id} not found`);
       }
       
-      return {
-        success: true,
-        data: MasterHolidayMapper.toResponseDto(holiday),
-      };
+      return MasterHolidayMapper.toResponseDto(holiday);
     } catch (error) {
       if (error instanceof NotFoundException) throw error;
       this.logger.error(`Error fetching holiday ${id}: ${error.message}`, error.stack);
@@ -139,7 +141,7 @@ export class MasterHolidayService {
     }
   }
 
-  async findByDateRange(fromDate: string, toDate: string): Promise<any> {
+  async findByDateRange(fromDate: string, toDate: string): Promise<any[]> {
     try {
       this.logger.log(`Fetching holidays from ${fromDate} to ${toDate}`);
       const holidays = await this.holidayRepository
@@ -149,14 +151,61 @@ export class MasterHolidayService {
         .orderBy('holiday.date', 'ASC')
         .getMany();
 
-      return {
-        success: true,
-        data: holidays.map(holiday => MasterHolidayMapper.toResponseDto(holiday)),
-      };
+      return holidays.map(holiday => MasterHolidayMapper.toResponseDto(holiday));
     } catch (error) {
       this.logger.error(`Error fetching holidays by date range: ${error.message}`, error.stack);
       throw new InternalServerErrorException('Error fetching holidays by date range');
     }
+  }
+
+  async findByMonth(month: number): Promise<any[]> {
+    try {
+      this.logger.log(`Fetching holidays for month: ${month}`);
+      const holidays = await this.holidayRepository
+        .createQueryBuilder('holiday')
+        .where('MONTH(holiday.date) = :month', { month })
+        .orderBy('holiday.date', 'ASC')
+        .getMany();
+      return holidays.map(holiday => MasterHolidayMapper.toResponseDto(holiday));
+    } catch (error) {
+      this.logger.error(`Error fetching holidays by month: ${error.message}`, error.stack);
+      throw new InternalServerErrorException('Error fetching holidays by month');
+    }
+  }
+
+  async findByMonthAndYear(month: number, year: number): Promise<any[]> {
+    try {
+      this.logger.log(`Fetching holidays for ${month}/${year}`);
+       const holidays = await this.holidayRepository
+        .createQueryBuilder('holiday')
+        .where('MONTH(holiday.date) = :month', { month })
+        .andWhere('YEAR(holiday.date) = :year', { year })
+        .orderBy('holiday.date', 'ASC')
+        .getMany();
+      return holidays.map(holiday => MasterHolidayMapper.toResponseDto(holiday));
+    } catch (error) {
+       this.logger.error(`Error fetching holidays by month and year: ${error.message}`, error.stack);
+       throw new InternalServerErrorException('Error fetching holidays by month and year');
+    }
+  }
+
+  async getYearWeekends(year: number): Promise<any[]> {
+      const weekends: any[] = [];
+      for (let month = 0; month < 12; month++) {
+          const date = new Date(year, month, 1);
+          
+          while (date.getMonth() === month) {
+              const day = date.getDay();
+              if (day === 0 || day === 6) { // 0 is Sunday, 6 is Saturday
+                  weekends.push({
+                      date: new Date(date),
+                      name: day === 0 ? 'Sunday' : 'Saturday',
+                  });
+              }
+              date.setDate(date.getDate() + 1);
+          }
+      }
+      return weekends;
   }
 
   async update(id: number, updateHolidayDto: UpdateHolidayDto): Promise<any> {
@@ -170,16 +219,10 @@ export class MasterHolidayService {
 
       if (updateHolidayDto.date) holiday.date = new Date(updateHolidayDto.date);
       if (updateHolidayDto.name) holiday.name = updateHolidayDto.name;
-      if (updateHolidayDto.type !== undefined) holiday.type = updateHolidayDto.type;
-      if (updateHolidayDto.isWeekendHoliday !== undefined) holiday.isWeekendHoliday = updateHolidayDto.isWeekendHoliday;
 
       const updatedHoliday = await this.holidayRepository.save(holiday);
       
-      return {
-        success: true,
-        message: 'Holiday updated successfully',
-        data: MasterHolidayMapper.toResponseDto(updatedHoliday),
-      };
+      return MasterHolidayMapper.toResponseDto(updatedHoliday);
     } catch (error) {
       if (error instanceof NotFoundException) throw error;
       this.logger.error(`Error updating holiday ${id}: ${error.message}`, error.stack);
@@ -187,7 +230,7 @@ export class MasterHolidayService {
     }
   }
 
-  async remove(id: number): Promise<any> {
+  async remove(id: number): Promise<void> {
     try {
       this.logger.log(`Deleting holiday with id: ${id}`);
       const result = await this.holidayRepository.delete(id);
@@ -195,11 +238,6 @@ export class MasterHolidayService {
       if (result.affected === 0) {
         throw new NotFoundException(`Holiday with ID ${id} not found`);
       }
-      
-      return {
-        success: true,
-        message: 'Holiday deleted successfully',
-      };
     } catch (error) {
       if (error instanceof NotFoundException) throw error;
       this.logger.error(`Error deleting holiday ${id}: ${error.message}`, error.stack);
