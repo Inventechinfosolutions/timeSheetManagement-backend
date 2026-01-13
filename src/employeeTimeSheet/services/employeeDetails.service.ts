@@ -15,6 +15,7 @@ import { ResetPasswordDto } from '../dto/resetPassword.dto';
 import { UsersService } from '../../users/service/user.service';
 import { UserType } from '../../users/enums/user-type.enum';
 import { UserStatus } from '../../users/enums/user-status.enum';
+import { User } from '../../users/entities/user.entity';
 import { EmployeeLinkService } from './employeeLink.service';
 
 @Injectable()
@@ -24,6 +25,8 @@ export class EmployeeDetailsService {
   constructor(
     @InjectRepository(EmployeeDetails)
     private readonly employeeDetailsRepository: Repository<EmployeeDetails>,
+    @InjectRepository(User)
+    private readonly userRepository: Repository<User>,
     private readonly usersService: UsersService,
     private readonly employeeLinkService: EmployeeLinkService,
   ) {}
@@ -299,6 +302,15 @@ export class EmployeeDetailsService {
       // employee.mobileVerification = true; // Entity doesn't have this field yet
 
       await this.employeeDetailsRepository.save(employee);
+      
+      // Update User entity if it exists
+      const user = await this.userRepository.findOne({ where: { loginId: employee.employeeId.toLowerCase() } });
+      if (user) {
+        user.password = employee.password;
+        user.resetRequired = false;
+        await this.userRepository.save(user);
+      }
+
       this.logger.log(`Password reset successfully for employee: ${resetPasswordDto.loginId}`);
       
       return {
