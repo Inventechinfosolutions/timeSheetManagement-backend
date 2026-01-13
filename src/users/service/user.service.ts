@@ -147,17 +147,8 @@ export class UsersService {
       throw new HttpException('User not found', HttpStatus.NOT_FOUND);
     }
 
-    if (changePasswordDto.newPassword === changePasswordDto.oldPassword) {
-      throw new HttpException('New password cannot be the same as old password', HttpStatus.BAD_REQUEST);
-    }
-
     if (changePasswordDto.newPassword !== changePasswordDto.confirmNewPassword) {
       throw new HttpException('Passwords do not match', HttpStatus.BAD_REQUEST);
-    }
-
-    const isMatch = await bcrypt.compare(changePasswordDto.oldPassword, user.password);
-    if (!isMatch) {
-      throw new HttpException('Invalid old password', HttpStatus.UNAUTHORIZED);
     }
 
     const salt = await bcrypt.genSalt(10);
