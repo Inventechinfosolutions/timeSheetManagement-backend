@@ -42,7 +42,7 @@ export class User extends BaseEntity {
   @Column({ nullable: true })
   lastPasswordChanged: Date;
 
-  @Column({ nullable: true })
+  @Column({ default: true, nullable: true })
   resetRequired: boolean;
 
   @Column({ nullable: true })

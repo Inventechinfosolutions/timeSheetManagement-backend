@@ -78,7 +78,7 @@ export class EmployeeLinkService {
       const user = await this.userRepository.findOne({ where: { loginId: employee.employeeId.toLowerCase() } });
       if (user) {
          user.password = hashedPassword;
-         user.resetRequired = false;
+         user.resetRequired = true;
          user.mobileVerification = true;
          user.status = UserStatus.ACTIVE;
          await this.userRepository.save(user);
@@ -121,7 +121,7 @@ export class EmployeeLinkService {
       if (user) {
         user.status = UserStatus.ACTIVE;
         user.mobileVerification = true;
-        user.resetRequired = false;
+        user.resetRequired = true;
         user.lastLoggedIn = new Date();
         await this.userRepository.save(user);
         this.logger.log(`User ${employee.employeeId} activated via token`);

@@ -57,7 +57,7 @@ export class UsersService {
   async findById(id: string): Promise<User | null> {
     return await this.usersRepository.findOne({
       where: { id },
-      select: ['id', 'aliasLoginName', 'loginId', 'createdAt', 'updatedAt', 'password'],
+      select: ['id', 'aliasLoginName', 'loginId', 'userType', 'createdAt', 'updatedAt', 'password'],
     });
   }
 
@@ -100,6 +100,7 @@ export class UsersService {
         userId: user.id,
         name: user.aliasLoginName,
         email: user.loginId,
+        userType: user.userType,
         accessToken: tokens.accessToken,
         refreshToken: tokens.refreshToken,
         resetRequired: user.resetRequired,
@@ -125,10 +126,11 @@ export class UsersService {
       const newPayload = { sub: user.id, loginId: user.loginId };
       const tokens = await this.authService.generateJWTTokenWithRefresh(newPayload);
 
-       return {
+      return {
         userId: user.id,
         name: user.aliasLoginName,
         email: user.loginId,
+        userType: user.userType,
         accessToken: tokens.accessToken,
         refreshToken: tokens.refreshToken,
         resetRequired: user.resetRequired,

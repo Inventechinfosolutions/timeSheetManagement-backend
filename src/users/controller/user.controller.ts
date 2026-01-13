@@ -73,7 +73,9 @@ export class UsersController {
         userId: response.userId,
         name: response.name,
         email: response.email,
+        userType: response.userType,
         accessToken: response.accessToken,
+        resetRequired: response.resetRequired,
       },
     });
   }
