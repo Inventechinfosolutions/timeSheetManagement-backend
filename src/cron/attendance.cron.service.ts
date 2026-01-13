@@ -4,6 +4,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, Between } from 'typeorm';
 import { EmployeeAttendance, AttendanceStatus } from '../employeeTimeSheet/entities/employeeAttendance.entity';
 import { EmployeeDetails } from '../employeeTimeSheet/entities/employeeDetails.entity';
+import { MasterHolidayService } from '../master/service/master-holiday.service';
 
 @Injectable()
 export class AttendanceCronService {
@@ -15,10 +16,12 @@ export class AttendanceCronService {
     
     @InjectRepository(EmployeeDetails)
     private employeeRepo: Repository<EmployeeDetails>,
+
+    private readonly masterHolidayService: MasterHolidayService,
   ) {}
 
-  // Run at 11:30 PM every Saturday and Sunday
-  @Cron('30 23 * * 0,6') 
+  // Run at 11:30 PM every day to check for Weekend logic
+  @Cron('30 23 * * *') 
   async handleWeekendStatus() {
     this.logger.debug('Running Weekend Check...');
     
@@ -26,12 +29,14 @@ export class AttendanceCronService {
     const today = new Date();
     const dateStr = today.toISOString().split('T')[0]; // "YYYY-MM-DD"
 
-    // 2. Double check it is actually Sat/Sun (safety check)
-    const dayOfWeek = today.getDay();
-    if (dayOfWeek !== 0 && dayOfWeek !== 6) {
+    // 2. Check if it is a Weekend using Master Service
+    const isWeekend = this.masterHolidayService.isWeekend(today);
+
+    if (!isWeekend) {
         return; 
     }
-
+    
+    // ... remaining logic to mark absent users as WEEKEND ...
     // 3. Get all employees
     const allEmployees = await this.employeeRepo.find();
     
@@ -54,7 +59,7 @@ export class AttendanceCronService {
         return this.attendanceRepo.create({
             employeeId: emp.employeeId,
             workingDate: new Date(dateStr),
-            status: AttendanceStatus.WEEKEND, // Ensure WEEKEND is in your Enum
+            status: AttendanceStatus.WEEKEND, 
             totalHours: 0, 
         });
     });

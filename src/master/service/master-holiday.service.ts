@@ -208,6 +208,12 @@ export class MasterHolidayService {
       return weekends;
   }
 
+  isWeekend(date: Date): boolean {
+      const day = date.getDay();
+      // 0 is Sunday, 6 is Saturday
+      return day === 0 || day === 6;
+  }
+
   async update(id: number, updateHolidayDto: UpdateHolidayDto): Promise<any> {
     try {
       this.logger.log(`Updating holiday with id: ${id}`);

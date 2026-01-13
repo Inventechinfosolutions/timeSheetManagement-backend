@@ -8,7 +8,8 @@ export enum AttendanceStatus {
   LEAVE = 'Leave',
   PENDING = 'Pending',
   NOT_UPDATED = 'Not Updated',
-  WEEKEND = 'Weekend'
+  WEEKEND = 'Weekend',
+  HOLIDAY = 'Holiday'
 }
 
 @Entity('employee_attendance')
