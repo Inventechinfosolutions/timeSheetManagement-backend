@@ -121,6 +121,8 @@ export class EmployeeDetailsService {
     page: number = 1,
     limit: number = 10,
     search: string = '',
+    sortBy: string = 'id',
+    sortOrder: 'ASC' | 'DESC' = 'DESC',
   ): Promise<{
     data: EmployeeDetails[];
     total: number;
@@ -132,10 +134,28 @@ export class EmployeeDetailsService {
         page,
         limit,
         search,
+        sortBy,
+        sortOrder,
       });
+
+      // Validate sortBy field to prevent SQL injection
+      const allowedSortFields = [
+        'id',
+        'fullName',
+        'employeeId',
+        'email',
+        'department',
+        'designation',
+        'dateOfJoining',
+        'createdAt',
+        'updatedAt',
+      ];
+
+      const validSortBy = allowedSortFields.includes(sortBy) ? sortBy : 'id';
+
       const query = this.employeeDetailsRepository
         .createQueryBuilder('employee')
-        .orderBy('employee.id', 'DESC');
+        .orderBy(`employee.${validSortBy}`, sortOrder);
 
       if (search) {
         query.where(
