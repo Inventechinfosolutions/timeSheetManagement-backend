@@ -28,6 +28,7 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
           database: dbName,
           synchronize,
           logging: configService.get('DB_LOGGING', 'false') === 'true',
+          autoLoadEntities: true,
         };
 
         // Set entities path

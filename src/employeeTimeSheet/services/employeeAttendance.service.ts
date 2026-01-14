@@ -13,6 +13,7 @@ import {
   AttendanceStatus,
 } from '../entities/employeeAttendance.entity';
 import { EmployeeAttendanceDto } from '../dto/employeeAttendance.dto';
+import { MasterHolidayService } from '../../master/service/master-holiday.service';
 
 @Injectable()
 export class EmployeeAttendanceService {
@@ -21,6 +22,7 @@ export class EmployeeAttendanceService {
   constructor(
     @InjectRepository(EmployeeAttendance)
     private readonly employeeAttendanceRepository: Repository<EmployeeAttendance>,
+    private readonly masterHolidayService: MasterHolidayService,
   ) {}
 
   async create(createEmployeeAttendanceDto: EmployeeAttendanceDto): Promise<EmployeeAttendance> {
@@ -33,7 +35,7 @@ export class EmployeeAttendanceService {
       const attendance = this.employeeAttendanceRepository.create(createEmployeeAttendanceDto);
       
       if (attendance.totalHours !== undefined && attendance.totalHours !== null) {
-          attendance.status = this.determineStatus(attendance.totalHours);
+          attendance.status = await this.determineStatus(attendance.totalHours, attendance.workingDate);
       }
 
       return await this.employeeAttendanceRepository.save(attendance);
@@ -80,14 +82,32 @@ export class EmployeeAttendanceService {
     Object.assign(attendance, updateDto);
     
       if (attendance.totalHours !== undefined && attendance.totalHours !== null) {
-      attendance.status = this.determineStatus(attendance.totalHours);
+      attendance.status = await this.determineStatus(attendance.totalHours, attendance.workingDate);
     }
     
     return await this.employeeAttendanceRepository.save(attendance);
   }
 
-  private determineStatus(hours: number): AttendanceStatus {
-      if (hours > 6) {
+  private async determineStatus(hours: number, workingDate: Date): Promise<AttendanceStatus> {
+      if (hours === 0) {
+          const dateObj = new Date(workingDate);
+          
+          // Check Weekend
+          if (this.masterHolidayService.isWeekend(dateObj)) {
+              return AttendanceStatus.WEEKEND;
+          }
+
+          // Check Holiday
+          // We need simple date string YYYY-MM-DD
+          const dateStr = dateObj.toISOString().split('T')[0];
+          const holiday = await this.masterHolidayService.findByDate(dateStr);
+          
+          if (holiday) {
+              return AttendanceStatus.HOLIDAY;
+          }
+
+          return AttendanceStatus.LEAVE;
+      } else if (hours > 6) {
           return AttendanceStatus.FULL_DAY;
       } else {
           return AttendanceStatus.HALF_DAY;
