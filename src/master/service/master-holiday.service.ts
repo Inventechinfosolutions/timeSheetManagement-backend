@@ -214,6 +214,25 @@ export class MasterHolidayService {
       return day === 0 || day === 6;
   }
 
+  async findByDate(date: string): Promise<any> {
+    try {
+      this.logger.log(`Fetching holiday for date: ${date}`);
+      const holiday = await this.holidayRepository
+        .createQueryBuilder('holiday')
+        .where('holiday.date = :date', { date })
+        .getOne();
+      
+      if (!holiday) {
+        return null; 
+      }
+
+      return MasterHolidayMapper.toResponseDto(holiday);
+    } catch (error) {
+      this.logger.error(`Error fetching holiday by date: ${error.message}`, error.stack);
+      throw new InternalServerErrorException('Error fetching holiday by date');
+    }
+  }
+
   async update(id: number, updateHolidayDto: UpdateHolidayDto): Promise<any> {
     try {
       this.logger.log(`Updating holiday with id: ${id}`);

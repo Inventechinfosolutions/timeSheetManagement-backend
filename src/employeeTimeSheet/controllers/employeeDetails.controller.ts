@@ -11,8 +11,14 @@ import {
   ParseIntPipe,
   DefaultValuePipe,
   Logger,
+  UseInterceptors,
+  UploadedFile,
   Req,
+  Res,
 } from '@nestjs/common';
+import { Response } from 'express';
+import { Readable } from 'stream';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { EmployeeDetailsDto } from '../dto/employeeDetails.dto';
 import { ResetPasswordDto } from '../dto/resetPassword.dto';
 import { EmployeeDetailsService } from '../services/employeeDetails.service';
@@ -28,6 +34,7 @@ import {
   ApiInternalServerErrorResponse,
   ApiQuery,
   ApiResponse,
+  ApiConsumes,
 } from '@nestjs/swagger';
 
 @ApiTags('Employee Details')
@@ -144,6 +151,55 @@ export class EmployeeDetailsController {
     } catch (error) {
        this.logger.error(`Error resetting password: ${error.message}`, error.stack);
        throw error;
+    }
+  }
+
+
+  @Post('upload-profile-image/:id')
+  @ApiOperation({ summary: 'Upload profile image for employee' })
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        file: {
+          type: 'string',
+          format: 'binary',
+        },
+      },
+    },
+  })
+  @UseInterceptors(FileInterceptor('file'))
+  async uploadProfileImage(
+    @Param('id', ParseIntPipe) id: number,
+    @UploadedFile() file: any, 
+  ) {
+    return this.employeeDetailsService.uploadProfileImage(file, id);
+  }
+
+  @Get('profile-image/:id')
+  @ApiOperation({ summary: 'Get profile image metadata for employee' })
+  async getProfileImage(@Param('id', ParseIntPipe) id: number) {
+    return this.employeeDetailsService.getProfileImage(id);
+  }
+
+  @Get('profile-image/:id/view')
+  @ApiOperation({ summary: 'View/Stream profile image for employee' })
+  async viewProfileImage(@Param('id', ParseIntPipe) id: number, @Res() res: Response) {
+    const { stream, meta } = await this.employeeDetailsService.getProfileImageStream(id);
+    
+    res.set({
+      'Content-Type': meta.mimetype || 'image/jpeg',
+      'Content-Disposition': `inline; filename="${meta.filename || 'profile.jpg'}"`,
+    });
+
+    if (stream.Body instanceof Readable) {
+      stream.Body.pipe(res);
+    } else if (stream.Body) {
+      const buffer = await stream.Body.transformToByteArray();
+      res.send(Buffer.from(buffer));
+    } else {
+        throw new Error('Image stream not found');
     }
   }
 }

@@ -17,6 +17,8 @@ import { UserType } from '../../users/enums/user-type.enum';
 import { UserStatus } from '../../users/enums/user-status.enum';
 import { User } from '../../users/entities/user.entity';
 import { EmployeeLinkService } from './employeeLink.service';
+import { DocumentUploaderService } from '../../common/document-uploader/services/document-uploader.service';
+import { DocumentMetaInfo, EntityType, ReferenceType } from '../../common/document-uploader/models/documentmetainfo.model';
 
 @Injectable()
 export class EmployeeDetailsService {
@@ -29,6 +31,7 @@ export class EmployeeDetailsService {
     private readonly userRepository: Repository<User>,
     private readonly usersService: UsersService,
     private readonly employeeLinkService: EmployeeLinkService,
+    private readonly documentUploaderService: DocumentUploaderService,
   ) {}
 
   async createEmployee(
@@ -322,5 +325,62 @@ export class EmployeeDetailsService {
       if (error instanceof HttpException) throw error;
       throw new HttpException(`Error resetting password: ${error.message}`, HttpStatus.INTERNAL_SERVER_ERROR);
     }
+  }
+
+
+  async uploadProfileImage(file: any, employeeId: number): Promise<any> {
+    if (!file) {
+        throw new BadRequestException('File is required');
+    }
+    try {
+        const employee = await this.getEmployeeById(employeeId); // Validate existence
+        
+        const meta = new DocumentMetaInfo();
+        meta.entityId = employeeId;
+        meta.entityType = EntityType.EMPLOYEE;
+        meta.refType = ReferenceType.EMPLOYEE_PROFILE_PHOTO;
+        meta.refId = employeeId; // For profile pic, refId can be same as entityId or 0
+
+        // Cast to any to satisfy the BufferedFile interface compatibility if needed
+        return await this.documentUploaderService.uploadImage(file as any, meta);
+    } catch (error) {
+        if (error instanceof HttpException) throw error;
+        this.logger.error(`Error uploading profile image: ${error.message}`, error.stack);
+        throw new HttpException('Error uploading profile image', HttpStatus.INTERNAL_SERVER_ERROR);
+    }
+  }
+
+  async getProfileImage(employeeId: number): Promise<any> {
+      try {
+          const docs = await this.documentUploaderService.getAllDocs(
+              EntityType.EMPLOYEE, 
+              employeeId, 
+              ReferenceType.EMPLOYEE_PROFILE_PHOTO,
+              employeeId
+          );
+          
+          // Assuming we just want the latest one or list of them
+          return docs;
+      } catch (error) {
+           if (error instanceof HttpException) throw error;
+           this.logger.error(`Error fetching profile image: ${error.message}`, error.stack);
+           throw new HttpException('Error fetching profile image', HttpStatus.INTERNAL_SERVER_ERROR);
+      }
+  }
+
+  async getProfileImageStream(employeeId: number) {
+    const docs = await this.getProfileImage(employeeId);
+    if (!docs || docs.length === 0) {
+      throw new HttpException('No profile image found', HttpStatus.NOT_FOUND);
+    }
+    
+    // Sort by creation date descending to get the latest
+    docs.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    const latest = docs[0];
+
+    const stream = await this.documentUploaderService.downloadFile(latest.key);
+    const meta = await this.documentUploaderService.getMetaData(latest.key);
+    
+    return { stream, meta };
   }
 }

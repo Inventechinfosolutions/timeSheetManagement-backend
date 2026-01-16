@@ -13,12 +13,16 @@ import { EmployeeDetails } from './entities/employeeDetails.entity';
 import { User } from '../users/entities/user.entity';
 import { UsersModule } from '../users/users.module';
 import { AuthModule } from '../auth/auth.module';
+import { MasterModule } from '../master/master.module';
+import { DocumentUploaderModule } from '../common/document-uploader/document-uploader.module';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([EmployeeAttendance, EmployeeDetails, User]),
     UsersModule,
     AuthModule,
+    MasterModule,
+    DocumentUploaderModule,
   ],
   controllers: [
     EmployeeAttendanceController, 
