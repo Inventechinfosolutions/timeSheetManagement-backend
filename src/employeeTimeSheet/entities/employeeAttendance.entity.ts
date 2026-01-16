@@ -1,5 +1,5 @@
 import { Entity, Column, PrimaryGeneratedColumn } from 'typeorm';
-
+import { BaseEntity } from '../../common/core/models/base.entity';
 
 
 export enum AttendanceStatus {
@@ -13,7 +13,7 @@ export enum AttendanceStatus {
 }
 
 @Entity('employee_attendance')
-export class EmployeeAttendance {
+export class EmployeeAttendance extends BaseEntity {
   @PrimaryGeneratedColumn()
   id: number;
 
