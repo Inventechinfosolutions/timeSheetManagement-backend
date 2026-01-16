@@ -16,6 +16,7 @@ import {
   ApiResponse,
   ApiTags,
   ApiBody,
+  ApiParam,
 } from '@nestjs/swagger';
 import { EmployeeAttendanceDto } from '../dto/employeeAttendance.dto';
 import { EmployeeAttendanceService } from '../services/employeeAttendance.service';
@@ -69,14 +70,15 @@ export class EmployeeAttendanceController {
     return this.employeeAttendanceService.findOne(id);
   }
 
-  @Get('monthly-details/:employeeId')
+  @Get('monthly-details/:employeeId/:month/:year')
   @ApiOperation({ summary: 'Get monthly attendance for employee' })
-  @ApiQuery({ name: 'month', type: String, required: true })
-  @ApiQuery({ name: 'year', type: String, required: true })
+  @ApiParam({ name: 'employeeId', type: String })
+  @ApiParam({ name: 'month', type: String })
+  @ApiParam({ name: 'year', type: String })
   async findByMonth(
     @Param('employeeId') employeeId: string,
-    @Query('month') month: string,
-    @Query('year') year: string,
+    @Param('month') month: string,
+    @Param('year') year: string,
   ) {
     this.logger.log(
       `Fetching attendance for ${employeeId} - Month: ${month}, Year: ${year}`,

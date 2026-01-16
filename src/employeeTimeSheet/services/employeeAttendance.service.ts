@@ -14,6 +14,7 @@ import {
 } from '../entities/employeeAttendance.entity';
 import { EmployeeAttendanceDto } from '../dto/employeeAttendance.dto';
 import { MasterHolidayService } from '../../master/service/master-holiday.service';
+import { TimesheetBlockerService } from './timesheetBlocker.service';
 
 @Injectable()
 export class EmployeeAttendanceService {
@@ -23,6 +24,7 @@ export class EmployeeAttendanceService {
     @InjectRepository(EmployeeAttendance)
     private readonly employeeAttendanceRepository: Repository<EmployeeAttendance>,
     private readonly masterHolidayService: MasterHolidayService,
+    private readonly blockerService: TimesheetBlockerService,
   ) {}
 
   async create(createEmployeeAttendanceDto: EmployeeAttendanceDto): Promise<EmployeeAttendance> {
@@ -30,6 +32,16 @@ export class EmployeeAttendanceService {
       if (createEmployeeAttendanceDto.workingDate && 
           !this.isEditableMonth(new Date(createEmployeeAttendanceDto.workingDate))) {
           throw new BadRequestException('Attendance for this month is locked.');
+      }
+
+      if (createEmployeeAttendanceDto.employeeId && createEmployeeAttendanceDto.workingDate) {
+        const isBlocked = await this.blockerService.isBlocked(
+          createEmployeeAttendanceDto.employeeId, 
+          createEmployeeAttendanceDto.workingDate
+        );
+        if (isBlocked) {
+          throw new BadRequestException('Timesheet is locked for this date by admin.');
+        }
       }
 
       const attendance = this.employeeAttendanceRepository.create(createEmployeeAttendanceDto);
@@ -79,6 +91,14 @@ export class EmployeeAttendanceService {
       throw new BadRequestException('Attendance for this month is locked.');
     }
 
+    const isBlocked = await this.blockerService.isBlocked(
+      attendance.employeeId, 
+      attendance.workingDate
+    );
+    if (isBlocked) {
+      throw new BadRequestException('Timesheet is locked for this date by admin.');
+    }
+
     Object.assign(attendance, updateDto);
     
       if (attendance.totalHours !== undefined && attendance.totalHours !== null) {
@@ -89,29 +109,41 @@ export class EmployeeAttendanceService {
   }
 
   private async determineStatus(hours: number, workingDate: Date): Promise<AttendanceStatus> {
-      if (hours === 0) {
-          const dateObj = new Date(workingDate);
-          
-          // Check Weekend
-          if (this.masterHolidayService.isWeekend(dateObj)) {
-              return AttendanceStatus.WEEKEND;
-          }
+    const dateObj = new Date(workingDate);
+    // Normalize date for comparison: YYYY-MM-DD
+    const year = dateObj.getFullYear();
+    const month = String(dateObj.getMonth() + 1).padStart(2, '0');
+    const day = String(dateObj.getDate()).padStart(2, '0');
+    const dateStr = `${year}-${month}-${day}`;
 
-          // Check Holiday
-          // We need simple date string YYYY-MM-DD
-          const dateStr = dateObj.toISOString().split('T')[0];
-          const holiday = await this.masterHolidayService.findByDate(dateStr);
-          
-          if (holiday) {
-              return AttendanceStatus.HOLIDAY;
-          }
-
-          return AttendanceStatus.LEAVE;
-      } else if (hours > 6) {
-          return AttendanceStatus.FULL_DAY;
-      } else {
-          return AttendanceStatus.HALF_DAY;
+    if (hours === 0 || hours === null || hours === undefined) {
+      // 1. Check Holiday
+      const holiday = await this.masterHolidayService.findByDate(dateStr);
+      if (holiday) {
+        return AttendanceStatus.HOLIDAY;
       }
+
+      // 2. Check Weekend
+      if (this.masterHolidayService.isWeekend(dateObj)) {
+        return AttendanceStatus.WEEKEND;
+      }
+
+      // 3. Weekday with 0 hours
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      
+      if (dateObj <= today) {
+          // Past or Today weekday with 0 hours -> NOT_UPDATED
+          return AttendanceStatus.NOT_UPDATED;
+      } else {
+          // Future weekday -> NOT_UPDATED
+          return AttendanceStatus.NOT_UPDATED;
+      }
+    } else if (hours >= 6) {
+      return AttendanceStatus.FULL_DAY;
+    } else {
+      return AttendanceStatus.HALF_DAY;
+    }
   }
 
   async findByMonth(month: string, year: string, employeeId: string): Promise<EmployeeAttendance[]> {
@@ -160,11 +192,18 @@ export class EmployeeAttendanceService {
 
   private applyStatusBusinessRules(attendance: EmployeeAttendance): EmployeeAttendance {
     const today = new Date().toISOString().split('T')[0];
-    const workingDate = new Date(attendance.workingDate).toISOString().split('T')[0];
+    const workingDateObj = new Date(attendance.workingDate);
+    const workingDate = workingDateObj.toISOString().split('T')[0];
     
     if (workingDate < today) {
-      if (!attendance.status) {
-        attendance.status = AttendanceStatus.LEAVE;
+      if (!attendance.status || attendance.status === AttendanceStatus.NOT_UPDATED) {
+        // Sync check for weekend
+        if (this.masterHolidayService.isWeekend(workingDateObj)) {
+          attendance.status = AttendanceStatus.WEEKEND;
+        } else {
+          // Default for past weekdays if not updated or hours are 0
+          attendance.status = AttendanceStatus.NOT_UPDATED;
+        }
       }
     }
     return attendance;

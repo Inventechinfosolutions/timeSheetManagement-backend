@@ -102,14 +102,19 @@ export class AttendanceCronService {
 
     // 5. Find Missing Employees
     const missingEmployees = allEmployees.filter(emp => !presentEmployeeIds.includes(emp.employeeId));
-    this.logger.log(`Found ${missingEmployees.length} missing entries (Not Updated) on ${dateStr}`);
+    
+    // Check if Yesterday was a Holiday
+    const holiday = await this.masterHolidayService.findByDate(dateStr);
+    const targetStatus = holiday ? AttendanceStatus.HOLIDAY : AttendanceStatus.NOT_UPDATED;
 
-    // 6. Bulk Insert "Not Updated" Records
+    this.logger.log(`Found ${missingEmployees.length} missing entries on ${dateStr}. Marking as ${targetStatus}`);
+
+    // 6. Bulk Insert Records
     const newRecords = missingEmployees.map(emp => {
         return this.attendanceRepo.create({
             employeeId: emp.employeeId,
             workingDate: new Date(dateStr),
-            status: AttendanceStatus.NOT_UPDATED,
+            status: targetStatus,
             totalHours: 0, 
         });
     });

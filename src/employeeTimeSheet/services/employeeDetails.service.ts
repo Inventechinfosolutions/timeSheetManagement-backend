@@ -121,22 +121,13 @@ export class EmployeeDetailsService {
   }
 
   async getAllEmployees(
-    page: number = 1,
-    limit: number = 10,
     search: string = '',
     sortBy: string = 'id',
     sortOrder: 'ASC' | 'DESC' = 'DESC',
     department?: string,
-  ): Promise<{
-    data: EmployeeDetails[];
-    total: number;
-    page: number;
-    limit: number;
-  }> {
+  ): Promise<EmployeeDetails[]> {
     try {
       this.logger.log('Fetching employees with filter:', {
-        page,
-        limit,
         search,
         sortBy,
         sortOrder,
@@ -162,7 +153,6 @@ export class EmployeeDetailsService {
         .createQueryBuilder('employee')
         .orderBy(`employee.${validSortBy}`, sortOrder);
 
-      // Start with a base condition (always true) so we can safely chain `andWhere`
       query.where('1=1');
 
       if (search) {
@@ -172,22 +162,13 @@ export class EmployeeDetailsService {
         );
       }
 
-      // Add Department Filter
       if (department && department !== 'All') {
         query.andWhere('employee.department = :department', { department });
       }
 
-      const [data, total] = await query
-        .skip((page - 1) * limit)
-        .take(limit)
-        .getManyAndCount();
+      const data = await query.getMany();
 
-      return {
-        data,
-        total,
-        page,
-        limit,
-      };
+      return data;
     } catch (error) {
       this.logger.error(
         `Error fetching employees: ${error.message}`,
@@ -223,6 +204,26 @@ export class EmployeeDetailsService {
       );
     }
   }
+
+  async findByEmployeeId(employeeId: string): Promise<EmployeeDetails> {
+    try {
+      this.logger.log(`Fetching employee with string ID: ${employeeId}`);
+      const employee = await this.employeeDetailsRepository.findOne({
+        where: { employeeId },
+      });
+      if (!employee) {
+        this.logger.warn(`Employee ${employeeId} not found`);
+        throw new NotFoundException(`Employee ${employeeId} not found`);
+      }
+      return employee;
+    } catch (error) {
+      if (error instanceof HttpException) throw error;
+      this.logger.error(`Error fetching employee: ${error.message}`, error.stack);
+      throw new HttpException('Failed to fetch employee', HttpStatus.INTERNAL_SERVER_ERROR);
+    }
+  }
+
+
 
   async updateEmployee(
     id: number,

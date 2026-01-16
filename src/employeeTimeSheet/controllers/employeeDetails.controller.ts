@@ -37,7 +37,7 @@ import {
   ApiConsumes,
 } from '@nestjs/swagger';
 
-@ApiTags('Employee Details')
+@ApiTags('Employees')
 @Controller('employee-details')
 export class EmployeeDetailsController {
   logger = new Logger('EmployeeDetails');
@@ -55,21 +55,19 @@ export class EmployeeDetailsController {
     return this.employeeDetailsService.createEmployee(employeeData);
   }
 
-  @Get(':id')
-  @ApiOperation({ summary: 'Get employee by ID' })
-  @ApiParam({ name: 'id', type: String, description: 'Employee ID' })
+  @Get(':employeeId')
+  @ApiOperation({ summary: 'Get employee by Employee ID' })
+  @ApiParam({ name: 'employeeId', type: String, description: 'Employee String ID (e.g. emp001)' })
   @ApiOkResponse({ type: EmployeeDetailsDto })
   @ApiNotFoundResponse({ description: 'Employee not found' })
   @ApiInternalServerErrorResponse({ description: 'Internal server error' })
-  async getEmployeeById(@Param('id', ParseIntPipe) id: number) {
-    this.logger.log(`Fetching employee with ID: ${id}`);
-    return this.employeeDetailsService.getEmployeeById(id);
+  async getEmployeeByEmployeeId(@Param('employeeId') employeeId: string) {
+    this.logger.log(`Fetching employee with Employee ID: ${employeeId}`);
+    return this.employeeDetailsService.findByEmployeeId(employeeId);
   }
 
   @Get()
-  @ApiOperation({ summary: 'Get all employees with optional search and pagination' })
-  @ApiQuery({ name: 'page', required: false, type: Number, description: 'Page number (default: 1)' })
-  @ApiQuery({ name: 'limit', required: false, type: Number, description: 'Items per page (default: 10)' })
+  @ApiOperation({ summary: 'Get all employees with optional search' })
   @ApiQuery({
     name: 'search',
     required: false,
@@ -81,19 +79,15 @@ export class EmployeeDetailsController {
   @ApiQuery({ name: 'department', required: false, type: String, description: 'Filter by department' })
   @ApiResponse({
     status: 200,
-    description: 'Returns paginated list of employees',
+    description: 'Returns list of employees',
   })
   async getAllEmployees(
-    @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
-    @Query('limit', new DefaultValuePipe(10), ParseIntPipe) limit: number,
     @Query('search') search: string,
     @Query('sort') sort: string,
     @Query('order') order: 'ASC' | 'DESC',
     @Query('department') department: string,
   ) {
     return this.employeeDetailsService.getAllEmployees(
-      page,
-      limit,
       search,
       sort,
       order,
@@ -101,105 +95,75 @@ export class EmployeeDetailsController {
     );
   }
 
-  @Put(':id')
-  @ApiOperation({ summary: 'Update employee by ID' })
-  @ApiParam({ name: 'id', type: String, description: 'Employee ID' })
+  @Put(':employeeId')
+  @ApiOperation({ summary: 'Update employee by Employee ID' })
+  @ApiParam({ name: 'employeeId', type: String, description: 'Employee String ID' })
   @ApiBody({ type: EmployeeDetailsDto })
   @ApiOkResponse({ type: EmployeeDetailsDto })
   @ApiInternalServerErrorResponse({ description: 'Internal server error' })
   async updateEmployee(
-    @Param('id', ParseIntPipe) id: number,
+    @Param('employeeId') employeeId: string,
     @Body() updateData: Partial<EmployeeDetailsDto>,
   ) {
-    this.logger.log(`Updating employee ${id} with data: ${JSON.stringify(updateData)}`);
-    return this.employeeDetailsService.updateEmployee(id, updateData);
+    this.logger.log(`Updating employee ${employeeId} with data: ${JSON.stringify(updateData)}`);
+    const employee = await this.employeeDetailsService.findByEmployeeId(employeeId);
+    return this.employeeDetailsService.updateEmployee(employee.id, updateData);
   }
 
-  @Delete(':id')
-  @ApiOperation({ summary: 'Delete employee by ID' })
-  @ApiParam({ name: 'id', type: String, description: 'Employee ID' })
+  @Delete(':employeeId')
+  @ApiOperation({ summary: 'Delete employee by Employee ID' })
+  @ApiParam({ name: 'employeeId', type: String, description: 'Employee String ID' })
   @ApiOkResponse({ description: 'Employee deleted successfully' })
   @ApiInternalServerErrorResponse({ description: 'Internal server error' })
-  async deleteEmployee(@Param('id', ParseIntPipe) id: number) {
-    this.logger.log(`Deleting employee with ID: ${id}`);
-    return await this.employeeDetailsService.deleteEmployee(id);
+  async deleteEmployee(@Param('employeeId') employeeId: string) {
+    this.logger.log(`Deleting employee with ID: ${employeeId}`);
+    const employee = await this.employeeDetailsService.findByEmployeeId(employeeId);
+    return await this.employeeDetailsService.deleteEmployee(employee.id);
   }
 
-  @Patch(':id')
-  @ApiOperation({ summary: 'Partially update an employee by ID' })
-  @ApiParam({ name: 'id', type: Number, description: 'Employee ID' })
+  @Patch(':employeeId')
+  @ApiOperation({ summary: 'Partially update an employee by Employee ID' })
+  @ApiParam({ name: 'employeeId', type: String, description: 'Employee String ID' })
   @ApiBody({ type: EmployeeDetailsDto })
   @ApiOkResponse({ type: EmployeeDetailsDto })
   @ApiNotFoundResponse({ description: 'Employee not found' })
   @ApiInternalServerErrorResponse({ description: 'Internal server error' })
   async partialUpdateEmployee(
-    @Param('id', ParseIntPipe) id: number,
+    @Param('employeeId') employeeId: string,
     @Body() updateData: Partial<EmployeeDetailsDto>,
     @Req() req: any,
   ) {
     const loginId = req.user?.userId ?? 'system';
-    this.logger.log(`Partially updating employee ${id} with data: ${JSON.stringify(updateData)}`);
-    return this.employeeDetailsService.partialUpdateEmployee(id, updateData, loginId);
+    this.logger.log(`Partially updating employee ${employeeId} with data: ${JSON.stringify(updateData)}`);
+    const employee = await this.employeeDetailsService.findByEmployeeId(employeeId);
+    return this.employeeDetailsService.partialUpdateEmployee(employee.id, updateData, loginId);
   }
 
   @Post('reset-password')
   @ApiOperation({ summary: 'Reset password for employee' })
-  @ApiBody({ type: ResetPasswordDto })
-  @ApiOkResponse({ description: 'Password reset successful' })
-  @ApiInternalServerErrorResponse({ description: 'Internal server error' })
-  async resetPassword(@Body() resetPasswordDto: ResetPasswordDto, @Req() req: any): Promise<{ message: string }> {
-    try {
-      // Logic to fallback to authenticated user's ID if loginId not provided in body
-      if (!resetPasswordDto.loginId && req.user?.employeeId) {
-         resetPasswordDto.loginId = req.user.employeeId;
-      }
-      // If logic requires loginId to be present
-        if (!resetPasswordDto.loginId) {
-            // If no auth and no body param, this might be an error or allowed if public (usually not public without token)
-            // Assuming for now it's either provided in body or via auth context
-        }
-
-      this.logger.log(`Resetting password for employee: ${resetPasswordDto.loginId || 'unknown'}`);
-      return await this.employeeDetailsService.resetPassword(resetPasswordDto);
-    } catch (error) {
-       this.logger.error(`Error resetting password: ${error.message}`, error.stack);
-       throw error;
+  async resetPassword(@Body() resetPasswordDto: ResetPasswordDto, @Req() req: any) {
+    if (!resetPasswordDto.loginId && req.user?.employeeId) {
+      resetPasswordDto.loginId = req.user.employeeId;
     }
+    return await this.employeeDetailsService.resetPassword(resetPasswordDto);
   }
 
-
-  @Post('upload-profile-image/:id')
-  @ApiOperation({ summary: 'Upload profile image for employee' })
-  @ApiConsumes('multipart/form-data')
-  @ApiBody({
-    schema: {
-      type: 'object',
-      properties: {
-        file: {
-          type: 'string',
-          format: 'binary',
-        },
-      },
-    },
-  })
+  @Post('upload-profile-image/:employeeId')
+  @ApiOperation({ summary: 'Upload profile image' })
   @UseInterceptors(FileInterceptor('file'))
   async uploadProfileImage(
-    @Param('id', ParseIntPipe) id: number,
+    @Param('employeeId') employeeId: string,
     @UploadedFile() file: any, 
   ) {
-    return this.employeeDetailsService.uploadProfileImage(file, id);
+    const employee = await this.employeeDetailsService.findByEmployeeId(employeeId);
+    return this.employeeDetailsService.uploadProfileImage(file, employee.id);
   }
 
-  @Get('profile-image/:id')
-  @ApiOperation({ summary: 'Get profile image metadata for employee' })
-  async getProfileImage(@Param('id', ParseIntPipe) id: number) {
-    return this.employeeDetailsService.getProfileImage(id);
-  }
-
-  @Get('profile-image/:id/view')
-  @ApiOperation({ summary: 'View/Stream profile image for employee' })
-  async viewProfileImage(@Param('id', ParseIntPipe) id: number, @Res() res: Response) {
-    const { stream, meta } = await this.employeeDetailsService.getProfileImageStream(id);
+  @Get('profile-image/:employeeId/view')
+  @ApiOperation({ summary: 'View profile image' })
+  async viewProfileImage(@Param('employeeId') employeeId: string, @Res() res: Response) {
+    const employee = await this.employeeDetailsService.findByEmployeeId(employeeId);
+    const { stream, meta } = await this.employeeDetailsService.getProfileImageStream(employee.id);
     
     res.set({
       'Content-Type': meta.mimetype || 'image/jpeg',
