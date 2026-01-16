@@ -126,6 +126,7 @@ export class EmployeeDetailsService {
     search: string = '',
     sortBy: string = 'id',
     sortOrder: 'ASC' | 'DESC' = 'DESC',
+    department?: string,
   ): Promise<{
     data: EmployeeDetails[];
     total: number;
@@ -139,6 +140,7 @@ export class EmployeeDetailsService {
         search,
         sortBy,
         sortOrder,
+        department,
       });
 
       // Validate sortBy field to prevent SQL injection
@@ -160,11 +162,19 @@ export class EmployeeDetailsService {
         .createQueryBuilder('employee')
         .orderBy(`employee.${validSortBy}`, sortOrder);
 
+      // Start with a base condition (always true) so we can safely chain `andWhere`
+      query.where('1=1');
+
       if (search) {
-        query.where(
+        query.andWhere(
           '(employee.fullName LIKE :search OR employee.employeeId LIKE :search OR employee.email LIKE :search)',
           { search: `%${search}%` },
         );
+      }
+
+      // Add Department Filter
+      if (department && department !== 'All') {
+        query.andWhere('employee.department = :department', { department });
       }
 
       const [data, total] = await query

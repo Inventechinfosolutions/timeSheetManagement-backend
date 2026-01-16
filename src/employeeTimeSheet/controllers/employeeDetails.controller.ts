@@ -76,6 +76,9 @@ export class EmployeeDetailsController {
     type: String,
     description: 'search by employee ID, name or reference number',
   })
+  @ApiQuery({ name: 'sort', required: false, type: String, description: 'Sort field (e.g., fullName)' })
+  @ApiQuery({ name: 'order', required: false, enum: ['ASC', 'DESC'], description: 'Sort order' })
+  @ApiQuery({ name: 'department', required: false, type: String, description: 'Filter by department' })
   @ApiResponse({
     status: 200,
     description: 'Returns paginated list of employees',
@@ -84,8 +87,18 @@ export class EmployeeDetailsController {
     @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
     @Query('limit', new DefaultValuePipe(10), ParseIntPipe) limit: number,
     @Query('search') search: string,
+    @Query('sort') sort: string,
+    @Query('order') order: 'ASC' | 'DESC',
+    @Query('department') department: string,
   ) {
-    return this.employeeDetailsService.getAllEmployees(page, limit, search);
+    return this.employeeDetailsService.getAllEmployees(
+      page,
+      limit,
+      search,
+      sort,
+      order,
+      department,
+    );
   }
 
   @Put(':id')
