@@ -161,8 +161,18 @@ export class EmployeeDetailsController {
 
   @Get('profile-image/:employeeId/view')
   @ApiOperation({ summary: 'View profile image' })
-  async viewProfileImage(@Param('employeeId') employeeId: string, @Res() res: Response) {
-    const employee = await this.employeeDetailsService.findByEmployeeId(employeeId);
+  async viewProfileImage(@Param('employeeId') employeeIdStr: string, @Res() res: Response) {
+    let employee;
+    try {
+        employee = await this.employeeDetailsService.findByEmployeeId(employeeIdStr);
+    } catch (e) {
+        // If not found by string ID, try finding by numeric ID if it's a number
+        if (!isNaN(Number(employeeIdStr))) {
+            employee = await this.employeeDetailsService.getEmployeeById(Number(employeeIdStr));
+        } else {
+            throw e;
+        }
+    }
     const { stream, meta } = await this.employeeDetailsService.getProfileImageStream(employee.id);
     
     res.set({

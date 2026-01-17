@@ -1,5 +1,5 @@
 import { Entity, Column, PrimaryGeneratedColumn } from 'typeorm';
-
+import { BaseEntity } from '../../common/core/models/base.entity';
 
 
 export enum AttendanceStatus {

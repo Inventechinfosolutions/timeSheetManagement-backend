@@ -9,7 +9,11 @@ import {
   Query,
   Logger,
   ParseIntPipe,
+  UseGuards,
+  Req,
 } from '@nestjs/common';
+import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
+import { UserType } from '../../users/enums/user-type.enum';
 import {
   ApiOperation,
   ApiQuery,
@@ -30,6 +34,7 @@ export class EmployeeAttendanceController {
     private readonly employeeAttendanceService: EmployeeAttendanceService,
   ) {}
 
+  @UseGuards(JwtAuthGuard)
   @Post()
   @ApiOperation({ summary: 'Create a new employee attendance record' })
   @ApiBody({ type: EmployeeAttendanceDto })
@@ -41,8 +46,9 @@ export class EmployeeAttendanceController {
     status: 400,
     description: 'Bad Request. The request body is invalid.',
   })
-  async create(@Body() createEmployeeAttendanceDto: EmployeeAttendanceDto) {
-    return this.employeeAttendanceService.create(createEmployeeAttendanceDto);
+  async create(@Body() createEmployeeAttendanceDto: EmployeeAttendanceDto, @Req() req: any) {
+    const isAdmin = req.user?.userType === UserType.ADMIN;
+    return this.employeeAttendanceService.create(createEmployeeAttendanceDto, isAdmin);
   }
 
  
@@ -115,16 +121,20 @@ export class EmployeeAttendanceController {
     );
   }
 
+  @UseGuards(JwtAuthGuard)
   @Put(':id')
   @ApiOperation({ summary: 'Update an existing employee attendance record' })
   @ApiBody({ type: EmployeeAttendanceDto })
   async update(
     @Param('id', ParseIntPipe) id: number,
     @Body() updateEmployeeAttendanceDto: Partial<EmployeeAttendanceDto>,
+    @Req() req: any
   ) {
+    const isAdmin = req.user?.userType === UserType.ADMIN;
     return this.employeeAttendanceService.update(
       id,
       updateEmployeeAttendanceDto,
+      isAdmin
     );
   }
 
@@ -136,15 +146,27 @@ export class EmployeeAttendanceController {
 
 
   
+  @UseGuards(JwtAuthGuard)
   @Post('attendence-data/:employeeId')
   @ApiOperation({ summary: 'Bulk create/update attendance records' })
   @ApiBody({ type: [EmployeeAttendanceDto] })
-  async createBulk(@Body() createDtos: EmployeeAttendanceDto[]) {
-    return this.employeeAttendanceService.createBulk(createDtos);
+  async createBulk(@Body() createDtos: EmployeeAttendanceDto[], @Req() req: any) {
+    const isAdmin = req.user?.userType === UserType.ADMIN;
+    return this.employeeAttendanceService.createBulk(createDtos, isAdmin);
+  }
+
+  @Get('monthly-details-all/:month/:year')
+  @ApiOperation({ summary: 'Get all employees monthly attendance' })
+  @ApiParam({ name: 'month', type: String })
+  @ApiParam({ name: 'year', type: String })
+  async findAllMonthlyDetails(
+    @Param('month') month: string,
+    @Param('year') year: string,
+  ) {
+    this.logger.log(`Fetching all employees attendance - Month: ${month}, Year: ${year}`);
+    return this.employeeAttendanceService.findAllMonthlyDetails(month, year);
   }
 }
-
-// Add this method to your Controller class
 
 
 
