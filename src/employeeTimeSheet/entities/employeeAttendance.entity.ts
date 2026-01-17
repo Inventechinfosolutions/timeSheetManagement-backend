@@ -13,7 +13,7 @@ export enum AttendanceStatus {
 }
 
 @Entity('employee_attendance')
-export class EmployeeAttendance {
+export class EmployeeAttendance extends BaseEntity {
   @PrimaryGeneratedColumn()
   id: number;
 
