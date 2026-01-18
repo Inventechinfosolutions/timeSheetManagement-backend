@@ -45,10 +45,10 @@ export class S3ClientService implements OnModuleInit {
       },
       forcePathStyle: true,
       requestHandler: {
-        connectionTimeout: 300000,
-        socketTimeout: 300000,
+        connectionTimeout: 5000,
+        socketTimeout: 5000,
       },
-      maxAttempts: 3,
+      maxAttempts: 1,
       retryMode: 'standard',
     });
    
@@ -60,8 +60,12 @@ export class S3ClientService implements OnModuleInit {
     if (!this.bucketName) {
       throw new Error('MINIO_BUCKET_NAME environment variable is required');
     }
-    await this.checkAndCreateBucket(this.bucketName);
-    this.logger.log('S3ClientService module initialized successfully');
+    try {
+      await this.checkAndCreateBucket(this.bucketName);
+      this.logger.log('S3ClientService module initialized successfully');
+    } catch (error) {
+      this.logger.warn(`S3ClientService initialization failed: ${error.message}. The application will continue to start, but file storage will be unavailable.`);
+    }
   }
  
   private async checkAndCreateBucket(bucketName: string) {

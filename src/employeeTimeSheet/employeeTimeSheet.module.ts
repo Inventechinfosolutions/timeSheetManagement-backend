@@ -15,10 +15,13 @@ import { UsersModule } from '../users/users.module';
 import { AuthModule } from '../auth/auth.module';
 import { MasterModule } from '../master/master.module';
 import { DocumentUploaderModule } from '../common/document-uploader/document-uploader.module';
+import { TimesheetBlocker } from './entities/timesheetBlocker.entity';
+import { TimesheetBlockerController } from './controllers/timesheetBlocker.controller';
+import { TimesheetBlockerService } from './services/timesheetBlocker.service';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([EmployeeAttendance, EmployeeDetails, User]),
+    TypeOrmModule.forFeature([EmployeeAttendance, EmployeeDetails, User, TimesheetBlocker]),
     UsersModule,
     AuthModule,
     MasterModule,
@@ -28,13 +31,15 @@ import { DocumentUploaderModule } from '../common/document-uploader/document-upl
     EmployeeAttendanceController, 
     EmployeeDetailsController, 
     EmployeeLinkController, 
-    PublicController
+    PublicController,
+    TimesheetBlockerController
   ],
   providers: [
     EmployeeAttendanceService, 
     EmployeeDetailsService, 
     EmployeeLinkService, 
-    PublicService
+    PublicService,
+    TimesheetBlockerService
   ],
   exports: [EmployeeDetailsService, EmployeeLinkService],
 })

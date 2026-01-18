@@ -94,6 +94,9 @@ export class DocumentUploaderService {
           docDetails.createdAt = e.createdAt;
           docs.push(docDetails);
         } catch (error) {
+          if (error instanceof HttpException && error.getStatus() === HttpStatus.SERVICE_UNAVAILABLE) {
+              throw error; 
+          }
           this.logger.error('Error processing document metadata:', {
             documentId: e.id,
             error: error.message,
