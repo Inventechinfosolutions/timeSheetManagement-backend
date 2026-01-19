@@ -5,6 +5,7 @@ import { Repository, Between } from 'typeorm';
 import { EmployeeAttendance, AttendanceStatus } from '../employeeTimeSheet/entities/employeeAttendance.entity';
 import { EmployeeDetails } from '../employeeTimeSheet/entities/employeeDetails.entity';
 import { MasterHolidayService } from '../master/service/master-holiday.service';
+import { NotificationsService } from '../notifications/notifications.service';
 
 @Injectable()
 export class AttendanceCronService {
@@ -18,7 +19,29 @@ export class AttendanceCronService {
     private employeeRepo: Repository<EmployeeDetails>,
 
     private readonly masterHolidayService: MasterHolidayService,
+    private readonly notificationsService: NotificationsService,
   ) {}
+
+  // Run at 10:00 AM every Saturday
+  @Cron('0 10 * * 6')
+  async weeklyReminder() {
+    this.logger.debug('Running Weekly Reminder...');
+    await this.notificationsService.sendWeeklyReminder();
+  }
+
+  // Run at 10:00 AM every day, checks if it is the last day of the month
+  @Cron('0 10 * * *')
+  async monthEndReminder() {
+    const today = new Date();
+    const tomorrow = new Date(today);
+    tomorrow.setDate(today.getDate() + 1);
+
+    // If tomorrow is next month, today is the last day
+    if (tomorrow.getMonth() !== today.getMonth()) {
+      this.logger.debug('Running Month-End Reminder...');
+      await this.notificationsService.sendMonthEndReminder();
+    }
+  }
 
   // Run at 11:30 PM every day to check for Weekend logic
   @Cron('30 23 * * *') 
