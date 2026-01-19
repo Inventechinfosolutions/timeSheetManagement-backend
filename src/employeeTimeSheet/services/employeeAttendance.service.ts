@@ -158,12 +158,13 @@ export class EmployeeAttendanceService {
       // 3. Weekday with 0 hours
       const today = new Date();
       today.setHours(0, 0, 0, 0);
+      dateObj.setHours(0, 0, 0, 0);
       
       if (dateObj <= today) {
-          // Past or Today weekday with 0 hours -> LEAVE (was NOT_UPDATED)
+          // Past or Today weekday with 0 hours -> LEAVE
           return AttendanceStatus.LEAVE;
       } else {
-          // Future weekday -> NOT_UPDATED
+          // Future weekday -> NOT_UPDATED (Upcoming)
           return AttendanceStatus.NOT_UPDATED;
       }
     } else if (hours >= 6) {
@@ -196,14 +197,29 @@ export class EmployeeAttendanceService {
     return Promise.all(records.map(record => this.applyStatusBusinessRules(record)));
   }
 
-  async findWorkedDays(employeeId: string, startDate: string, endDate: string): Promise<EmployeeAttendance[]> {
+  async findWorkedDays(employeeId: string, startDate: string, endDate: string): Promise<any[]> {
     const start = new Date(`${startDate}T00:00:00`);
     const end = new Date(`${endDate}T23:59:59`);
-    const records = await this.employeeAttendanceRepository.find({
-      where: { employeeId, workingDate: Between(start, end) },
-      order: { workingDate: 'ASC' },
-    });
-    return Promise.all(records.map(r => this.applyStatusBusinessRules(r)));
+    
+    const results = await this.employeeAttendanceRepository
+      .createQueryBuilder('attendance')
+      .innerJoin('employee_details', 'details', 'details.employee_id = attendance.employee_id')
+      .select([
+        'details.id AS id',
+        'details.full_name AS fullName',
+        'details.employeeId AS employeeId',
+        'details.department AS department',
+        'details.designation AS designation',
+        'attendance.workingDate AS workingDate',
+        'attendance.totalHours AS totalHours',
+        'attendance.status AS status'
+      ])
+      .where('attendance.employeeId = :employeeId', { employeeId })
+      .andWhere('attendance.workingDate BETWEEN :start AND :end', { start, end })
+      .orderBy('attendance.workingDate', 'ASC')
+      .getRawMany();
+
+    return results;
   }
 
   async remove(id: number): Promise<void> {
@@ -222,7 +238,7 @@ export class EmployeeAttendanceService {
     const workingDateObj = new Date(attendance.workingDate);
     const workingDate = workingDateObj.toISOString().split('T')[0];
     
-    if (workingDate < today) {
+    if (workingDate <= today) {
       if (!attendance.status || attendance.status === AttendanceStatus.NOT_UPDATED) {
         // Priority 1: Check Holiday
         const holiday = await this.masterHolidayService.findByDate(workingDate);

@@ -45,7 +45,7 @@ export class UsersService {
   async findByLoginId(loginId: string): Promise<User | null> {
     return await this.usersRepository
       .createQueryBuilder('user')
-      .where('user.loginId = :loginId', { loginId })
+      .where('user.loginId = BINARY :loginId', { loginId })
       .addSelect('user.password')
       .getOne();
   }
@@ -80,7 +80,8 @@ export class UsersService {
     try {
       const user = await this.findByLoginId(userLoginDto.loginId);
 
-      if (!user) {
+      // Strict case-sensitive and character check
+      if (!user || user.loginId !== userLoginDto.loginId) {
         throw new HttpException('Invalid login credentials', HttpStatus.UNAUTHORIZED);
       }
 
