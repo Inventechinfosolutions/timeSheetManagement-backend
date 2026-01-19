@@ -50,7 +50,8 @@ export class AuthService {
   async login(loginDto: LoginDto): Promise<AuthResponseDto> {
     const user = await this.usersService.findByLoginId(loginDto.email);
 
-    if (!user) {
+    // Strict case-sensitive check
+    if (!user || user.loginId !== loginDto.email) {
       throw new UnauthorizedException('Invalid credentials');
     }
 

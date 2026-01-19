@@ -105,14 +105,15 @@ export class EmployeeAttendanceController {
     return this.employeeAttendanceService.findByDate(workingDate, employeeId);
   }
 
-  @Get('worked-days/:employeeId')
+  @Get('worked-days/:employeeId/:startDate/:endDate')
   @ApiOperation({ summary: 'Get worked days for a specific employee' })
-  @ApiQuery({ name: 'startDate', type: String })
-  @ApiQuery({ name: 'endDate', type: String })
+  @ApiParam({ name: 'employeeId', type: String })
+  @ApiParam({ name: 'startDate', type: String })
+  @ApiParam({ name: 'endDate', type: String })
   async findWorkedDays(
     @Param('employeeId') employeeId: string,
-    @Query('startDate') startDate: string,
-    @Query('endDate') endDate: string,
+    @Param('startDate') startDate: string,
+    @Param('endDate') endDate: string,
   ) {
     return this.employeeAttendanceService.findWorkedDays(
       employeeId,

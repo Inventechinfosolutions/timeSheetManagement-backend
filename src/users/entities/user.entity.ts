@@ -48,11 +48,4 @@ export class User extends BaseEntity {
   @Column({ nullable: true })
   mobileVerification: boolean;
 
-  @BeforeInsert()
-  @BeforeUpdate()
-  toLowerCaseloginId() {
-    if (this.loginId) {
-      this.loginId = this.loginId.toLowerCase();
-    }
-  }
 }
