@@ -77,6 +77,8 @@ export class EmployeeDetailsController {
   @ApiQuery({ name: 'sort', required: false, type: String, description: 'Sort field (e.g., fullName)' })
   @ApiQuery({ name: 'order', required: false, enum: ['ASC', 'DESC'], description: 'Sort order' })
   @ApiQuery({ name: 'department', required: false, type: String, description: 'Filter by department' })
+  @ApiQuery({ name: 'page', required: false, type: Number, description: 'Page number' })
+  @ApiQuery({ name: 'limit', required: false, type: Number, description: 'Items per page' })
   @ApiResponse({
     status: 200,
     description: 'Returns list of employees',
@@ -86,12 +88,16 @@ export class EmployeeDetailsController {
     @Query('sort') sort: string,
     @Query('order') order: 'ASC' | 'DESC',
     @Query('department') department: string,
+    @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
+    @Query('limit', new DefaultValuePipe(10), ParseIntPipe) limit: number,
   ) {
     return this.employeeDetailsService.getAllEmployees(
       search,
       sort,
       order,
       department,
+      page,
+      limit,
     );
   }
 
