@@ -19,6 +19,10 @@ import { User } from '../../users/entities/user.entity';
 import { EmployeeLinkService } from './employeeLink.service';
 import { DocumentUploaderService } from '../../common/document-uploader/services/document-uploader.service';
 import { DocumentMetaInfo, EntityType, ReferenceType } from '../../common/document-uploader/models/documentmetainfo.model';
+import * as XLSX from 'xlsx';
+import { BulkUploadResultDto, BulkUploadErrorDto } from '../dto/bulk-upload-result.dto';
+
+
 
 @Injectable()
 export class EmployeeDetailsService {
@@ -166,9 +170,18 @@ export class EmployeeDetailsService {
         query.andWhere('employee.department = :department', { department });
       }
 
-      const data = await query.getMany();
+      const data = await query
+        .leftJoinAndMapOne('employee.user', User, 'user', 'user.loginId = employee.employeeId')
+        .getMany();
 
-      return data;
+      // Transform result to include user status fields
+      return data.map((emp: any) => ({
+        ...emp,
+        userStatus: emp.user?.status || UserStatus.DRAFT,
+        resetRequired: emp.user?.resetRequired ?? true,
+        lastLoggedIn: emp.user?.lastLoggedIn || null,
+        user: undefined // Remove the nested user object to keep response clean
+      }));
     } catch (error) {
       this.logger.error(
         `Error fetching employees: ${error.message}`,
@@ -184,14 +197,23 @@ export class EmployeeDetailsService {
   async getEmployeeById(id: number): Promise<EmployeeDetails> {
     try {
       this.logger.log(`Fetching employee with ID: ${id}`);
-      const employee = await this.employeeDetailsRepository.findOne({
-        where: { id },
-      });
+      const employee = await this.employeeDetailsRepository.createQueryBuilder('employee')
+        .leftJoinAndMapOne('employee.user', User, 'user', 'user.loginId = employee.employeeId')
+        .where('employee.id = :id', { id })
+        .getOne();
+
       if (!employee) {
         this.logger.warn(`Employee with ID ${id} not found`);
         throw new NotFoundException(`Employee with ID ${id} not found`);
       }
-      return employee;
+      
+      const result: any = employee;
+      result.userStatus = result.user?.status || UserStatus.DRAFT;
+      result.resetRequired = result.user?.resetRequired ?? true;
+      result.lastLoggedIn = result.user?.lastLoggedIn || null;
+      delete result.user;
+      
+      return result;
     } catch (error) {
       if (error instanceof HttpException) throw error;
       this.logger.error(
@@ -208,14 +230,23 @@ export class EmployeeDetailsService {
   async findByEmployeeId(employeeId: string): Promise<EmployeeDetails> {
     try {
       this.logger.log(`Fetching employee with string ID: ${employeeId}`);
-      const employee = await this.employeeDetailsRepository.findOne({
-        where: { employeeId },
-      });
+      const employee = await this.employeeDetailsRepository.createQueryBuilder('employee')
+        .leftJoinAndMapOne('employee.user', User, 'user', 'user.loginId = employee.employeeId')
+        .where('employee.employeeId = :employeeId', { employeeId })
+        .getOne();
+
       if (!employee) {
         this.logger.warn(`Employee ${employeeId} not found`);
         throw new NotFoundException(`Employee ${employeeId} not found`);
       }
-      return employee;
+      
+      const result: any = employee;
+      result.userStatus = result.user?.status || UserStatus.DRAFT;
+      result.resetRequired = result.user?.resetRequired ?? true;
+      result.lastLoggedIn = result.user?.lastLoggedIn || null;
+      delete result.user;
+      
+      return result;
     } catch (error) {
       if (error instanceof HttpException) throw error;
       this.logger.error(`Error fetching employee: ${error.message}`, error.stack);
@@ -358,6 +389,51 @@ export class EmployeeDetailsService {
     }
   }
 
+  async resendActivationLink(employeeId: string): Promise<any> {
+    try {
+      this.logger.log(`Resending activation link for employee: ${employeeId}`);
+      
+      const employee = await this.findByEmployeeId(employeeId);
+      
+      // Check if user exists
+      let user = await this.userRepository.findOne({ where: { loginId: employeeId.toLowerCase() } });
+      
+      if (!user) {
+        // Create user if missing
+        this.logger.warn(`User not found for ${employeeId}, creating new user record`);
+        user = this.userRepository.create({
+          loginId: employee.employeeId,
+          aliasLoginName: employee.fullName,
+          password: employee.password || 'Initial@123',
+          userType: UserType.EMPLOYEE,
+          status: UserStatus.DRAFT,
+          resetRequired: true,
+        });
+        await this.userRepository.save(user);
+      } else if (!user.resetRequired) {
+        // If user already reset password/active, we shouldn't blindly resend activation link
+        // unless explicitly requested to reset. but here we follow requirement: 
+        // "resend button should go and that reset password should be visible to admin"
+        // So this endpoint might arguably check user.resetRequired, but let's allow it 
+        // and let frontend handle visibility.
+      }
+
+      const activationInfo = await this.employeeLinkService.generateActivationLink(employee.employeeId);
+      this.logger.log(`Activation link regenerated for: ${employeeId}`);
+
+      return {
+        message: 'Activation link sent successfully',
+        link: activationInfo.activationLink,
+        loginId: activationInfo.loginId,
+        password: activationInfo.password
+      };
+    } catch (error) {
+      this.logger.error(`Error resending activation link: ${error.message}`, error.stack);
+      if (error instanceof HttpException) throw error;
+      throw new HttpException('Failed to resend activation link', HttpStatus.INTERNAL_SERVER_ERROR);
+    }
+  }
+
 
   async uploadProfileImage(file: any, employeeId: number): Promise<any> {
     if (!file) {
@@ -413,5 +489,237 @@ export class EmployeeDetailsService {
     const meta = await this.documentUploaderService.getMetaData(latest.key);
     
     return { stream, meta };
+  }
+
+  /**
+   * Parse Excel file and extract employee data
+   */
+  private parseExcelFile(buffer: Buffer): any[] {
+    try {
+      const workbook = XLSX.read(buffer, { type: 'buffer' });
+      const sheetName = workbook.SheetNames[0];
+      const worksheet = workbook.Sheets[sheetName];
+      
+      // Convert to JSON with header row
+      const data = XLSX.utils.sheet_to_json(worksheet);
+      
+      this.logger.log(`Parsed ${data.length} rows from Excel file`);
+      return data;
+    } catch (error) {
+      this.logger.error(`Error parsing Excel file: ${error.message}`, error.stack);
+      throw new BadRequestException('Invalid Excel file format');
+    }
+  }
+
+  /**
+   * Validate employee data from Excel row
+   */
+  private validateEmployeeData(data: any, rowNumber: number): BulkUploadErrorDto[] {
+    const errors: BulkUploadErrorDto[] = [];
+
+    // Required fields validation
+    const requiredFields = ['fullName', 'employeeId', 'department', 'designation', 'email'];
+    
+    for (const field of requiredFields) {
+      if (!data[field] || String(data[field]).trim() === '') {
+        errors.push({
+          row: rowNumber,
+          field,
+          message: `${field} is required`
+        });
+      }
+    }
+
+    // Email format validation
+    if (data.email) {
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(String(data.email).trim())) {
+        errors.push({
+          row: rowNumber,
+          field: 'email',
+          message: 'Invalid email format'
+        });
+      }
+    }
+
+    return errors;
+  }
+
+
+  /**
+   * Bulk create employees from Excel file
+   */
+  async bulkCreateEmployees(file: Express.Multer.File): Promise<BulkUploadResultDto> {
+    this.logger.log('Starting bulk employee upload');
+
+    if (!file) {
+      throw new BadRequestException('No file uploaded');
+    }
+
+    // Validate file type
+    const allowedMimeTypes = [
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', // .xlsx
+      'application/vnd.ms-excel', // .xls
+    ];
+
+    if (!allowedMimeTypes.includes(file.mimetype)) {
+      throw new BadRequestException('Invalid file type. Please upload an Excel file (.xlsx or .xls)');
+    }
+
+    const result: BulkUploadResultDto = {
+      successCount: 0,
+      failureCount: 0,
+      createdEmployees: [],
+      errors: [],
+      message: ''
+    };
+
+    try {
+      // Parse Excel file
+      const excelData = this.parseExcelFile(file.buffer);
+
+      if (excelData.length === 0) {
+        throw new BadRequestException('Excel file is empty');
+      }
+
+      // Validate all rows first
+      const validationErrors: BulkUploadErrorDto[] = [];
+      const validEmployees: any[] = [];
+
+      for (let i = 0; i < excelData.length; i++) {
+        const rowNumber = i + 2; // +2 because Excel rows start at 1 and first row is header
+        const rowData = excelData[i];
+
+        const rowErrors = this.validateEmployeeData(rowData, rowNumber);
+        
+        if (rowErrors.length > 0) {
+          validationErrors.push(...rowErrors);
+        } else {
+          validEmployees.push({
+            ...rowData,
+            rowNumber
+          });
+        }
+      }
+
+      // If there are validation errors, return them without processing
+      if (validationErrors.length > 0) {
+        result.failureCount = validationErrors.length;
+        result.errors = validationErrors;
+        result.message = `Validation failed for ${validationErrors.length} row(s). Please fix the errors and try again.`;
+        return result;
+      }
+
+      // Check for duplicates within the file
+      const employeeIds = validEmployees.map(e => String(e.employeeId).trim());
+      const emails = validEmployees.map(e => String(e.email).trim().toLowerCase());
+
+      const duplicateIds = employeeIds.filter((id, index) => employeeIds.indexOf(id) !== index);
+      const duplicateEmails = emails.filter((email, index) => emails.indexOf(email) !== index);
+
+      if (duplicateIds.length > 0) {
+        throw new BadRequestException(`Duplicate Employee IDs found in file: ${[...new Set(duplicateIds)].join(', ')}`);
+      }
+
+      if (duplicateEmails.length > 0) {
+        throw new BadRequestException(`Duplicate emails found in file: ${[...new Set(duplicateEmails)].join(', ')}`);
+      }
+
+      // Check for existing employees in database
+      const existingByEmployeeId = await this.employeeDetailsRepository
+        .createQueryBuilder('employee')
+        .where('employee.employeeId IN (:...ids)', { ids: employeeIds })
+        .getMany();
+
+      const existingByEmail = await this.employeeDetailsRepository
+        .createQueryBuilder('employee')
+        .where('LOWER(employee.email) IN (:...emails)', { emails })
+        .getMany();
+
+      if (existingByEmployeeId.length > 0) {
+        const existingIds = existingByEmployeeId.map(e => e.employeeId).join(', ');
+        throw new BadRequestException(`Employee IDs already exist in database: ${existingIds}`);
+      }
+
+      if (existingByEmail.length > 0) {
+        const existingEmails = existingByEmail.map(e => e.email).join(', ');
+        throw new BadRequestException(`Email addresses already exist in database: ${existingEmails}`);
+      }
+
+      // Create all employees
+      for (const employeeData of validEmployees) {
+        try {
+          // Hash password if provided
+          let hashedPassword: string | undefined;
+          if (employeeData.password) {
+            const salt = await bcrypt.genSalt(10);
+            hashedPassword = await bcrypt.hash(String(employeeData.password).trim(), salt);
+          }
+
+          const employee = this.employeeDetailsRepository.create({
+            fullName: String(employeeData.fullName).trim(),
+            employeeId: String(employeeData.employeeId).trim(),
+            department: String(employeeData.department).trim(),
+            designation: String(employeeData.designation).trim(),
+            email: String(employeeData.email).trim().toLowerCase(),
+            password: hashedPassword,
+          });
+
+          const savedEmployee = await this.employeeDetailsRepository.save(employee);
+
+          // Create User entity for authentication
+          try {
+            await this.usersService.create({
+              loginId: savedEmployee.employeeId,
+              aliasLoginName: savedEmployee.fullName,
+              password: hashedPassword || 'Initial@123',
+              userType: UserType.EMPLOYEE,
+              status: UserStatus.DRAFT,
+              resetRequired: true,
+            });
+          } catch (userError) {
+            this.logger.warn(`Failed to create user for employee ${savedEmployee.employeeId}: ${userError.message}`);
+          }
+
+          // Generate activation link
+          try {
+            await this.employeeLinkService.generateActivationLink(savedEmployee.employeeId);
+          } catch (linkError) {
+            this.logger.warn(`Failed to generate activation link for ${savedEmployee.employeeId}: ${linkError.message}`);
+          }
+
+          result.successCount++;
+          result.createdEmployees.push(savedEmployee.employeeId);
+
+        } catch (error) {
+          this.logger.error(`Error creating employee at row ${employeeData.rowNumber}: ${error.message}`);
+          result.failureCount++;
+          result.errors.push({
+            row: employeeData.rowNumber,
+            message: error.message || 'Failed to create employee'
+          });
+        }
+      }
+
+      // Set final message
+      if (result.successCount === validEmployees.length) {
+        result.message = `Successfully created ${result.successCount} employee(s)`;
+      } else if (result.successCount > 0) {
+        result.message = `Partially successful: ${result.successCount} created, ${result.failureCount} failed`;
+      } else {
+        result.message = `Failed to create employees. Please check errors.`;
+      }
+
+      this.logger.log(`Bulk upload completed: ${result.successCount} success, ${result.failureCount} failures`);
+      return result;
+
+    } catch (error) {
+      if (error instanceof HttpException) throw error;
+      this.logger.error(`Error in bulk upload: ${error.message}`, error.stack);
+      throw new HttpException(
+        error.message || 'Failed to process bulk upload',
+        HttpStatus.INTERNAL_SERVER_ERROR
+      );
+    }
   }
 }
