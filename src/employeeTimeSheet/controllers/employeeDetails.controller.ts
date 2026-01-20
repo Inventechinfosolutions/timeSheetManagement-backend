@@ -21,6 +21,7 @@ import { Readable } from 'stream';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { EmployeeDetailsDto } from '../dto/employeeDetails.dto';
 import { ResetPasswordDto } from '../dto/resetPassword.dto';
+import { BulkUploadResultDto } from '../dto/bulk-upload-result.dto';
 import { EmployeeDetailsService } from '../services/employeeDetails.service';
 import {
   ApiBadRequestResponse,
@@ -54,6 +55,45 @@ export class EmployeeDetailsController {
     this.logger.log(`Creating new employee with data: ${JSON.stringify(employeeData)}`);
     return this.employeeDetailsService.createEmployee(employeeData);
   }
+
+  @Post('bulk-upload')
+  @ApiOperation({ 
+    summary: 'Bulk upload employees from Excel file',
+    description: 'Upload an Excel file (.xlsx or .xls) with employee data. Required columns: fullName, employeeId, department, designation, email. Optional: password'
+  })
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        file: {
+          type: 'string',
+          format: 'binary',
+          description: 'Excel file containing employee data'
+        }
+      }
+    }
+  })
+  @ApiOkResponse({ 
+    type: BulkUploadResultDto,
+    description: 'Returns upload results with success/failure counts and details'
+  })
+  @ApiBadRequestResponse({ description: 'Invalid file format or validation errors' })
+  @UseInterceptors(FileInterceptor('file'))
+  async bulkUploadEmployees(@UploadedFile() file: Express.Multer.File) {
+    this.logger.log(`Bulk upload request received with file: ${file?.originalname}`);
+    return this.employeeDetailsService.bulkCreateEmployees(file);
+  }
+
+  @Post(':employeeId/resend-activation')
+  @ApiOperation({ summary: 'Resend activation link to employee' })
+  @ApiParam({ name: 'employeeId', type: String, description: 'Employee String ID' })
+  @ApiOkResponse({ description: 'Activation link sent successfully' })
+  async resendActivationLink(@Param('employeeId') employeeId: string) {
+    this.logger.log(`Resending activation link for employee: ${employeeId}`);
+    return this.employeeDetailsService.resendActivationLink(employeeId);
+  }
+
 
   @Get(':employeeId')
   @ApiOperation({ summary: 'Get employee by Employee ID' })
