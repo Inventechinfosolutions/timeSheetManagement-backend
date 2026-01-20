@@ -44,10 +44,6 @@ export class S3ClientService implements OnModuleInit {
         secretAccessKey,
       },
       forcePathStyle: true,
-      requestHandler: {
-        connectionTimeout: 5000,
-        socketTimeout: 5000,
-      },
       maxAttempts: 1,
       retryMode: 'standard',
     });

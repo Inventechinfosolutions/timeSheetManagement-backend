@@ -18,6 +18,7 @@ import { DocumentUploaderModule } from '../common/document-uploader/document-upl
 import { TimesheetBlocker } from './entities/timesheetBlocker.entity';
 import { TimesheetBlockerController } from './controllers/timesheetBlocker.controller';
 import { TimesheetBlockerService } from './services/timesheetBlocker.service';
+import { EmailModule } from '../email/email.module';
 
 @Module({
   imports: [
@@ -26,6 +27,7 @@ import { TimesheetBlockerService } from './services/timesheetBlocker.service';
     AuthModule,
     MasterModule,
     DocumentUploaderModule,
+    EmailModule,
   ],
   controllers: [
     EmployeeAttendanceController, 

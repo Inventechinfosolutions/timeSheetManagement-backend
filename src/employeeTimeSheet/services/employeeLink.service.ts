@@ -18,6 +18,7 @@ import { UserStatus } from '../../users/enums/user-status.enum';
 import { JwtService } from '@nestjs/jwt'; 
 import { ResetPasswordDto } from '../dto/resetPassword.dto';
 import { AuthService } from '../../auth/auth.service';
+import { EmailService } from '../../email/email.service';
 
 @Injectable()
 export class EmployeeLinkService {
@@ -31,6 +32,7 @@ export class EmployeeLinkService {
     private readonly jwtService: JwtService,
     @Inject(forwardRef(() => AuthService))
     private readonly authService: AuthService,
+    private readonly emailService: EmailService,
   ) {}
 
   async resetPasswordWithToken(resetPasswordDto: ResetPasswordDto): Promise<{ message: string; employeeId: string }> {
@@ -108,8 +110,13 @@ export class EmployeeLinkService {
       }
 
       const employeeId = payload.sub;
+      this.logger.log(`Parsed employeeId from token: ${employeeId} (Type: ${typeof employeeId})`);
+
       const employee = await this.employeeDetailsRepository.findOne({ 
-        where: [{ employeeId: ILike(employeeId) }, { id: !isNaN(Number(employeeId)) ? Number(employeeId) : -1 }]
+        where: [
+          { employeeId: ILike(String(employeeId)) },
+          { id: !isNaN(Number(employeeId)) ? Number(employeeId) : -1 }
+        ]
       });
 
       if (!employee) {
@@ -174,7 +181,8 @@ export class EmployeeLinkService {
       }
 
       const payload = { 
-        sub: employee.employeeId, 
+        sub: String(employee.employeeId),
+        id: employee.id,
         email: employee.email,
         type: 'activation' 
       };
@@ -184,27 +192,51 @@ export class EmployeeLinkService {
         expiresIn: '24h' 
       });
       
-      const activationLink = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/fcManager/activate?token=${token}`;
+      const networkIp = '192.168.1.31';
+      const activationLink = `http://${networkIp}:5173/fcManager/activate?token=${token}`;
 
-      this.logger.log(`
-        ---------------------------------------------------
-        EMAIL SENT TO: ${employee.email}
-        Subject: Your Employee Account Credentials
-        
-        Dear ${employee.fullName},
-        
-        Your account has been created.
-        Employee ID: ${employee.employeeId}
-        Password: ${password}
-        Login Link: ${activationLink}
-        ---------------------------------------------------
-      `);
+      const htmlContent = `
+        <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; max-width: 600px; margin: auto; padding: 40px; border: 1px solid #e0e0e0; border-radius: 12px; background-color: #ffffff; box-shadow: 0 4px 10px rgba(0,0,0,0.05);">
+          <div style="text-align: center; margin-bottom: 30px;">
+            <h2 style="color: #1a73e8; margin: 0; font-size: 24px;">Welcome to Inventech Info Solutions</h2>
+          </div>
+          <p style="color: #5f6368; font-size: 16px; line-height: 1.5;">Hello <strong>${employee.fullName}</strong>,</p>
+          <p style="color: #5f6368; font-size: 16px; line-height: 1.5;">Your employee account has been successfully created. Please find your login credentials below:</p>
+          
+          <div style="background-color: #f8f9fa; border-radius: 8px; padding: 20px; margin: 25px 0; border-left: 4px solid #1a73e8;">
+            <p style="margin: 5px 0; color: #3c4043;"><strong>Employee ID:</strong> ${employee.employeeId}</p>
+            <p style="margin: 5px 0; color: #3c4043;"><strong>Temporary Password:</strong> ${password}</p>
+          </div>
+
+          <p style="color: #5f6368; font-size: 16px; line-height: 1.5;">Click the button below to activate your account and login for the first time:</p>
+          
+          <div style="text-align: center; margin: 35px 0;">
+            <a href="${activationLink}" style="background-color: #1a73e8; color: white; padding: 14px 28px; text-decoration: none; border-radius: 6px; font-weight: 600; font-size: 16px; display: inline-block;">Activate My Account</a>
+          </div>
+
+          <p style="color: #d93025; font-size: 14px; font-weight: 500;">Note: This activation link will expire in 24 hours.</p>
+          <p style="color: #5f6368; font-size: 14px; line-height: 1.5;">If you have any issues, please contact the HR department.</p>
+          
+          <hr style="border: 0; border-top: 1px solid #eee; margin: 30px 0;">
+          <p style="font-size: 12px; color: #9aa0a6; text-align: center;">This is an automated message from Inventech Info Solutions. Please do not reply.</p>
+        </div>
+      `;
+
+      try {
+        await this.emailService.sendEmail(
+          employee.email,
+          'Your Employee Account Credentials',
+          `Hello ${employee.fullName}, your account has been created. Employee ID: ${employee.employeeId}, Password: ${password}. Activate here: ${activationLink}`,
+          htmlContent
+        );
+      } catch (emailError) {
+        this.logger.error(`Failed to send activation email to ${employee.email}: ${emailError.message}`);
+      }
 
       this.logger.log(`Activation link generated and sent for employee identifier: ${identifier}`);
-      this.logger.log(`COPY THIS LINK: ${activationLink}`);
 
       return {
-        message: 'Activation link and credentials generated successfully',
+        message: 'Activation link and credentials generated and sent successfully',
         employeeId: employee.employeeId,
         loginId: employee.employeeId,
         password: password,
