@@ -14,6 +14,8 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { AttendanceCronService } from './cron/attendance.cron.service';
 import { EmployeeAttendance } from './employeeTimeSheet/entities/employeeAttendance.entity';
 import { EmployeeDetails } from './employeeTimeSheet/entities/employeeDetails.entity';
+import { MailModule } from './common/mail/mail.module';
+import { NotificationsModule } from './notifications/notifications.module';
 
 function getEnvFiles(): string[] {
   const envPath = path.join(process.cwd(), '.env');
@@ -44,6 +46,8 @@ function getEnvFiles(): string[] {
     MasterModule,
     ScheduleModule.forRoot(),
     TypeOrmModule.forFeature([EmployeeAttendance, EmployeeDetails]),
+    MailModule,
+    NotificationsModule,
   ],
   controllers: [AppController],
   providers: [AppService, AttendanceCronService],
