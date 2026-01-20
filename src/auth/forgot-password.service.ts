@@ -60,7 +60,7 @@ export class ForgotPasswordService {
       expiresAt,
     });
 
-    // Force IP address as requested to ensure links work on mobile devices
+    // Use the specific IP address if available, or fallback to env/localhost
     const networkIp = '192.168.1.31';
     const frontendUrl = process.env.FRONTEND_URL && !process.env.FRONTEND_URL.includes('localhost') 
       ? process.env.FRONTEND_URL 
