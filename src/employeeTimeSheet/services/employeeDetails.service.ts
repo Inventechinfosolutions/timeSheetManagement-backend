@@ -557,6 +557,9 @@ export class EmployeeDetailsService {
   /**
    * Bulk create employees from Excel file
    */
+  /**
+   * Bulk create employees from Excel file
+   */
   async bulkCreateEmployees(file: Express.Multer.File): Promise<BulkUploadResultDto> {
     this.logger.log('Starting bulk employee upload');
 
@@ -590,86 +593,58 @@ export class EmployeeDetailsService {
         throw new BadRequestException('Excel file is empty');
       }
 
-      // Validate all rows first
-      const validationErrors: BulkUploadErrorDto[] = [];
-      const validEmployees: any[] = [];
-
+      // Process each row
       for (let i = 0; i < excelData.length; i++) {
         const rowNumber = i + 2; // +2 because Excel rows start at 1 and first row is header
         const rowData = excelData[i];
 
+        // 1. Validate Basic Data Structure
         const rowErrors = this.validateEmployeeData(rowData, rowNumber);
-        
         if (rowErrors.length > 0) {
-          validationErrors.push(...rowErrors);
-        } else {
-          validEmployees.push({
-            ...rowData,
-            rowNumber
-          });
+          result.failureCount++;
+          result.errors.push(...rowErrors);
+          continue; // Skip to next row
         }
-      }
 
-      // If there are validation errors, return them without processing
-      if (validationErrors.length > 0) {
-        result.failureCount = validationErrors.length;
-        result.errors = validationErrors;
-        result.message = `Validation failed for ${validationErrors.length} row(s). Please fix the errors and try again.`;
-        return result;
-      }
+        const employeeId = String(rowData.employeeId).trim();
+        const email = String(rowData.email).trim().toLowerCase();
 
-      // Check for duplicates within the file
-      const employeeIds = validEmployees.map(e => String(e.employeeId).trim());
-      const emails = validEmployees.map(e => String(e.email).trim().toLowerCase());
+        // 2. Check for Duplicates in Database (Individual Check)
+        const existingEmployee = await this.employeeDetailsRepository.findOne({
+          where: [
+            { employeeId: employeeId },
+            { email: email }
+          ]
+        });
 
-      const duplicateIds = employeeIds.filter((id, index) => employeeIds.indexOf(id) !== index);
-      const duplicateEmails = emails.filter((email, index) => emails.indexOf(email) !== index);
+        if (existingEmployee) {
+          result.failureCount++;
+          let msg = '';
+          if (existingEmployee.employeeId === employeeId) msg += `Employee ID ${employeeId} already exists. `;
+          if (existingEmployee.email === email) msg += `Email ${email} already exists.`;
+          
+          result.errors.push({
+            row: rowNumber,
+            message: msg.trim()
+          });
+          continue; // Skip to next row
+        }
 
-      if (duplicateIds.length > 0) {
-        throw new BadRequestException(`Duplicate Employee IDs found in file: ${[...new Set(duplicateIds)].join(', ')}`);
-      }
-
-      if (duplicateEmails.length > 0) {
-        throw new BadRequestException(`Duplicate emails found in file: ${[...new Set(duplicateEmails)].join(', ')}`);
-      }
-
-      // Check for existing employees in database
-      const existingByEmployeeId = await this.employeeDetailsRepository
-        .createQueryBuilder('employee')
-        .where('employee.employeeId IN (:...ids)', { ids: employeeIds })
-        .getMany();
-
-      const existingByEmail = await this.employeeDetailsRepository
-        .createQueryBuilder('employee')
-        .where('LOWER(employee.email) IN (:...emails)', { emails })
-        .getMany();
-
-      if (existingByEmployeeId.length > 0) {
-        const existingIds = existingByEmployeeId.map(e => e.employeeId).join(', ');
-        throw new BadRequestException(`Employee IDs already exist in database: ${existingIds}`);
-      }
-
-      if (existingByEmail.length > 0) {
-        const existingEmails = existingByEmail.map(e => e.email).join(', ');
-        throw new BadRequestException(`Email addresses already exist in database: ${existingEmails}`);
-      }
-
-      // Create all employees
-      for (const employeeData of validEmployees) {
+        // 3. Create Employee
         try {
           // Hash password if provided
           let hashedPassword: string | undefined;
-          if (employeeData.password) {
+          if (rowData.password) {
             const salt = await bcrypt.genSalt(10);
-            hashedPassword = await bcrypt.hash(String(employeeData.password).trim(), salt);
+            hashedPassword = await bcrypt.hash(String(rowData.password).trim(), salt);
           }
 
           const employee = this.employeeDetailsRepository.create({
-            fullName: String(employeeData.fullName).trim(),
-            employeeId: String(employeeData.employeeId).trim(),
-            department: String(employeeData.department).trim(),
-            designation: String(employeeData.designation).trim(),
-            email: String(employeeData.email).trim().toLowerCase(),
+            fullName: String(rowData.fullName).trim(),
+            employeeId: employeeId,
+            department: String(rowData.department).trim(),
+            designation: String(rowData.designation).trim(),
+            email: email,
             password: hashedPassword,
           });
 
@@ -687,6 +662,8 @@ export class EmployeeDetailsService {
             });
           } catch (userError) {
             this.logger.warn(`Failed to create user for employee ${savedEmployee.employeeId}: ${userError.message}`);
+            // Consider if this should be a failure or just a warning. 
+            // Usually critical for login, but employee record IS created.
           }
 
           // Generate activation link
@@ -699,23 +676,23 @@ export class EmployeeDetailsService {
           result.successCount++;
           result.createdEmployees.push(savedEmployee.employeeId);
 
-        } catch (error) {
-          this.logger.error(`Error creating employee at row ${employeeData.rowNumber}: ${error.message}`);
+        } catch (createError) {
+          this.logger.error(`Error creating employee at row ${rowNumber}: ${createError.message}`);
           result.failureCount++;
           result.errors.push({
-            row: employeeData.rowNumber,
-            message: error.message || 'Failed to create employee'
+            row: rowNumber,
+            message: createError.message || 'Failed to create employee'
           });
         }
       }
 
       // Set final message
-      if (result.successCount === validEmployees.length) {
-        result.message = `Successfully created ${result.successCount} employee(s)`;
-      } else if (result.successCount > 0) {
-        result.message = `Partially successful: ${result.successCount} created, ${result.failureCount} failed`;
+      if (result.successCount > 0 && result.failureCount === 0) {
+        result.message = `Successfully created all ${result.successCount} employee(s)`;
+      } else if (result.successCount > 0 && result.failureCount > 0) {
+        result.message = `Partially successful: ${result.successCount} created, ${result.failureCount} failed/skipped`;
       } else {
-        result.message = `Failed to create employees. Please check errors.`;
+        result.message = `Failed to create employees. ${result.failureCount} errors found.`;
       }
 
       this.logger.log(`Bulk upload completed: ${result.successCount} success, ${result.failureCount} failures`);

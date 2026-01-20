@@ -7,6 +7,14 @@ import { AuthController } from './auth.controller';
 import { JwtStrategy } from './strategies/jwt.strategy';
 import { UsersModule } from '../users/users.module';
 import { JwtModuleOptions } from '@nestjs/jwt';
+import { TypeOrmModule } from '@nestjs/typeorm';
+import { User } from '../users/entities/user.entity';
+import { PasswordResetToken } from './entities/password-reset-token.entity';
+import { ForgotPasswordController } from './forgot-password.controller';
+import { ForgotPasswordService } from './forgot-password.service';
+import { EmailModule } from '../email/email.module';
+import { EmployeeDetails } from '../employeeTimeSheet/entities/employeeDetails.entity';
+
 
 @Module({
   imports: [
@@ -26,10 +34,12 @@ import { JwtModuleOptions } from '@nestjs/jwt';
       },
       inject: [ConfigService],
     }),
+    TypeOrmModule.forFeature([User, PasswordResetToken, EmployeeDetails]),
+    EmailModule,
   ],
-  controllers: [AuthController],
-  providers: [AuthService, JwtStrategy],
-  exports: [AuthService, JwtModule],
+  controllers: [AuthController, ForgotPasswordController],
+  providers: [AuthService, ForgotPasswordService, JwtStrategy],
+  exports: [AuthService, ForgotPasswordService, JwtModule],
 })
 export class AuthModule {}
 
