@@ -3,108 +3,157 @@ export const getNotificationEmailTemplate = (
   message: string,
 ) => `
 <!DOCTYPE html>
-<html>
+<html lang="en" xmlns="http://www.w3.org/1999/xhtml" xmlns:o="urn:schemas-microsoft-com:office:office">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="x-apple-disable-message-reformatting">
 <title>${title}</title>
+
+<!--[if mso]>
 <style>
-  /* Reset */
-  body, table, td, div, p, a {
-    font-family: 'Helvetica', 'Arial', sans-serif;
+table { border-collapse: collapse; border-spacing: 0; }
+td { padding: 0; }
+</style>
+<![endif]-->
+
+<style>
+  body, table, td, p, a {
+    font-family: Arial, sans-serif;
     -webkit-font-smoothing: antialiased;
-    box-sizing: border-box;
+    text-size-adjust: 100%;
   }
-  body { margin: 0; padding: 0; background-color: #f4f6f8; }
-  table { border-collapse: collapse; width: 100%; }
-  /* Hover effect for button */
-  .btn-primary:hover {
-    background-color: #007ec5 !important;
-    box-shadow: 0 4px 8px rgba(0,0,0,0.2) !important;
+
+  body {
+    margin: 0;
+    padding: 0;
+    background-color: #eef2f7;
+  }
+
+  .container {
+    max-width: 600px;
+    margin: 0 auto;
+    background-color: #ffffff;
+    border-radius: 8px;
+  }
+
+  .btn:hover {
+    background-color: #0077c8 !important;
+  }
+
+  @media screen and (max-width: 600px) {
+    .container {
+      width: 100% !important;
+    }
+    .content {
+      padding: 24px !important;
+    }
   }
 </style>
 </head>
-<body style="background-color: #f4f6f8; padding: 40px 0;">
 
-  <!-- Main Container -->
-  <table role="presentation" align="center" style="max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.05);">
-    
-    <!-- HEADER SECTION (Blue Diagonal Design) -->
+<body>
+
+<!-- OUTER WRAPPER -->
+<table width="100%" cellpadding="0" cellspacing="0" style="background-color:#eef2f7; padding:40px 0;">
+<tr>
+<td align="center">
+
+<!-- MAIN CARD -->
+<table class="container" width="100%" cellpadding="0" cellspacing="0">
+
+<!-- HEADER -->
+<tr>
+<td style="background-color:#0a8fe7; padding:36px 40px 48px 40px;">
+  <table width="100%" cellpadding="0" cellspacing="0" border="0">
     <tr>
-      <td style="position: relative; background-color: #0093E9; padding: 0;">
-        <!-- Minimalist CSS Gradient for Diagonal Effect (works in modern clients, fallbacks to solid blue) -->
-        <div style="background: linear-gradient(135deg, #0093E9 0%, #0093E9 55%, #007ec5 55%, #007ec5 100%); padding: 40px; height: 180px;">
-          <table width="100%">
-            <tr>
-              <td colspan="2" style="padding: 0;">
-                 <table width="100%">
-                    <tr>
-                       <td style="width: 50px; vertical-align: middle;">
-                          <!-- PLEASE REPLACE THIS SRC WITH YOUR PUBLICLY HOSTED LOGO URL -->
-                          <img src="https://placehold.co/50x50/transparent/white?text=LOGO" alt="InvenTech" style="width: 50px; height: 50px; display: block;">
-                       </td>
-                       <td style="vertical-align: middle; padding-left: 15px;">
-                          <h2 style="color: #ffffff; margin: 0; font-size: 20px; font-weight: 800; text-transform: uppercase; letter-spacing: 1px;">
-                            INVENTECH
-                          </h2>
-                          <p style="color: rgba(255,255,255,0.9); margin: 2px 0 0 0; font-size: 11px; font-weight: 500; text-transform: uppercase; letter-spacing: 1px;">
-                            INFO SOLUTIONS PVT. LTD.
-                          </p>
-                       </td>
-                       <td align="right" style="vertical-align: middle;">
-                          <!-- Notification Bell Icon -->
-                          <div style="width: 50px; height: 50px; border: 2px solid rgba(255,255,255,0.3); border-radius: 50%; display: flex; align-items: center; justify-content: center; background: rgba(255,255,255,0.1);">
-                             <img src="https://placehold.co/24x24/transparent/white?text=🔔" alt="Notification" style="width: 24px; height: 24px;">
-                          </div>
-                       </td>
-                    </tr>
-                 </table>
-                 
-                 <!-- Title Card with Smoke Border -->
-                 <div style="margin-top: 30px; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); border-radius: 8px; padding: 20px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); backdrop-filter: blur(5px);">
-                    <h1 style="color: #ffffff; margin: 0; font-size: 17px; font-weight: 800; text-transform: uppercase; letter-spacing: 1px; text-align: center; text-shadow: 0 2px 4px rgba(0,0,0,0.2);">
-                      ${title}
-                    </h1>
-                 </div>
-              </td>
-            </tr>
-            <!-- Website URL Removed -->
-          </table>
-        </div>
-      </td>
-    </tr>
-
-    <!-- BRANDING ROW REMOVED -->
-
-    <!-- CONTENT BODY -->
-    <tr>
-      <td style="padding: 30px 40px 40px 40px;">
-        <p style="margin: 0; color: #555555; font-size: 16px; line-height: 1.6;">
-          ${message.replace(/\n/g, '<br>')}
+      <td align="left">
+        <h2 style="margin:0; color:#ffffff; font-size:24px; font-weight:bold;">
+          INVENTECH
+        </h2>
+        <p style="margin:6px 0 0; color:#dbeeff; font-size:11px; letter-spacing:1px; text-transform:uppercase;">
+          Info Solutions Pvt. Ltd.
         </p>
-
-        <!-- Action Link -->
-        <div style="margin-top: 25px; margin-bottom: 20px;">
-           <!-- Class 'btn-primary' added for hover effect (see style block in head) -->
-           <a href="http://localhost:5173/" class="btn-primary" style="background-color: #0093E9; color: #ffffff; padding: 12px 25px; text-decoration: none; border-radius: 4px; font-weight: bold; font-size: 14px; display: inline-block; box-shadow: 0 2px 5px rgba(0,0,0,0.1); transition: background-color 0.3s ease;">
-             LOGIN TO PORTAL &nbsp;&nbsp;&rarr;
-           </a>
-        </div>
-        
-        <div style="margin-top: 30px; padding-top: 20px; border-top: 1px solid #eeeeee;">
-           <p style="margin: 0; color: #999999; font-size: 12px; line-height: 1.5;">
-             This is an automated message. Please do not reply directly to this email.<br>
-             &copy; ${new Date().getFullYear()} InvenTech Info Solutions.
-           </p>
-        </div>
+      </td>
+      <td align="right" style="font-size:30px; color:#ffffff;">
+        🔔
       </td>
     </tr>
-
   </table>
-  
-  <div style="text-align: center; margin-top: 20px;">
-    <p style="color: #999999; font-size: 12px;">Sent securely by InvenTech TimeSheet Pro</p>
-  </div>
+
+  <!-- TITLE CARD -->
+  <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:50px;">
+    <tr>
+      <td style="background-color:#ffffff; padding:16px 20px; border-radius:6px; text-align:center;">
+        <h1 style="margin:0; font-size:18px; letter-spacing:1px; text-transform:uppercase; color:#0a8fe7;">
+          ${title}
+        </h1>
+      </td>
+    </tr>
+  </table>
+</td>
+</tr>
+
+<!-- CONTENT -->
+<tr>
+<td class="content" style="padding:40px;">
+  <p style="margin:0; font-size:16px; line-height:1.7; color:#333333;">
+    ${message.replace(/\n/g, '<br>')}
+  </p>
+
+  <!-- CTA -->
+  <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:36px 0;">
+    <tr>
+      <td align="left">
+        <!--[if mso]>
+        <v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" href="http://localhost:5173/"
+          style="height:44px;v-text-anchor:middle;width:220px;" arcsize="10%"
+          fillcolor="#0a8fe7" stroke="f">
+          <w:anchorlock/>
+          <center style="color:#ffffff;font-size:14px;font-weight:bold;">
+            LOGIN TO PORTAL →
+          </center>
+        </v:roundrect>
+        <![endif]-->
+
+        <![if !mso]>
+        <a href="http://localhost:5173/"
+           class="btn"
+           style="background-color:#0a8fe7; color:#ffffff; text-decoration:none;
+                  padding:12px 32px; border-radius:6px;
+                  font-size:14px; font-weight:bold; display:inline-block;">
+          LOGIN TO PORTAL →
+        </a>
+        <![endif]>
+      </td>
+    </tr>
+  </table>
+
+  <!-- FOOTER -->
+  <table width="100%" cellpadding="0" cellspacing="0" style="border-top:1px solid #e5e7eb; padding-top:20px;">
+    <tr>
+      <td>
+        <p style="margin:0; font-size:12px; color:#9ca3af; line-height:1.6;">
+          This is an automated message. Please do not reply directly.<br>
+          © ${new Date().getFullYear()} InvenTech Info Solutions
+        </p>
+      </td>
+    </tr>
+  </table>
+</td>
+</tr>
+
+</table>
+<!-- END MAIN CARD -->
+
+<!-- BRAND FOOTER -->
+<p style="margin-top:20px; font-size:12px; color:#9ca3af;">
+  Sent securely via <strong>InvenTech TimeSheet Pro</strong>
+</p>
+
+</td>
+</tr>
+</table>
 
 </body>
 </html>
