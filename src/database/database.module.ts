@@ -16,7 +16,7 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
         const dbEntities = configService.get<string>('DB_ENTITIES');
         
         // Set default port based on database type
-        const defaultPort = dbType === 'mysql' ? 3306 : 5432;
+        const defaultPort = dbType === 'mysql' ? 3306 : process.env.port;
         const defaultUsername = dbType === 'mysql' ? 'root' : 'postgres';
         
         const config: any = {
