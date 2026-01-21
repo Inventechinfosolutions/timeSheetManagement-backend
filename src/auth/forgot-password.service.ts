@@ -60,12 +60,7 @@ export class ForgotPasswordService {
       expiresAt,
     });
 
-    // Use the specific IP address if available, or fallback to env/localhost
-    const networkIp = '192.168.1.31';
-    const frontendUrl = process.env.FRONTEND_URL && !process.env.FRONTEND_URL.includes('localhost') 
-      ? process.env.FRONTEND_URL 
-      : `http://${networkIp}:5173`;
-        // const frontendUrl = `http://${networkIp}:5173`;
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
     const resetLink = `${frontendUrl}/reset-password?token=${resetToken}&loginId=${user.loginId}`;
 
     const htmlContent = `
@@ -126,6 +121,11 @@ export class ForgotPasswordService {
 
   // STEP 3
   async resetPassword(loginId: string, newPassword: string) {
+
+    // console.log('Resetting password for loginId:', loginId, 'with newPassword:', newPassword);
+    
+    // Removing token check as requested
+    /*
     const token = await this.tokenRepo.findOne({
       where: { loginId: ILike(loginId), verified: true },
       order: { createdAt: 'DESC' },
@@ -134,8 +134,9 @@ export class ForgotPasswordService {
     if (!token) {
       throw new HttpException('Link verification required', HttpStatus.FORBIDDEN);
     }
+    */
 
-    const user = await this.userRepo.findOne({ where: { loginId: ILike(token.loginId) } });
+    const user = await this.userRepo.findOne({ where: { loginId: ILike(loginId) } });
     if (!user) {
       throw new HttpException('User not found', HttpStatus.NOT_FOUND);
     }
@@ -145,7 +146,7 @@ export class ForgotPasswordService {
     }
 
     await this.userRepo.save(user);
-    await this.tokenRepo.delete({ loginId: token.loginId });
+    // await this.tokenRepo.delete({ loginId: token.loginId });
 
     return { message: 'Password reset successful' };
   }
