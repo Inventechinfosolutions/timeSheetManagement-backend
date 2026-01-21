@@ -22,7 +22,7 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
         const config: any = {
           type: dbType,
           host: configService.get<string>('DB_HOST', 'localhost'),
-          port: configService.get<number>('DB_PORT', defaultPort),
+          port: configService.get<number>('DB_PORT', 3306),
           username: configService.get<string>('DB_USERNAME', defaultUsername),
           password: configService.get<string>('DB_PASSWORD', ''),
           database: dbName,
