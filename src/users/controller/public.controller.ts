@@ -56,14 +56,16 @@ export class PublicController {
         sameSite: 'strict',
       });
 
-      const { accessToken, userId, name, email } = response;
+      const { accessToken, userId, name, email, resetRequired, status } = response;
 
       return res.json({
         success: true,
         accessToken,
         userId,
         name,
-        email
+        email,
+        resetRequired,
+        status
       });
     } catch (error) {
        this.logger.error(`Login failed: ${error.message}`);
