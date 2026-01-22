@@ -129,13 +129,17 @@ export class EmployeeDetailsService {
     sortBy: string = 'id',
     sortOrder: 'ASC' | 'DESC' = 'DESC',
     department?: string,
-  ): Promise<EmployeeDetails[]> {
+    page: number = 1,
+    limit: number = 10,
+  ): Promise<{ data: EmployeeDetails[]; totalItems: number }> {
     try {
       this.logger.log('Fetching employees with filter:', {
         search,
         sortBy,
         sortOrder,
         department,
+        page,
+        limit,
       });
 
       // Validate sortBy field to prevent SQL injection
@@ -170,18 +174,22 @@ export class EmployeeDetailsService {
         query.andWhere('employee.department = :department', { department });
       }
 
-      const data = await query
+      const [data, totalItems] = await query
+        .skip((page - 1) * limit)
+        .take(limit)
         .leftJoinAndMapOne('employee.user', User, 'user', 'user.loginId = employee.employeeId')
-        .getMany();
+        .getManyAndCount();
 
       // Transform result to include user status fields
-      return data.map((emp: any) => ({
+      const enrichedData = data.map((emp: any) => ({
         ...emp,
         userStatus: emp.user?.status || UserStatus.DRAFT,
         resetRequired: emp.user?.resetRequired ?? true,
         lastLoggedIn: emp.user?.lastLoggedIn || null,
         user: undefined // Remove the nested user object to keep response clean
       }));
+
+      return { data: enrichedData, totalItems };
     } catch (error) {
       this.logger.error(
         `Error fetching employees: ${error.message}`,
