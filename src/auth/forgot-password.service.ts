@@ -51,7 +51,7 @@ export class ForgotPasswordService {
     }
 
     const resetToken = crypto.randomBytes(32).toString('hex');
-    const expiresAt = new Date(Date.now() + 15 * 60 * 1000); // 15 mins
+    const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 mins
 
     await this.tokenRepo.save({
       loginId: user.loginId,
@@ -75,7 +75,7 @@ export class ForgotPasswordService {
         </div>
         <p style="color: #5f6368; font-size: 14px; line-height: 1.5;">If the button doesn't work, copy and paste the following link into your browser:</p>
         <p style="word-break: break-all; color: #1a73e8; font-size: 13px;">${resetLink}</p>
-        <p style="color: #d93025; font-size: 14px; font-weight: 500; margin-top: 20px;">Note: This link will expire in 15 minutes.</p>
+        <p style="color: #d93025; font-size: 14px; font-weight: 500; margin-top: 20px;">Note: This link will expire in 5 minutes.</p>
         <p style="color: #5f6368; font-size: 14px; line-height: 1.5;">If you did not request this, please ignore this email.</p>
         <hr style="border: 0; border-top: 1px solid #eee; margin: 30px 0;">
         <p style="font-size: 12px; color: #9aa0a6; text-align: center;">This is an automated message from Inventech Info Solutions. Please do not reply.</p>
@@ -86,7 +86,7 @@ export class ForgotPasswordService {
       await this.emailService.sendEmail(
         email,
         'Password Reset request',
-        `Reset your password using this link: ${resetLink}. It is valid for 15 minutes.`,
+        `Reset your password using this link: ${resetLink}. It is valid for 5 minutes.`,
         htmlContent
       );
     } catch (error) {
@@ -105,48 +105,91 @@ export class ForgotPasswordService {
   // STEP 2
   async verifyToken(loginId: string, token: string) {
     const record = await this.tokenRepo.findOne({
-      where: { loginId: ILike(loginId), token, verified: false },
+      where: { loginId: ILike(loginId), token },
       order: { createdAt: 'DESC' },
     });
 
-    if (!record || record.expiresAt < new Date()) {
-      throw new HttpException('Invalid or expired reset link', HttpStatus.BAD_REQUEST);
+    if (!record) {
+      throw new HttpException(
+        'Invalid or expired reset link. Please request a new password reset link.',
+        HttpStatus.BAD_REQUEST
+      );
     }
 
-    record.verified = true;
-    await this.tokenRepo.save(record);
+    // Check if token has expired - using current time in UTC
+    const now = new Date();
+    const expiresAt = new Date(record.expiresAt);
+    
+    if (expiresAt.getTime() < now.getTime()) {
+      // Delete expired token
+      await this.tokenRepo.delete({ id: record.id });
+      throw new HttpException(
+        'Session expired. This password reset link has expired. The link is only valid for 5 minutes. Please request a new password reset link.',
+        HttpStatus.BAD_REQUEST
+      );
+    }
 
-    return { message: 'Link verified successfully' };
+    // Mark as verified if not already verified
+    if (!record.verified) {
+      record.verified = true;
+      await this.tokenRepo.save(record);
+    }
+
+    return { 
+      message: 'Link verified successfully',
+      valid: true,
+      expiresAt: record.expiresAt
+    };
   }
 
   // STEP 3
-  async resetPassword(loginId: string, newPassword: string) {
+  async resetPassword(loginId: string, newPassword: string, token?: string) {
+    // Token is required for reset password
+    if (!token) {
+      throw new HttpException(
+        'Reset token is required. Please use the link from your email.',
+        HttpStatus.BAD_REQUEST
+      );
+    }
 
-    // console.log('Resetting password for loginId:', loginId, 'with newPassword:', newPassword);
-    
-    // Removing token check as requested
-    /*
-    const token = await this.tokenRepo.findOne({
-      where: { loginId: ILike(loginId), verified: true },
+    // Validate token
+    const tokenRecord = await this.tokenRepo.findOne({
+      where: { loginId: ILike(loginId), token },
       order: { createdAt: 'DESC' },
     });
 
-    if (!token) {
-      throw new HttpException('Link verification required', HttpStatus.FORBIDDEN);
+    if (!tokenRecord) {
+      throw new HttpException(
+        'Invalid reset link. Please request a new password reset link.',
+        HttpStatus.BAD_REQUEST
+      );
     }
-    */
+
+    // Check if token has expired - using current time comparison
+    const now = new Date();
+    const expiresAt = new Date(tokenRecord.expiresAt);
+    
+    if (expiresAt.getTime() < now.getTime()) {
+      // Delete expired token
+      await this.tokenRepo.delete({ id: tokenRecord.id });
+      throw new HttpException(
+        'Session expired. This password reset link has expired. The link is only valid for 5 minutes. Please request a new password reset link.',
+        HttpStatus.BAD_REQUEST
+      );
+    }
+
+    // Delete the token after successful use to prevent reuse
+    await this.tokenRepo.delete({ id: tokenRecord.id });
 
     const user = await this.userRepo.findOne({ where: { loginId: ILike(loginId) } });
     if (!user) {
       throw new HttpException('User not found', HttpStatus.NOT_FOUND);
     }
-    if (user) {
-      user.password = await bcrypt.hash(newPassword, 10);
-      user.resetRequired = false; // Also clear the reset flag if it exists
-    }
+    
+    user.password = await bcrypt.hash(newPassword, 10);
+    user.resetRequired = false; // Also clear the reset flag if it exists
 
     await this.userRepo.save(user);
-    // await this.tokenRepo.delete({ loginId: token.loginId });
 
     return { message: 'Password reset successful' };
   }

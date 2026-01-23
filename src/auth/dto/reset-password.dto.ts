@@ -13,4 +13,8 @@ export class ResetPasswordDto {
   @IsString()
   @IsOptional()
   confirmPassword?: string;
+
+  @IsString()
+  @IsOptional()
+  token?: string;
 }

@@ -125,6 +125,15 @@ export class EmployeeLinkService {
 
       const user = await this.userRepository.findOne({ where: { loginId: employee.employeeId.toLowerCase() } });
       if (user) {
+        // Check if user is already activated
+        if (user.status === UserStatus.ACTIVE) {
+          this.logger.warn(`User ${employee.employeeId} attempted to activate an already activated account`);
+          throw new HttpException(
+            'This account has already been activated. Please use your login credentials to access your account.',
+            HttpStatus.BAD_REQUEST
+          );
+        }
+        
         user.status = UserStatus.ACTIVE;
         user.mobileVerification = true;
         user.resetRequired = false;
