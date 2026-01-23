@@ -185,6 +185,21 @@ export class EmployeeDetailsController {
     return this.employeeDetailsService.partialUpdateEmployee(employee.id, updateData, loginId);
   }
 
+  @Patch(':employeeId/status')
+  @ApiOperation({ summary: 'Update employee status' })
+  @ApiParam({ name: 'employeeId', type: String, description: 'Employee String ID' })
+  @ApiBody({ schema: { type: 'object', properties: { status: { type: 'string', example: 'INACTIVE' } } } })
+  @ApiOkResponse({ description: 'Status updated successfully' })
+  async updateStatus(
+    @Param('employeeId') employeeId: string,
+    @Body('status') status: string,
+  ) {
+      if (!status) {
+          throw new Error('Status is required');
+      }
+      return this.employeeDetailsService.updateStatus(employeeId, status);
+  }
+
   @Post('reset-password')
   @ApiOperation({ summary: 'Reset password for employee' })
   async resetPassword(@Body() resetPasswordDto: ResetPasswordDto, @Req() req: any) {

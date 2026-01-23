@@ -85,6 +85,10 @@ export class UsersService {
         throw new HttpException('Invalid login credentials', HttpStatus.UNAUTHORIZED);
       }
 
+      if (user.status === UserStatus.INACTIVE) {
+        throw new HttpException('User is blocked', HttpStatus.FORBIDDEN);
+      }
+
       const isMatch = await this.comparePassword(userLoginDto.password, user.password);
       if (!isMatch) {
          throw new HttpException('Invalid login credentials', HttpStatus.UNAUTHORIZED);
