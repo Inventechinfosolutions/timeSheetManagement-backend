@@ -5,7 +5,7 @@ import { Repository, Between } from 'typeorm';
 import { EmployeeAttendance, AttendanceStatus } from '../employeeTimeSheet/entities/employeeAttendance.entity';
 import { EmployeeDetails } from '../employeeTimeSheet/entities/employeeDetails.entity';
 import { MasterHolidayService } from '../master/service/master-holiday.service';
-import { NotificationsService } from '../notifications/notifications.service';
+import { NotificationsService } from '../notifications/Services/notifications.service';
 
 @Injectable()
 export class AttendanceCronService {

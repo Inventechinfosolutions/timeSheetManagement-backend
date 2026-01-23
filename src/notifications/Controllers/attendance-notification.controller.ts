@@ -1,5 +1,5 @@
 import { Controller, Post, Get, Patch, Param, Body } from '@nestjs/common';
-import { NotificationsService } from './notifications.service';
+import { NotificationsService } from '../Services/notifications.service';
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
 
 @ApiTags('Notifications')

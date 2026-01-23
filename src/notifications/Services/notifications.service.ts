@@ -1,10 +1,10 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { EmployeeDetails } from '../employeeTimeSheet/entities/employeeDetails.entity';
-import { Notification } from './entities/notification.entity';
-import { MailService } from '../common/mail/mail.service';
-import { getNotificationEmailTemplate } from '../common/mail/email-templates';
+import { EmployeeDetails } from '../../employeeTimeSheet/entities/employeeDetails.entity';
+import { Notification } from '../entities/notification.entity';
+import { MailService } from '../../common/mail/mail.service';
+import { getNotificationEmailTemplate } from '../../common/mail/email-templates';
 
 @Injectable()
 export class NotificationsService {

@@ -17,27 +17,40 @@ import { TimesheetBlocker } from './entities/timesheetBlocker.entity';
 import { TimesheetBlockerController } from './controllers/timesheetBlocker.controller';
 import { TimesheetBlockerService } from './services/timesheetBlocker.service';
 import { EmailModule } from '../email/email.module';
+import { LeaveRequest } from './entities/leave-request.entity';
+import { LeaveRequestsController } from './controllers/leave-requests.controller';
+import { LeaveRequestsService } from './services/leave-requests.service';
+import { NotificationsModule } from '../notifications/notifications.module';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([EmployeeAttendance, EmployeeDetails, User, TimesheetBlocker]),
+    TypeOrmModule.forFeature([
+      EmployeeAttendance, 
+      EmployeeDetails, 
+      User, 
+      TimesheetBlocker,
+      LeaveRequest,
+    ]),
     UsersModule,
     AuthModule,
     MasterModule,
     DocumentUploaderModule,
     EmailModule,
+    NotificationsModule,
   ],
   controllers: [
     EmployeeAttendanceController, 
     EmployeeDetailsController, 
     EmployeeLinkController, 
-    TimesheetBlockerController
+    TimesheetBlockerController,
+    LeaveRequestsController,
   ],
   providers: [
     EmployeeAttendanceService, 
     EmployeeDetailsService, 
     EmployeeLinkService, 
-    TimesheetBlockerService
+    TimesheetBlockerService,
+    LeaveRequestsService,
   ],
   exports: [EmployeeDetailsService, EmployeeLinkService],
 })
