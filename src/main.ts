@@ -26,7 +26,7 @@ async function bootstrap() {
     }),
   );
 
-  const port:any  = configService.get<number>('APP_PORT') ;
+  const port:any  = process.env.APP_PORT ;
   await app.listen(port);
   //console.log(`Application is running on: http://localhost:${port}`);
 }
