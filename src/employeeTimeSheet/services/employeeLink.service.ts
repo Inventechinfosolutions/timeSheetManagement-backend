@@ -201,9 +201,9 @@ export class EmployeeLinkService {
         expiresIn: '24h' 
       });
       
-      const activationLink = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/fcManager/activate?token=${token}`;
+      const activationLink = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/timesheet/activate?token=${token}`;
       // const networkIp = '192.168.1.31';
-      // const activationLink = `http://${networkIp}:5173/fcManager/activate?token=${token}`;
+      // const activationLink = `http://${networkIp}:5173/timesheet/activate?token=${token}`;
 
       const htmlContent = `
         <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; max-width: 600px; margin: auto; padding: 40px; border: 1px solid #e0e0e0; border-radius: 12px; background-color: #ffffff; box-shadow: 0 4px 10px rgba(0,0,0,0.05);">
