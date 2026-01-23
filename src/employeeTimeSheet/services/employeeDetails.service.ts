@@ -336,6 +336,42 @@ export class EmployeeDetailsService {
     return this.updateEmployee(id, updateData);
   }
 
+  async updateStatus(
+    employeeId: string,
+    status: string
+  ): Promise<any> {
+    try {
+        this.logger.log(`Updating status for employee ${employeeId} to ${status}`);
+        const employee = await this.findByEmployeeId(employeeId);
+        
+        // Update EmployeeDetails
+        employee.userStatus = status;
+        await this.employeeDetailsRepository.save(employee);
+
+        // Update User entity
+        // Map status string to UserStatus enum if possible
+        let userStatus = UserStatus.ACTIVE; 
+        if (status === 'INACTIVE') {
+            userStatus = UserStatus.INACTIVE;
+        } else if (status === 'ACTIVE') {
+            userStatus = UserStatus.ACTIVE;
+        }
+
+        const user = await this.userRepository.findOne({ where: { loginId: employeeId } });
+        if (user) {
+            user.status = userStatus;
+            await this.userRepository.save(user);
+        }
+
+        return { message: 'Status updated successfully', status: employee.userStatus };
+
+    } catch (error) {
+        this.logger.error(`Error updating status: ${error.message}`, error.stack);
+        if (error instanceof HttpException) throw error;
+        throw new HttpException('Failed to update status', HttpStatus.INTERNAL_SERVER_ERROR);
+    }
+  }
+
   async deleteEmployee(id: number): Promise<void> {
     try {
       this.logger.log(`Deleting employee with ID: ${id}`);

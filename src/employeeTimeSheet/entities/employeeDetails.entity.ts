@@ -23,4 +23,7 @@ export class EmployeeDetails extends BaseEntity {
 
   @Column({ name: 'password', length: 255, nullable: true })
   password: string;
+
+  @Column({ name: 'user_status', default: 'ACTIVE', length: 50 })
+  userStatus: string;
 }
