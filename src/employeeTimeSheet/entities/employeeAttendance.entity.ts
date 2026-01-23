@@ -1,6 +1,4 @@
-import { Entity, Column, PrimaryGeneratedColumn } from 'typeorm';
-import { BaseEntity } from '../../common/core/models/base.entity';
-
+import { Entity, Column, PrimaryGeneratedColumn, CreateDateColumn, UpdateDateColumn } from 'typeorm';
 
 export enum AttendanceStatus {
   FULL_DAY = 'Full Day',
@@ -13,7 +11,7 @@ export enum AttendanceStatus {
 }
 
 @Entity('employee_attendance')
-export class EmployeeAttendance extends BaseEntity {
+export class EmployeeAttendance {
   @PrimaryGeneratedColumn()
   id: number;
 
@@ -23,10 +21,11 @@ export class EmployeeAttendance extends BaseEntity {
   @Column({ name: 'working_date', type: 'date' })
   workingDate: Date;
 
-
-
   @Column({ name: 'total_hours', type: 'float', nullable: true })
   totalHours: number | null;
+
+  @Column({ name: 'work_location', type: 'varchar', nullable: true })
+  workLocation: string | null;
 
   @Column({
     name: 'status',
@@ -35,4 +34,10 @@ export class EmployeeAttendance extends BaseEntity {
     nullable: true,
   })
   status: AttendanceStatus | string | null;
+
+  @CreateDateColumn()
+  createdAt: Date;
+
+  @UpdateDateColumn()
+  updatedAt: Date;
 }

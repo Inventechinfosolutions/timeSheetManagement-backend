@@ -25,6 +25,7 @@ export class LeaveRequestsService {
           employeeId: data.employeeId,
           fromDate: LessThanOrEqual(data.toDate),
           toDate: MoreThanOrEqual(data.fromDate),
+          status: In(['Pending', 'Approved']),
         },
       });
 
@@ -207,7 +208,7 @@ export class LeaveRequestsService {
     return stats;
   }
 
-  async updateStatus(id: number, status: 'Approved' | 'Rejected') {
+  async updateStatus(id: number, status: 'Approved' | 'Rejected' | 'Cancelled') {
     const request = await this.leaveRequestRepository.findOne({ where: { id } });
     if (!request) {
       throw new NotFoundException('Leave request not found');
@@ -219,6 +220,8 @@ export class LeaveRequestsService {
     request.isReadEmployee = false; 
     
     const savedRequest = await this.leaveRequestRepository.save(request);
+
+
 
     // --- Email Notification Logic ---
     try {
