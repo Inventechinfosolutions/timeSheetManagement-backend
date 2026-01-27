@@ -5,6 +5,7 @@ export enum ReferenceType {
   PRODUCT_IMG = 'PRODUCT_IMG',
   MASTER_HOLIDAY_DOCUMENT = 'MASTER_HOLIDAY_DOCUMENT',
   EMPLOYEE_PROFILE_PHOTO = 'EMPLOYEE_PROFILE_PHOTO',
+  DOCUMENT = 'DOCUMENT',
   // Add more as needed
 }
 
@@ -12,6 +13,7 @@ export enum EntityType {
   PRODUCT = 'PRODUCT',
   MASTER_HOLIDAY = 'MASTER_HOLIDAY',
   EMPLOYEE = 'EMPLOYEE',
+  LEAVE_REQUEST = 'LEAVE_REQUEST',
   // Add more as needed
 }
 

@@ -1,9 +1,11 @@
-import { Injectable, ConflictException, ForbiddenException, NotFoundException, Logger } from '@nestjs/common';
+import { Injectable, ConflictException, ForbiddenException, NotFoundException, Logger, InternalServerErrorException, HttpException, HttpStatus } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, LessThanOrEqual, MoreThanOrEqual, In, Brackets } from 'typeorm';
 import { LeaveRequest } from '../entities/leave-request.entity';
 import { EmployeeDetails } from '../entities/employeeDetails.entity';
 import { EmailService } from '../../email/email.service';
+import { DocumentUploaderService } from '../../common/document-uploader/services/document-uploader.service';
+import { DocumentMetaInfo, EntityType, ReferenceType } from '../../common/document-uploader/models/documentmetainfo.model';
 
 @Injectable()
 export class LeaveRequestsService {
@@ -14,7 +16,10 @@ export class LeaveRequestsService {
     private leaveRequestRepository: Repository<LeaveRequest>,
     @InjectRepository(EmployeeDetails)
     private employeeDetailsRepository: Repository<EmployeeDetails>,
+    @InjectRepository(DocumentMetaInfo)
+    private readonly documentRepo: Repository<DocumentMetaInfo>,
     private emailService: EmailService,
+    private documentUploaderService: DocumentUploaderService,
   ) {}
 
   async create(data: Partial<LeaveRequest>) {
@@ -49,7 +54,32 @@ export class LeaveRequestsService {
       data.duration = days;
     }
 
-    return this.leaveRequestRepository.save(data);
+    const savedRequest = await this.leaveRequestRepository.save(data);
+
+    // Link orphaned documents (refId: 0) to the newly created request
+    try {
+      // Find the numeric ID of the employee to match the entityId used during upload
+      const employee = await this.employeeDetailsRepository.findOne({
+        where: { employeeId: savedRequest.employeeId }
+      });
+
+      if (employee) {
+        await this.documentRepo.update(
+          {
+            entityType: EntityType.LEAVE_REQUEST,
+            entityId: employee.id, // During upload, entityId is set to employee's numeric ID
+            refId: 0
+          },
+          {
+            refId: savedRequest.id
+          }
+        );
+      }
+    } catch (error) {
+      this.logger.error(`Failed to link orphaned documents for request ${savedRequest.id}: ${error.message}`);
+    }
+
+    return savedRequest;
   }
 
   async findAll(department?: string, status?: string, search?: string) {
@@ -342,5 +372,71 @@ export class LeaveRequestsService {
 
   async markEmployeeUpdateRead(id: number) {
     return this.leaveRequestRepository.update({ id }, { isReadEmployee: true });
+  }
+
+  async uploadDocument(
+    documents: Express.Multer.File[],
+    refType: ReferenceType,
+    refId: number,
+    entityType: EntityType,
+    entityId: number,
+  ) {
+    try {
+      this.logger.log(`Uploading ${documents.length} document(s) for leave request ${entityId}`);
+      
+      const uploadPromises = documents.map(async (doc) => {
+        const details = new DocumentMetaInfo();
+        details.refId = refId;
+        details.refType = refType;
+        details.entityId = entityId;
+        details.entityType = entityType;
+
+        return await this.documentUploaderService.uploadImage(doc, details);
+      });
+
+      const results = await Promise.all(uploadPromises);
+      this.logger.log(`Successfully uploaded ${results.length} document(s)`);
+      
+      return {
+        success: true,
+        message: 'Documents uploaded successfully',
+        data: results,
+      };
+    } catch (error) {
+      this.logger.error(`Error uploading documents: ${error.message}`, error.stack);
+      throw new InternalServerErrorException('Error uploading documents');
+    }
+  }
+
+  async getAllFiles(entityType: EntityType, entityId: number, refId: number, referenceType: ReferenceType) {
+    this.logger.log(`Getting all files for entity ${entityType} with ID ${entityId}`);
+    return await this.documentUploaderService.getAllDocs(entityType, entityId, referenceType, refId);
+  }
+
+  async deleteDocument(entityType: EntityType, entityId: number, refId: number, key: string) {
+    try {
+      this.logger.log(`Deleting document with key ${key} for entity ${entityId}`);
+      await this.validateEntity(entityType, entityId, refId);
+      await this.documentUploaderService.deleteDoc(key);
+      
+      return {
+        success: true,
+        message: 'Document deleted successfully',
+      };
+    } catch (error) {
+      this.logger.error(`Error deleting document: ${error.message}`, error.stack);
+      throw error;
+    }
+  }
+
+  async validateEntity(entityType: EntityType, entityId: number, refId: number) {
+    if (entityType === EntityType.LEAVE_REQUEST) {
+      if (refId !== 0) {
+        const leaveRequest = await this.leaveRequestRepository.findOne({ where: { id: refId } });
+        if (!leaveRequest) {
+          throw new HttpException(`Leave request with ID ${refId} not found`, HttpStatus.NOT_FOUND);
+        }
+      }
+    }
   }
 }
