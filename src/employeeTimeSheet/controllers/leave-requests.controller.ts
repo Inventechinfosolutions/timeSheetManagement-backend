@@ -69,6 +69,11 @@ export class LeaveRequestsController {
     return this.leaveRequestsService.markAllAsRead();
   }
 
+  @Post('employee/:employeeId/notifications/mark-all-read')
+  markAllEmployeeUpdatesRead(@Param('employeeId') employeeId: string) {
+    return this.leaveRequestsService.markAllEmployeeUpdatesRead(employeeId);
+  }
+
   @Delete(':id/RequestDeleted')
   remove(@Param('id') id: string) {
     return this.leaveRequestsService.remove(+id);
