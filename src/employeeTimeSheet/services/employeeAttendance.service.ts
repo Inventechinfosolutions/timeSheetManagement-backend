@@ -54,11 +54,50 @@ export class EmployeeAttendanceService {
         }
       }
 
-      const attendance = this.employeeAttendanceRepository.create(createEmployeeAttendanceDto);
-      
+      const startOfDay = new Date(createEmployeeAttendanceDto.workingDate);
+      startOfDay.setHours(0, 0, 0, 0);
+      const endOfDay = new Date(createEmployeeAttendanceDto.workingDate);
+      endOfDay.setHours(23, 59, 59, 999);
+
+      const existingRecord = await this.employeeAttendanceRepository.findOne({
+        where: {
+          employeeId: createEmployeeAttendanceDto.employeeId,
+          workingDate: Between(startOfDay, endOfDay),
+        },
+      });
+
+      if (existingRecord) {
+        // Update existing record
+        Object.assign(existingRecord, createEmployeeAttendanceDto);
+        if (
+          !createEmployeeAttendanceDto.status &&
+          existingRecord.totalHours !== undefined &&
+          existingRecord.totalHours !== null
+        ) {
+          existingRecord.status = await this.determineStatus(
+            existingRecord.totalHours,
+            existingRecord.workingDate,
+            existingRecord.workLocation || undefined,
+          );
+        }
+        return await this.employeeAttendanceRepository.save(existingRecord);
+      }
+
+      const attendance = this.employeeAttendanceRepository.create(
+        createEmployeeAttendanceDto,
+      );
+
       // Only calculate status if NOT provided
-      if (!attendance.status && attendance.totalHours !== undefined && attendance.totalHours !== null) {
-          attendance.status = await this.determineStatus(attendance.totalHours, attendance.workingDate);
+      if (
+        !attendance.status &&
+        attendance.totalHours !== undefined &&
+        attendance.totalHours !== null
+      ) {
+        attendance.status = await this.determineStatus(
+          attendance.totalHours,
+          attendance.workingDate,
+          attendance.workLocation || undefined,
+        );
       }
 
       return await this.employeeAttendanceRepository.save(attendance);
@@ -134,19 +173,25 @@ export class EmployeeAttendanceService {
     Object.assign(attendance, updateDto);
     
     if (attendance.totalHours !== undefined && attendance.totalHours !== null) {
-      attendance.status = await this.determineStatus(attendance.totalHours, attendance.workingDate);
+      attendance.status = await this.determineStatus(attendance.totalHours, attendance.workingDate, attendance.workLocation || undefined);
     }
     
     return await this.employeeAttendanceRepository.save(attendance);
   }
 
-  private async determineStatus(hours: number, workingDate: Date): Promise<AttendanceStatus> {
+  private async determineStatus(hours: number, workingDate: Date, workLocation?: string): Promise<AttendanceStatus> {
     const dateObj = new Date(workingDate);
     // Normalize date for comparison: YYYY-MM-DD
     const year = dateObj.getFullYear();
     const month = String(dateObj.getMonth() + 1).padStart(2, '0');
     const day = String(dateObj.getDate()).padStart(2, '0');
     const dateStr = `${year}-${month}-${day}`;
+
+    // Special Rule: WFH and Client Visit should default to NOT_UPDATED if hours are 0
+    // This allows the employee to log their hours later.
+    if ((workLocation === 'WFH' || workLocation === 'Client Visit') && (hours === 0 || hours === null || hours === undefined)) {
+        return AttendanceStatus.NOT_UPDATED;
+    }
 
     if (hours === 0 || hours === null || hours === undefined) {
       // 1. Check Holiday

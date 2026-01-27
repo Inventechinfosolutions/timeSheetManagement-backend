@@ -280,11 +280,16 @@ export class LeaveRequestsService {
       if (employee) {
         if (employee.email) {
           this.logger.log(`Found employee: ${employee.fullName}, Email: ${employee.email}. Sending email...`);
+          let typeLabel = 'Leave Request';
+          if (request.requestType === 'Work From Home' || request.requestType === 'Client Visit') {
+            typeLabel = `${request.requestType} Request`;
+          }
+
           const statusColor = status === 'Approved' ? '#28a745' : '#dc3545';
-          const subject = `Leave Request Update: ${status}`;
+          const subject = `${typeLabel} Update: ${status}`;
           const htmlContent = `
             <div style="font-family: Arial, sans-serif; padding: 20px; border: 1px solid #eee; border-radius: 10px;">
-              <h2 style="color: #333;">Leave Request Update</h2>
+              <h2 style="color: #333;">${typeLabel} Update</h2>
               <p>Dear <strong>${employee.fullName}</strong> (${employee.employeeId}),</p>
               <p>Your request for <strong>${request.requestType}</strong> titled "<strong>${request.title}</strong>" has been processed.</p>
               
@@ -343,4 +348,13 @@ export class LeaveRequestsService {
   async markEmployeeUpdateRead(id: number) {
     return this.leaveRequestRepository.update({ id }, { isReadEmployee: true });
   }
+
+  async markAllEmployeeUpdatesRead(employeeId: string) {
+    return this.leaveRequestRepository.update(
+      { employeeId, isReadEmployee: false },
+      { isReadEmployee: true }
+    );
+  }
 }
+
+
