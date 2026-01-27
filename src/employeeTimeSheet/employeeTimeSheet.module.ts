@@ -13,6 +13,7 @@ import { UsersModule } from '../users/users.module';
 import { AuthModule } from '../auth/auth.module';
 import { MasterModule } from '../master/master.module';
 import { DocumentUploaderModule } from '../common/document-uploader/document-uploader.module';
+import { DocumentMetaInfo } from '../common/document-uploader/models/documentmetainfo.model';
 import { TimesheetBlocker } from './entities/timesheetBlocker.entity';
 import { TimesheetBlockerController } from './controllers/timesheetBlocker.controller';
 import { TimesheetBlockerService } from './services/timesheetBlocker.service';
@@ -21,6 +22,7 @@ import { LeaveRequest } from './entities/leave-request.entity';
 import { LeaveRequestsController } from './controllers/leave-requests.controller';
 import { LeaveRequestsService } from './services/leave-requests.service';
 import { NotificationsModule } from '../notifications/notifications.module';
+import { FileService } from '../common/core/utils/fileType.utils';
 
 @Module({
   imports: [
@@ -30,6 +32,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
       User, 
       TimesheetBlocker,
       LeaveRequest,
+      DocumentMetaInfo,
     ]),
     UsersModule,
     AuthModule,
@@ -51,6 +54,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
     EmployeeLinkService, 
     TimesheetBlockerService,
     LeaveRequestsService,
+    FileService,
   ],
   exports: [EmployeeDetailsService, EmployeeLinkService],
 })
