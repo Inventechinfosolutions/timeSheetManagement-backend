@@ -39,8 +39,8 @@ export class EmployeeAttendanceService {
       today.setHours(0,0,0,0);
       workingDateObj.setHours(0,0,0,0);
 
-      // Rule: Do not create future records with 0 hours
-      if ((!createEmployeeAttendanceDto.totalHours || createEmployeeAttendanceDto.totalHours === 0) && workingDateObj > today) {
+      // Rule: Do not create future records with 0 hours, UNLESS status or workLocation is provided
+      if (!createEmployeeAttendanceDto.status && !createEmployeeAttendanceDto.workLocation && (!createEmployeeAttendanceDto.totalHours || createEmployeeAttendanceDto.totalHours === 0) && workingDateObj > today) {
          return null; 
       }
 
@@ -56,7 +56,8 @@ export class EmployeeAttendanceService {
 
       const attendance = this.employeeAttendanceRepository.create(createEmployeeAttendanceDto);
       
-      if (attendance.totalHours !== undefined && attendance.totalHours !== null) {
+      // Only calculate status if NOT provided
+      if (!attendance.status && attendance.totalHours !== undefined && attendance.totalHours !== null) {
           attendance.status = await this.determineStatus(attendance.totalHours, attendance.workingDate);
       }
 
@@ -71,17 +72,21 @@ export class EmployeeAttendanceService {
   async createBulk(attendanceDtos: EmployeeAttendanceDto[], isAdmin: boolean = false): Promise<EmployeeAttendance[]> {
     const results: EmployeeAttendance[] = [];
     for (const dto of attendanceDtos) {
-        let record;
-        if (dto.id) {
-            // Update existing
-            record = await this.update(dto.id, dto, isAdmin);
-        } else {
-            // Create new
-            record = await this.create(dto, isAdmin);
-        }
-        
-        if (record) {
-             results.push(record);
+        try {
+            let record;
+            if (dto.id) {
+                // Update existing
+                record = await this.update(dto.id, dto, isAdmin);
+            } else {
+                // Create new
+                record = await this.create(dto, isAdmin);
+            }
+            
+            if (record) {
+                 results.push(record);
+            }
+        } catch (error) {
+            this.logger.error(`Failed to process bulk item for ${dto.workingDate}: ${error.message}`);
         }
     }
     return results;
