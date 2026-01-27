@@ -18,11 +18,16 @@ export class LeaveRequestsController {
   }
 
   @Get()
-  findAll(@Query('employeeId') employeeId?: string) {
+  findAll(
+    @Query('employeeId') employeeId?: string,
+    @Query('department') department?: string,
+    @Query('status') status?: string,
+    @Query('search') search?: string,
+  ) {
     if (employeeId) {
       return this.leaveRequestsService.findByEmployeeId(employeeId);
     }
-    return this.leaveRequestsService.findAll();
+    return this.leaveRequestsService.findAll(department, status, search);
   }
 
   @Get('employee/:employeeId')
@@ -68,5 +73,10 @@ export class LeaveRequestsController {
   @Get('stats/:employeeId')
   getStats(@Param('employeeId') employeeId: string) {
     return this.leaveRequestsService.getStats(employeeId);
+  }
+
+  @Get(':id')
+  findOne(@Param('id') id: string) {
+    return this.leaveRequestsService.findOne(+id);
   }
 }

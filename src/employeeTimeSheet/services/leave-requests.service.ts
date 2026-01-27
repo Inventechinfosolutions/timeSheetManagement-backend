@@ -1,6 +1,6 @@
 import { Injectable, ConflictException, ForbiddenException, NotFoundException, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, LessThanOrEqual, MoreThanOrEqual, In } from 'typeorm';
+import { Repository, LessThanOrEqual, MoreThanOrEqual, In, Brackets } from 'typeorm';
 import { LeaveRequest } from '../entities/leave-request.entity';
 import { EmployeeDetails } from '../entities/employeeDetails.entity';
 import { EmailService } from '../../email/email.service';
@@ -52,8 +52,8 @@ export class LeaveRequestsService {
     return this.leaveRequestRepository.save(data);
   }
 
-  async findAll() {
-    return this.leaveRequestRepository.createQueryBuilder('lr')
+  async findAll(department?: string, status?: string, search?: string) {
+    const query = this.leaveRequestRepository.createQueryBuilder('lr')
       .leftJoin(EmployeeDetails, 'ed', 'ed.employeeId = lr.employeeId')
       .select([
         'lr.id AS id',
@@ -70,7 +70,24 @@ export class LeaveRequestsService {
         'lr.createdAt AS createdAt',
         'ed.department AS department',
         'ed.fullName AS fullName'
-      ])
+      ]);
+
+    if (department) {
+      query.andWhere('ed.department = :department', { department });
+    }
+
+    if (status) {
+      query.andWhere('lr.status = :status', { status });
+    }
+
+    if (search) {
+      query.andWhere(new Brackets(qb => {
+        qb.where('LOWER(ed.fullName) LIKE LOWER(:search)', { search: `%${search}%` })
+          .orWhere('LOWER(lr.employeeId) LIKE LOWER(:search)', { search: `%${search}%` });
+      }));
+    }
+
+    return query
       .addSelect(`CASE 
         WHEN lr.status = 'Pending' THEN 1 
         WHEN lr.status = 'Approved' THEN 2 
@@ -103,6 +120,35 @@ export class LeaveRequestsService {
       ])
       .orderBy('lr.id', 'DESC')
       .getRawMany();
+  }
+
+  async findOne(id: number) {
+    const result = await this.leaveRequestRepository.createQueryBuilder('lr')
+      .leftJoin(EmployeeDetails, 'ed', 'ed.employeeId = lr.employeeId')
+      .where('lr.id = :id', { id })
+      .select([
+        'lr.id AS id',
+        'lr.employeeId AS employeeId',
+        'lr.requestType AS requestType',
+        'lr.fromDate AS fromDate',
+        'lr.toDate AS toDate',
+        'lr.title AS title',
+        'lr.description AS description',
+        'lr.status AS status',
+        'lr.isRead AS isRead',
+        'lr.submittedDate AS submittedDate',
+        'lr.duration AS duration',
+        'lr.createdAt AS createdAt',
+        'ed.department AS department',
+        'ed.fullName AS fullName'
+      ])
+      .getRawOne();
+
+    if (!result) {
+      throw new NotFoundException(`Leave request with ID ${id} not found`);
+    }
+
+    return result;
   }
 
   async findUnread() {
