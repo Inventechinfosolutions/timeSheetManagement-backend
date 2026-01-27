@@ -32,6 +32,10 @@ export class EmployeeAttendanceDto {
   @IsOptional()
   totalHours: number;
 
+  @IsString()
+  @IsOptional()
+  workLocation: string;
+
   @IsEnum(AttendanceStatus)
   @IsOptional()
   status: AttendanceStatus;

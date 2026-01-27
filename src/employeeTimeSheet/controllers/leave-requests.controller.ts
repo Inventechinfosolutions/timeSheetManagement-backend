@@ -66,7 +66,7 @@ export class LeaveRequestsController {
   }
   
   @Post(':id/update-status')
-  updateStatus(@Param('id') id: string, @Body('status') status: 'Approved' | 'Rejected') {
+  updateStatus(@Param('id') id: string, @Body('status') status: 'Approved' | 'Rejected' | 'Cancelled') {
     return this.leaveRequestsService.updateStatus(+id, status);
   }
 
