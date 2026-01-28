@@ -76,6 +76,29 @@ export class EmployeeAttendanceController {
     return this.employeeAttendanceService.findOne(id);
   }
 
+  @Get('work-trends/:employeeId')
+  @ApiOperation({ summary: 'Get work trends for last 5 months' })
+  @ApiParam({ name: 'employeeId', type: String })
+  @ApiQuery({ name: 'endDate', type: String, required: false })
+  @ApiQuery({ name: 'startDate', type: String, required: false })
+  async getTrends(
+    @Param('employeeId') employeeId: string,
+    @Query() query: any,
+  ) {
+    let { endDate, startDate } = query;
+
+    // Support custom format ?From<Start>To<End>
+    if (!endDate) {
+        const rangeKey = Object.keys(query).find(k => k.startsWith('From') && k.includes('To'));
+        if (rangeKey) {
+            startDate = rangeKey.substring(4, rangeKey.indexOf('To'));
+            endDate = rangeKey.substring(rangeKey.indexOf('To') + 2);
+        }
+    }
+
+    return this.employeeAttendanceService.getTrends(employeeId, endDate, startDate);
+  }
+
   @Get('monthly-details/:employeeId/:month/:year')
   @ApiOperation({ summary: 'Get monthly attendance for employee' })
   @ApiParam({ name: 'employeeId', type: String })
@@ -120,6 +143,15 @@ export class EmployeeAttendanceController {
       startDate,
       endDate,
     );
+  }
+
+  @Get('dashboard-stats/:employeeId')
+  @ApiOperation({ summary: 'Get dashboard statistics (hours, pending updates)' })
+  @ApiParam({ name: 'employeeId', type: String })
+  async getDashboardStats(
+    @Param('employeeId') employeeId: string,
+  ) {
+    return this.employeeAttendanceService.getDashboardStats(employeeId);
   }
 
   @UseGuards(JwtAuthGuard)

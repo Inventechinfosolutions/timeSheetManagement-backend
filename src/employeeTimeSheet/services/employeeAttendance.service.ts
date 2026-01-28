@@ -12,6 +12,7 @@ import {
   EmployeeAttendance,
   AttendanceStatus,
 } from '../entities/employeeAttendance.entity';
+import { LeaveRequest } from '../entities/leave-request.entity';
 import { EmployeeAttendanceDto } from '../dto/employeeAttendance.dto';
 import { MasterHolidayService } from '../../master/service/master-holiday.service';
 import { TimesheetBlockerService } from './timesheetBlocker.service';
@@ -23,6 +24,8 @@ export class EmployeeAttendanceService {
   constructor(
     @InjectRepository(EmployeeAttendance)
     private readonly employeeAttendanceRepository: Repository<EmployeeAttendance>,
+    @InjectRepository(LeaveRequest)
+    private readonly leaveRequestRepository: Repository<LeaveRequest>,
     private readonly masterHolidayService: MasterHolidayService,
     private readonly blockerService: TimesheetBlockerService,
   ) {}
@@ -339,6 +342,81 @@ export class EmployeeAttendanceService {
     return false;
   }
 
+  async getTrends(employeeId: string, endDateStr: string, startDateStr?: string): Promise<any[]> {
+    const endInput = new Date(endDateStr);
+    let start: Date;
+    
+    if (startDateStr) {
+        start = new Date(startDateStr);
+    } else {
+        // Default: Start 4 months prior to the input month (total 5 months window)
+        start = new Date(endInput.getFullYear(), endInput.getMonth() - 4, 1);
+    }
+    
+    // Ensure start is the beginning of that month
+    start.setDate(1);
+    start.setHours(0, 0, 0, 0);
+
+    const end = new Date(endInput.getFullYear(), endInput.getMonth() + 1, 0, 23, 59, 59);
+
+    // Fetch confirmed requests from LeaveRequest table as it is the source of truth for approvals
+    const requests = await this.leaveRequestRepository.createQueryBuilder('req')
+        .where('req.employeeId = :employeeId', { employeeId })
+        .andWhere('req.status = :status', { status: 'Approved' })
+        .andWhere('req.fromDate <= :end', { end: end.toISOString().split('T')[0] })
+        .andWhere('req.toDate >= :start', { start: start.toISOString().split('T')[0] })
+        .getMany();
+
+    const monthsData: any[] = [];
+    const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+    // Calculate number of months to iterate
+    const totalMonths = (end.getFullYear() - start.getFullYear()) * 12 + (end.getMonth() - start.getMonth()) + 1;
+
+    for (let i = 0; i < totalMonths; i++) {
+        const currentRef = new Date(start.getFullYear(), start.getMonth() + i, 1);
+        const monthIdx = currentRef.getMonth();
+        const year = currentRef.getFullYear();
+        const monthName = monthNames[monthIdx];
+
+        const stats = {
+            month: monthName,
+            year: year,
+            totalLeaves: 0,
+            workFromHome: 0,
+            clientVisits: 0
+        };
+
+        // Aggregation logic using Approved Requests
+        requests.forEach(req => {
+            let loopDate = new Date(req.fromDate);
+            const reqEnd = new Date(req.toDate);
+            
+            // Iterate each day of the request
+            while (loopDate <= reqEnd) {
+                // If the day falls in the current month loop
+                if (loopDate.getMonth() === monthIdx && loopDate.getFullYear() === year) {
+                     const type = req.requestType; 
+                     
+                     if (type === 'Work From Home') {
+                         stats.workFromHome++;
+                     } else if (type === 'Client Visit') {
+                         stats.clientVisits++;
+                     } else {
+                         // Leaves (Sick, Casual, Leave, etc.)
+                         stats.totalLeaves++;
+                     }
+                }
+                // Next day
+                loopDate.setDate(loopDate.getDate() + 1);
+            }
+        });
+
+        monthsData.push(stats);
+    }
+    return monthsData;
+  }
+
   async findAllMonthlyDetails(month: string, year: string): Promise<EmployeeAttendance[]> {
     const start = new Date(`${year}-${month.padStart(2, '0')}-01T00:00:00`);
     const end = new Date(start.getFullYear(), start.getMonth() + 1, 0, 23, 59, 59);
@@ -348,5 +426,142 @@ export class EmployeeAttendanceService {
       order: { workingDate: 'ASC' },
     });
     return Promise.all(records.map(record => this.applyStatusBusinessRules(record)));
+  }
+  async getDashboardStats(employeeId: string, queryMonth?: string, queryYear?: string) {
+    const today = new Date();
+    const currentMonth = queryMonth ? parseInt(queryMonth) : today.getMonth() + 1;
+    const currentYear = queryYear ? parseInt(queryYear) : today.getFullYear();
+    
+    // 1. Total Week Hours
+    const dayOfWeek = today.getDay(); // 0 (Sun) - 6 (Sat)
+    // Adjust to make Monday 0, Sunday 6
+    const diffToMonday = today.getDate() - dayOfWeek + (dayOfWeek === 0 ? -6 : 1);
+    const weekStart = new Date(today);
+    weekStart.setDate(diffToMonday);
+    weekStart.setHours(0, 0, 0, 0);
+
+    const weekEnd = new Date(weekStart);
+    weekEnd.setDate(weekStart.getDate() + 6);
+    weekEnd.setHours(23, 59, 59, 999);
+
+    const weekRecords = await this.employeeAttendanceRepository.find({
+      where: {
+        employeeId,
+        workingDate: Between(weekStart, weekEnd),
+      },
+    });
+
+    const totalWeekHours = weekRecords.reduce((acc, curr) => acc + (curr.totalHours || 0), 0);
+
+    // 2. Total Monthly Hours
+    const monthStart = new Date(currentYear, currentMonth - 1, 1);
+    const monthEnd = new Date(currentYear, currentMonth, 0, 23, 59, 59, 999);
+
+    const monthRecords = await this.employeeAttendanceRepository.find({
+      where: {
+        employeeId,
+        workingDate: Between(monthStart, monthEnd),
+      },
+    });
+
+    const totalMonthlyHours = monthRecords.reduce((acc, curr) => acc + (curr.totalHours || 0), 0);
+
+    // 3. Pending Updates
+    // Only count until yesterday or end of month if it's past
+    const checkEndDate = new Date(today);
+    checkEndDate.setDate(today.getDate() - 1); // Yesterday
+    checkEndDate.setHours(23, 59, 59, 999);
+    
+    // If we are looking at a past month, check until end of that month.
+    // If current month, check until yesterday.
+    let pendingLimitDate = checkEndDate;
+    if (monthEnd < pendingLimitDate) {
+        pendingLimitDate = monthEnd;
+    }
+
+    let pendingUpdates = 0;
+
+    // Fetch master holidays for the month
+    // NOTE: validation error fixed: findAll takes no arguments. It returns ALL holidays.
+    // We will filter or just put all in the Set, which is fine since the set key includes year.
+    const holidayEntities = await this.masterHolidayService.findAll(); 
+
+    // Better: Fetch approved leaves for the range
+    const leaves = await this.leaveRequestRepository.find({
+      where: {
+        employeeId,
+        status: 'Approved',
+        fromDate: Between(monthStart.toISOString().split('T')[0], pendingLimitDate.toISOString().split('T')[0])
+      }
+    });
+
+    // Helper to avoid timezone shifts when converting to YYYY-MM-DD
+    const toLocalYMD = (dateInput: Date | string) => {
+        const date = new Date(dateInput);
+        const y = date.getFullYear();
+        const m = String(date.getMonth() + 1).padStart(2, '0');
+        const d = String(date.getDate()).padStart(2, '0');
+        return `${y}-${m}-${d}`;
+    };
+
+    // Optimization: Create Set of existing attendance dates (string YYYY-MM-DD)
+    const existingAttendanceDates = new Set(
+        monthRecords.map(r => toLocalYMD(r.workingDate))
+    );
+
+    // Optimization: Set of Holidays
+    const yearHolidays = await this.masterHolidayService.findAll();
+    const holidayDates = new Set(
+        yearHolidays.map(h => {
+             const d = h.holidayDate || (h as any).date; 
+             // If d is string 'YYYY-MM-DD', direct usage is safest. 
+             // If ISO string with time, we might still want to parse it to check local date if it was saved with timezone? 
+             // Usually holiday is just a date. Let's rely on standard parsing.
+             return toLocalYMD(d);
+        })
+    );
+
+    // Optimization: Approved Leaves ranges
+    // We already fetched `leaves`? No, simpler to query fully covering leaves or check day by day in memory.
+    const allApprovedLeaves = await this.leaveRequestRepository.find({
+        where: {
+            employeeId,
+            status: 'Approved'
+        }
+    });
+
+
+    // Loop from monthStart to pendingLimitDate
+    let loopDate = new Date(monthStart);
+    while (loopDate <= pendingLimitDate) {
+        if (loopDate > today) break; // Extra safety
+
+        const dateStr = toLocalYMD(loopDate);
+        
+        // 1. Check Weekend
+        const isWeekend = this.masterHolidayService.isWeekend(loopDate);
+        // 2. Check Holiday
+        const isHoliday = holidayDates.has(dateStr);
+        // 3. Check existing attendance
+        const hasAttendance = existingAttendanceDates.has(dateStr);
+        // 4. Check Leave
+        const hasLeave = allApprovedLeaves.some(l => {
+             const lStartStr = toLocalYMD(l.fromDate);
+             const lEndStr = toLocalYMD(l.toDate);
+             return dateStr >= lStartStr && dateStr <= lEndStr;
+        });
+
+        if (!isWeekend && !isHoliday && !hasAttendance && !hasLeave) {
+            pendingUpdates++;
+        }
+
+        loopDate.setDate(loopDate.getDate() + 1);
+    }
+
+    return {
+      totalWeekHours: parseFloat(totalWeekHours.toFixed(2)),
+      totalMonthlyHours: parseFloat(totalMonthlyHours.toFixed(2)),
+      pendingUpdates,
+    };
   }
 }
