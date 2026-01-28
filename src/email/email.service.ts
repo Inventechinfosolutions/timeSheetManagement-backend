@@ -17,13 +17,14 @@ export class EmailService {
     });
   }
 
-  async sendEmail(to: string, subject: string, text: string, htmlContent: string) {
+  async sendEmail(to: string, subject: string, text: string, htmlContent: string, replyTo?: string) {
     await this.transporter.sendMail({
       from: process.env.MAIL_FROM || process.env['mail.FROM'],
       to,
       subject,
       text,
       html: htmlContent,
+      replyTo,
     });
   }
 }
