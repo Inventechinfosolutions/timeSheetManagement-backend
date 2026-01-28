@@ -32,16 +32,22 @@ export class LeaveRequestsController {
     @Query('department') department?: string,
     @Query('status') status?: string,
     @Query('search') search?: string,
+    @Query('page') page: number = 1,
+    @Query('limit') limit: number = 10,
   ) {
     if (employeeId) {
-      return this.leaveRequestsService.findByEmployeeId(employeeId);
+      return this.leaveRequestsService.findByEmployeeId(employeeId, page, limit);
     }
-    return this.leaveRequestsService.findAll(department, status, search);
+    return this.leaveRequestsService.findAll(department, status, search, page, limit);
   }
 
   @Get('employee/:employeeId')
-  findByEmployeeId(@Param('employeeId') employeeId: string) {
-    return this.leaveRequestsService.findByEmployeeId(employeeId);
+  findByEmployeeId(
+    @Param('employeeId') employeeId: string,
+    @Query('page') page: number = 1,
+    @Query('limit') limit: number = 10,
+  ) {
+    return this.leaveRequestsService.findByEmployeeId(employeeId, page, limit);
   }
 
   @Get('notifications/unread')

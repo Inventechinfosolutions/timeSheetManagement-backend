@@ -150,7 +150,7 @@ export class LeaveRequestsService {
     return savedRequest;
   }
 
-  async findAll(department?: string, status?: string, search?: string) {
+  async findAll(department?: string, status?: string, search?: string, page: number = 1, limit: number = 10) {
     const query = this.leaveRequestRepository.createQueryBuilder('lr')
       .leftJoin(EmployeeDetails, 'ed', 'ed.employeeId = lr.employeeId')
       .select([
@@ -185,7 +185,9 @@ export class LeaveRequestsService {
       }));
     }
 
-    return query
+    const total = await query.getCount();
+
+    const data = await query
       .addSelect(`CASE 
         WHEN lr.status = 'Pending' THEN 1 
         WHEN lr.status = 'Approved' THEN 2 
@@ -193,11 +195,21 @@ export class LeaveRequestsService {
       END`, 'priority')
       .orderBy('priority', 'ASC')
       .addOrderBy('lr.id', 'DESC')
+      .offset((page - 1) * limit)
+      .limit(limit)
       .getRawMany();
+
+    return {
+      data,
+      total,
+      page: Number(page),
+      limit: Number(limit),
+      totalPages: Math.ceil(total / limit),
+    };
   }
 
-  async findByEmployeeId(employeeId: string) {
-    return this.leaveRequestRepository.createQueryBuilder('lr')
+  async findByEmployeeId(employeeId: string, page: number = 1, limit: number = 10) {
+    const query = this.leaveRequestRepository.createQueryBuilder('lr')
       .leftJoin(EmployeeDetails, 'ed', 'ed.employeeId = lr.employeeId')
       .where('lr.employeeId = :employeeId', { employeeId })
       .select([
@@ -215,9 +227,23 @@ export class LeaveRequestsService {
         'lr.createdAt AS createdAt',
         'ed.department AS department',
         'ed.fullName AS fullName'
-      ])
+      ]);
+
+    const total = await query.getCount();
+
+    const data = await query
       .orderBy('lr.id', 'DESC')
+      .offset((page - 1) * limit)
+      .limit(limit)
       .getRawMany();
+
+    return {
+      data,
+      total,
+      page: Number(page),
+      limit: Number(limit),
+      totalPages: Math.ceil(total / limit),
+    };
   }
 
   async findOne(id: number) {
