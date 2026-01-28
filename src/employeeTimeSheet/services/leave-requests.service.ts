@@ -56,6 +56,74 @@ export class LeaveRequestsService {
 
     const savedRequest = await this.leaveRequestRepository.save(data);
 
+    // --- NEW NOTIFICATION LOGIC ---
+    try {
+      // 1. Get Employee Details
+      const employee = await this.employeeDetailsRepository.findOne({
+        where: { employeeId: data.employeeId },
+      });
+
+      if (employee) {
+        // 2. Prepare Admin Email (Receiver)
+        // Using the SMTP username as the admin receiver, or fallback to a specific admin email if env var exists
+        const adminEmail = process.env.ADMIN_EMAIL || process.env.SMTP_USERNAME;
+
+        // 3. Construct HTML Content
+        const requestTypeLabel =
+          data.requestType === 'Apply Leave' ? 'Leave' : data.requestType;
+        const subject = `New ${requestTypeLabel} Request - ${employee.fullName}`;
+
+        const htmlContent = `
+            <div style="font-family: Arial, sans-serif; padding: 20px; border: 1px solid #eee; border-radius: 10px;">
+              <h2 style="color: #333;">New ${requestTypeLabel} Request</h2>
+              <p><strong>Employee:</strong> ${employee.fullName} (${employee.employeeId})</p>
+              
+              <div style="background-color: #f8f9fa; padding: 15px; border-radius: 8px; margin: 15px 0;">
+                <p style="margin: 5px 0;"><strong>Title:</strong> ${data.title || 'No Title'}</p>
+                <p style="margin: 5px 0;"><strong>From:</strong> ${data.fromDate}</p>
+                <p style="margin: 5px 0;"><strong>To:</strong> ${data.toDate}</p>
+                <p style="margin: 5px 0;"><strong>Reason:</strong> ${data.description || 'N/A'}</p>
+              </div>
+
+              <p>Please log in to the admin panel to approve or reject this request.</p>
+
+              <div style="text-align: center; margin: 25px 0;">
+                <a href="https://timesheet.inventech-developer.in" 
+                   style="background-color: #007bff; color: #ffffff; padding: 12px 24px; text-decoration: none; border-radius: 5px; font-weight: bold; display: inline-block;">
+                   Login to Portal
+                </a>
+              </div>
+              
+              <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;" />
+              <p style="font-size: 12px; color: #999;">
+                This is an automated notification.
+              </p>
+            </div>
+        `;
+
+        if (adminEmail) {
+          // 4. Send Email
+          // We pass employee.email as 'replyTo' so Admin can reply directly to the employee
+          await this.emailService.sendEmail(
+            adminEmail,
+            subject,
+            `New request from ${employee.fullName}`,
+            htmlContent,
+            employee.email, // <--- Pass employee email here as Reply-To
+          );
+          this.logger.log(
+            `Notification sent to Admin (${adminEmail}) for request from ${employee.fullName}`,
+          );
+        } else {
+          this.logger.warn(
+            'Admin email not configured (ADMIN_EMAIL or SMTP_USERNAME). Cannot send admin notification.',
+          );
+        }
+      }
+    } catch (error) {
+      this.logger.error('Failed to send admin notification', error);
+    }
+
     // Link orphaned documents (refId: 0) to the newly created request
     try {
       // Find the numeric ID of the employee to match the entityId used during upload
@@ -228,6 +296,64 @@ export class LeaveRequestsService {
     if (request.status !== 'Pending') {
       throw new ForbiddenException('Only pending leave requests can be deleted');
     }
+
+    // --- NEW: Admin Notification Logic (Before Deletion) ---
+    try {
+      const employee = await this.employeeDetailsRepository.findOne({
+        where: { employeeId: request.employeeId },
+      });
+
+      if (employee) {
+        const adminEmail = process.env.ADMIN_EMAIL || process.env.SMTP_USERNAME;
+
+        if (adminEmail) {
+          const requestTypeLabel =
+            request.requestType === 'Apply Leave' ? 'Leave' : request.requestType;
+          const subject = `Cancelled: ${requestTypeLabel} Request - ${employee.fullName}`;
+
+          const htmlContent = `
+            <div style="font-family: Arial, sans-serif; padding: 20px; border: 1px solid #eee; border-radius: 10px;">
+              <h2 style="color: #dc3545;">Request Cancelled by Employee</h2>
+              <p><strong>Employee:</strong> ${employee.fullName} (${employee.employeeId})</p>
+              
+              <div style="background-color: #f8f9fa; padding: 15px; border-radius: 8px; margin: 15px 0;">
+                <p style="margin: 5px 0;"><strong>Type:</strong> ${request.requestType}</p>
+                <p style="margin: 5px 0;"><strong>Title:</strong> ${request.title || 'No Title'}</p>
+                <p style="margin: 5px 0;"><strong>From:</strong> ${request.fromDate}</p>
+                <p style="margin: 5px 0;"><strong>To:</strong> ${request.toDate}</p>
+              </div>
+
+              <p>The above request has been cancelled by the employee and removed from the system.</p>
+              
+              <div style="text-align: center; margin: 25px 0;">
+                <a href="https://timesheet.inventech-developer.in" 
+                   style="background-color: #007bff; color: #ffffff; padding: 12px 24px; text-decoration: none; border-radius: 5px; font-weight: bold; display: inline-block;">
+                   Login to Portal
+                </a>
+              </div>
+
+              <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;" />
+               <p style="font-size: 12px; color: #999;">
+                This is an automated notification.
+              </p>
+            </div>
+           `;
+
+          await this.emailService.sendEmail(
+            adminEmail,
+            subject,
+            `Request Cancelled by ${employee.fullName}`,
+            htmlContent,
+          );
+        }
+      }
+    } catch (error) {
+      this.logger.error(
+        `Failed to send cancellation email for request ${id}`,
+        error,
+      );
+    }
+
     return this.leaveRequestRepository.delete(id);
   }
 
@@ -308,7 +434,54 @@ export class LeaveRequestsService {
       });
 
       if (employee) {
-        if (employee.email) {
+        // CASE 1: Request Cancelled -> Notify Admin
+        if (status === 'Cancelled') {
+            const adminEmail = process.env.ADMIN_EMAIL || process.env.SMTP_USERNAME;
+            if (adminEmail) {
+                const requestTypeLabel = request.requestType === 'Apply Leave' ? 'Leave' : request.requestType;
+                const subject = `Cancelled: ${requestTypeLabel} Request - ${employee.fullName}`;
+                
+                const htmlContent = `
+                <div style="font-family: Arial, sans-serif; padding: 20px; border: 1px solid #eee; border-radius: 10px;">
+                  <h2 style="color: #dc3545;">Request Cancelled by Employee</h2>
+                  <p><strong>Employee:</strong> ${employee.fullName} (${employee.employeeId})</p>
+                  
+                  <div style="background-color: #f8f9fa; padding: 15px; border-radius: 8px; margin: 15px 0;">
+                    <p style="margin: 5px 0;"><strong>Type:</strong> ${request.requestType}</p>
+                    <p style="margin: 5px 0;"><strong>Title:</strong> ${request.title || 'No Title'}</p>
+                    <p style="margin: 5px 0;"><strong>From:</strong> ${request.fromDate}</p>
+                    <p style="margin: 5px 0;"><strong>To:</strong> ${request.toDate}</p>
+                  </div>
+    
+                  <p>The above request has been cancelled by the employee.</p>
+                  
+                  <div style="text-align: center; margin: 25px 0;">
+                    <a href="https://timesheet.inventech-developer.in" 
+                       style="background-color: #007bff; color: #ffffff; padding: 12px 24px; text-decoration: none; border-radius: 5px; font-weight: bold; display: inline-block;">
+                       Login to Portal
+                    </a>
+                  </div>
+    
+                  <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;" />
+                   <p style="font-size: 12px; color: #999;">
+                    This is an automated notification.
+                  </p>
+                </div>
+               `;
+    
+              await this.emailService.sendEmail(
+                adminEmail,
+                subject,
+                `Request Cancelled by ${employee.fullName}`,
+                htmlContent,
+              );
+              this.logger.log(`Cancellation notification sent to Admin: ${adminEmail}`);
+            } else {
+                this.logger.warn('Admin email not configured. Cannot send cancellation notification.');
+            }
+        } 
+        // CASE 2: Approved/Rejected -> Notify Employee
+        else if (employee.email) {
           this.logger.log(`Found employee: ${employee.fullName}, Email: ${employee.email}. Sending email...`);
           let typeLabel = 'Leave Request';
           if (request.requestType === 'Work From Home' || request.requestType === 'Client Visit') {
