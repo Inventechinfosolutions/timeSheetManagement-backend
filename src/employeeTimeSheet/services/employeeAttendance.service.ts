@@ -611,7 +611,7 @@ export class EmployeeAttendanceService {
         attendanceMap.set(record.employeeId, new Map());
       }
       const dateKey = new Date(record.workingDate).toISOString().split('T')[0];
-      attendanceMap.get(record.employeeId).set(dateKey, record);
+      attendanceMap.get(record.employeeId)!.set(dateKey, record);
     });
 
     // 4. Create Workbook
@@ -746,7 +746,7 @@ export class EmployeeAttendanceService {
                 if (record.status === AttendanceStatus.FULL_DAY) {
                     text = 'Present';
                 } else if (record.status === AttendanceStatus.HALF_DAY) {
-                    text = 'Half day Leave';
+                    text = 'Half day';
                     fontColor = 'FF4500'; // Orange-Red
                 } else if (record.status === AttendanceStatus.LEAVE) {
                     text = 'Leave';
@@ -758,8 +758,8 @@ export class EmployeeAttendanceService {
                     fontColor = '0000FF'; // Blue
                 } else {
                     // Fallback
-                    if (record.totalHours >= 6) text = 'Present';
-                    else if (record.totalHours > 0) text = 'Half day Leave';
+                    if ((record.totalHours || 0) >= 6) text = 'Present';
+                    else if ((record.totalHours || 0) > 0) text = 'Half day';
                     else text = 'Leave';
                 }
                 
@@ -812,6 +812,6 @@ export class EmployeeAttendanceService {
     sheet.getColumn(1).width = 25; // Name column wider
 
     const buffer = await workbook.xlsx.writeBuffer();
-    return buffer as Buffer;
+    return buffer as unknown as Buffer;
   }
 }
