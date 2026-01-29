@@ -123,20 +123,26 @@ export class EmployeeLinkService {
         throw new NotFoundException('Employee associated with this token not found');
       }
 
-      const user = await this.userRepository.findOne({ where: { loginId: employee.employeeId.toLowerCase() } });
+      // Try to find user by exact employeeId first, then lowercase for compatibility
+      let user = await this.userRepository.findOne({ where: { loginId: employee.employeeId } });
+      if (!user) {
+        user = await this.userRepository.findOne({ where: { loginId: employee.employeeId.toLowerCase() } });
+      }
+      
       if (user) {
-        // Check if user is already activated
+        // Allow reactivation if status is DRAFT (new activation link was sent)
+        // If already ACTIVE, we still allow it but log a warning (in case of resend activation link)
         if (user.status === UserStatus.ACTIVE) {
-          this.logger.warn(`User ${employee.employeeId} attempted to activate an already activated account`);
-          throw new HttpException(
-            'This account has already been activated. Please use your login credentials to access your account.',
-            HttpStatus.BAD_REQUEST
-          );
+          this.logger.warn(`User ${employee.employeeId} is already ACTIVE, but allowing reactivation via new token`);
         }
         
         user.status = UserStatus.ACTIVE;
         user.mobileVerification = true;
-        user.resetRequired = false;
+        // Keep resetRequired as true if it was set (user needs to change password)
+        // Only set to false if it was already false (user already changed password before)
+        if (user.resetRequired === undefined || user.resetRequired === null) {
+          user.resetRequired = true;
+        }
         user.lastLoggedIn = new Date();
         await this.userRepository.save(user);
         this.logger.log(`User ${employee.employeeId} activated via token`);
@@ -181,12 +187,23 @@ export class EmployeeLinkService {
       employee.password = hashedPassword;
       await this.employeeDetailsRepository.save(employee);
 
-      // Sync with User table
-      const user = await this.userRepository.findOne({ where: { loginId: employee.employeeId.toLowerCase() } });
+      // Sync with User table (try exact match first, then lowercase for compatibility)
+      let user = await this.userRepository.findOne({ where: { loginId: employee.employeeId } });
+      if (!user) {
+        user = await this.userRepository.findOne({ where: { loginId: employee.employeeId.toLowerCase() } });
+        // If found by lowercase, update to exact case
+        if (user) {
+          user.loginId = employee.employeeId;
+          await this.userRepository.save(user);
+          this.logger.log(`User loginId updated to match exact case: ${employee.employeeId}`);
+        }
+      }
       if (user) {
         user.password = hashedPassword;
+        user.resetRequired = true; // Set resetRequired to true so user must change password on first login
+        user.status = UserStatus.DRAFT; // Reset status to DRAFT to allow reactivation with new link
         await this.userRepository.save(user);
-        this.logger.log(`User password synchronized for: ${employee.employeeId}`);
+        this.logger.log(`User password synchronized, resetRequired set to true, and status reset to DRAFT for: ${employee.employeeId}`);
       }
 
       const payload = { 

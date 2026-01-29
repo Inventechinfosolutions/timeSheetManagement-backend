@@ -11,7 +11,9 @@ import {
   ParseIntPipe,
   UseGuards,
   Req,
+  Res,
 } from '@nestjs/common';
+import { Response } from 'express';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { UserType } from '../../users/enums/user-type.enum';
 import {
@@ -23,6 +25,7 @@ import {
   ApiParam,
 } from '@nestjs/swagger';
 import { EmployeeAttendanceDto } from '../dto/employeeAttendance.dto';
+import { DownloadAttendanceDto } from '../dto/download-attendance.dto';
 import { EmployeeAttendanceService } from '../services/employeeAttendance.service';
 
 @ApiTags('Employee Attendance')
@@ -33,6 +36,28 @@ export class EmployeeAttendanceController {
   constructor(
     private readonly employeeAttendanceService: EmployeeAttendanceService,
   ) {}
+
+  @Get('download-report')
+  @ApiOperation({ summary: 'Download monthly attendance Excel report' })
+  @ApiQuery({ name: 'month', type: Number })
+  @ApiQuery({ name: 'year', type: Number })
+  async downloadReport(
+    @Query() query: DownloadAttendanceDto,
+    @Res() res: Response,
+  ) {
+    const buffer = await this.employeeAttendanceService.generateMonthlyReport(
+      query.month,
+      query.year,
+    );
+    
+    res.set({
+      'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'Content-Disposition': `attachment; filename=Attendance_${query.month}_${query.year}.xlsx`,
+      'Content-Length': buffer.length,
+    });
+    
+    res.send(buffer);
+  }
 
   @UseGuards(JwtAuthGuard)
   @Post()
@@ -215,6 +240,7 @@ export class EmployeeAttendanceController {
     this.logger.log(`Fetching all employees attendance - Month: ${month}, Year: ${year}`);
     return this.employeeAttendanceService.findAllMonthlyDetails(month, year);
   }
+
 }
 
 

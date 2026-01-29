@@ -23,21 +23,47 @@ export class LeaveRequestsService {
   ) {}
 
   async create(data: Partial<LeaveRequest>) {
-    // Check for overlapping dates
-    if (data.fromDate && data.toDate) {
-      const existingLeave = await this.leaveRequestRepository.findOne({
-        where: {
-          employeeId: data.employeeId,
-          fromDate: LessThanOrEqual(data.toDate),
-          toDate: MoreThanOrEqual(data.fromDate),
-          status: In(['Pending', 'Approved']),
-        },
-      });
+    // Check for overlapping dates based on request type
+    if (data.fromDate && data.toDate && data.requestType) {
+      const requestType = data.requestType;
+      
+      // Define which request types can overlap with each other
+      // Client Visit can overlap with Leave and WFH
+      // Leave and WFH cannot overlap with each other or with themselves
+      
+      let conflictingTypes: string[] = [];
+      
+      if (requestType === 'Client Visit') {
+        // Client Visit doesn't conflict with anything - allow overlaps
+        conflictingTypes = [];
+      } else if (requestType === 'Apply Leave') {
+        // Leave conflicts with Leave and WFH (but not Client Visit)
+        conflictingTypes = ['Apply Leave', 'Work From Home'];
+      } else if (requestType === 'Work From Home') {
+        // WFH conflicts with Leave and WFH (but not Client Visit)
+        conflictingTypes = ['Apply Leave', 'Work From Home'];
+      } else {
+        // For any other request type, check for same type only
+        conflictingTypes = [requestType];
+      }
+      
+      // Only check for conflicts if there are conflicting types
+      if (conflictingTypes.length > 0) {
+        const existingLeave = await this.leaveRequestRepository.findOne({
+          where: {
+            employeeId: data.employeeId,
+            fromDate: LessThanOrEqual(data.toDate),
+            toDate: MoreThanOrEqual(data.fromDate),
+            status: In(['Pending', 'Approved']),
+            requestType: In(conflictingTypes),
+          },
+        });
 
-      if (existingLeave) {
-        throw new ConflictException(
-          `Leave request already exists for the selected date range (${existingLeave.fromDate} to ${existingLeave.toDate})`,
-        );
+        if (existingLeave) {
+          throw new ConflictException(
+            `Leave request already exists for the selected date range (${existingLeave.fromDate} to ${existingLeave.toDate})`,
+          );
+        }
       }
     }
 
