@@ -1,19 +1,16 @@
 import {
   BadRequestException,
-  HttpException,
-  HttpStatus,
   Injectable,
   Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Between, Repository, LessThanOrEqual, MoreThanOrEqual } from 'typeorm';
-import {
-  EmployeeAttendance,
-} from '../entities/employeeAttendance.entity';
+import { Between, Repository, LessThanOrEqual, MoreThanOrEqual, In } from 'typeorm';
 // import { Between, Repository } from 'typeorm';
 // import { EmployeeAttendance } from '../entities/employeeAttendance.entity';
 // import { AttendanceStatus } from '../enums/attendance-status.enum';
+import { EmployeeAttendance } from '../entities/employeeAttendance.entity';
+import { AttendanceStatus } from '../enums/attendance-status.enum';
 import { LeaveRequest } from '../entities/leave-request.entity';
 // import { EmployeeDetails } from '../entities/employeeDetails.entity';
 import { EmployeeAttendanceDto } from '../dto/employeeAttendance.dto';
@@ -21,7 +18,6 @@ import { MasterHolidayService } from '../../master/service/master-holiday.servic
 import { TimesheetBlockerService } from './timesheetBlocker.service';
 import { EmployeeDetails } from '../entities/employeeDetails.entity';
 import * as ExcelJS from 'exceljs';
-import { AttendanceStatus } from '../enums/attendance-status.enum';
 
 @Injectable()
 export class EmployeeAttendanceService {
@@ -316,7 +312,24 @@ export class EmployeeAttendanceService {
           return attendance;
         }
 
-        // Priority 3: Default to Leave for past weekdays with missing status
+        // Priority 3: Check for approved Client Visit or Work From Home request
+        const approvedRequest = await this.leaveRequestRepository.findOne({
+          where: {
+            employeeId: attendance.employeeId,
+            requestType: In(['Client Visit', 'Work From Home']),
+            status: 'Approved',
+            fromDate: LessThanOrEqual(workingDate),
+            toDate: MoreThanOrEqual(workingDate),
+          },
+        });
+
+        if (approvedRequest) {
+          // If approved Client Visit or WFH exists, mark as Present (Full Day)
+          attendance.status = AttendanceStatus.FULL_DAY;
+          return attendance;
+        }
+
+        // Priority 4: Default to Leave for past weekdays with missing status
         attendance.status = AttendanceStatus.LEAVE;
       }
     }
