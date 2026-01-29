@@ -234,4 +234,25 @@ export class LeaveRequestsController {
     const result = await this.leaveRequestsService.deleteDocument(entityType, +entityId, +refId, key);
     return result;
   }
+
+  @Get('monthly-details/:month/:year')
+  async findAllMonthlyDetails(
+    @Param('month') month: string,
+    @Param('year') year: string,
+    @Query('page') page: number = 1,
+    @Query('limit') limit: number = 10,
+  ) {
+    return this.leaveRequestsService.findMonthlyRequests(month, year, undefined, page, limit);
+  }
+
+  @Get('monthly-details/:employeeId/:month/:year')
+  async findEmployeeMonthlyDetails(
+    @Param('employeeId') employeeId: string,
+    @Param('month') month: string,
+    @Param('year') year: string,
+    @Query('page') page: number = 1,
+    @Query('limit') limit: number = 10,
+  ) {
+    return this.leaveRequestsService.findMonthlyRequests(month, year, employeeId, page, limit);
+  }
 }
