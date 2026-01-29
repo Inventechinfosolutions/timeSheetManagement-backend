@@ -29,11 +29,9 @@ export class EmployeeAttendanceService {
     @InjectRepository(LeaveRequest)
     private readonly leaveRequestRepository: Repository<LeaveRequest>,
     @InjectRepository(EmployeeDetails)
-    // private readonly employeeDetailsRepository: Repository<EmployeeDetails>,
+    private readonly employeeDetailsRepository: Repository<EmployeeDetails>,
     private readonly masterHolidayService: MasterHolidayService,
     private readonly blockerService: TimesheetBlockerService,
-    @InjectRepository(EmployeeDetails)
-    private readonly employeeDetailsRepository: Repository<EmployeeDetails>,
   ) {}
 
   async create(createEmployeeAttendanceDto: EmployeeAttendanceDto, isAdmin: boolean = false): Promise<EmployeeAttendance | null> {
@@ -772,6 +770,15 @@ export class EmployeeAttendanceService {
       }
     });
 
+    // Helper function to normalize dates to YYYY-MM-DD format
+    const normalizeDate = (date: Date | string): string => {
+      const d = date instanceof Date ? date : new Date(date);
+      const year = d.getFullYear();
+      const month = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    };
+
     // Map attendance: EmployeeID -> DateString -> Record
     const attendanceMap = new Map<string, Map<string, EmployeeAttendance>>();
     
@@ -779,7 +786,7 @@ export class EmployeeAttendanceService {
       if (!attendanceMap.has(record.employeeId)) {
         attendanceMap.set(record.employeeId, new Map());
       }
-      const dateKey = new Date(record.workingDate).toISOString().split('T')[0];
+      const dateKey = normalizeDate(record.workingDate);
       const empMap = attendanceMap.get(record.employeeId);
       if (empMap) {
         empMap.set(dateKey, record);
@@ -894,13 +901,26 @@ export class EmployeeAttendanceService {
 
     // --- Data Rows ---
     for (const employee of employees) {
-        const rowValues = [employee.fullName];
-        const row = sheet.addRow(rowValues);
+        // Initialize row with name and empty cells for all days
+        const employeeName = employee.fullName || employee.employeeId || 'Unknown';
+        const rowData: any[] = [employeeName];
+        // Pre-populate with empty strings to ensure all cells exist
+        for (let i = 0; i < daysInMonth; i++) {
+            rowData.push('');
+        }
+        const row = sheet.addRow(rowData);
+        
+        // Style the name cell (column 1)
+        const nameCell = row.getCell(1);
+        nameCell.fill = yellowFill;
+        nameCell.font = { bold: true };
+        nameCell.alignment = { horizontal: 'left', vertical: 'middle' };
+        nameCell.value = employeeName; // Ensure value is set
         
         // Loop through days
         for (let i = 0; i < daysInMonth; i++) {
             const dateKey = dateKeys[i];
-            const dateObj = new Date(dateKey);
+            const dateObj = new Date(dateKey + 'T00:00:00'); // Ensure proper date parsing
             const isWeekend = dateObj.getDay() === 0 || dateObj.getDay() === 6;
             const holidayName = holidayMap.get(dateKey);
             const isHoliday = !!holidayName;
@@ -910,7 +930,55 @@ export class EmployeeAttendanceService {
             const empAttendanceMap = attendanceMap.get(employee.employeeId);
             const record = empAttendanceMap?.get(dateKey);
 
-            // PRIORITY 1: Record Exists (User filled timesheet)
+            // PRIORITY 1: Weekend - Always red background, even if attendance is submitted
+            if (isWeekend) {
+                cell.fill = weekendFill;
+                
+                // If there's attendance record, show the attendance text in white
+                if (record) {
+                    let text = '';
+                    
+                    if (record.status === AttendanceStatus.FULL_DAY) {
+                        text = 'Present';
+                    } else if (record.status === AttendanceStatus.HALF_DAY) {
+                        text = 'Half day';
+                    } else if (record.status === AttendanceStatus.LEAVE) {
+                        text = 'Leave';
+                    } else if (record.workLocation === 'WFH') {
+                        text = 'WFH';
+                    } else if (record.workLocation === 'Client Visit') {
+                        text = 'Client Visit';
+                    } else {
+                        // Fallback
+                        if (record.totalHours !== null && record.totalHours !== undefined) {
+                            if (record.totalHours >= 6) text = 'Present';
+                            else if (record.totalHours > 0) text = 'Half day';
+                            else text = 'Leave';
+                        } else {
+                            text = 'Weekend';
+                        }
+                    }
+                    
+                    cell.value = text;
+                    cell.font = { color: { argb: 'FFFFFFFF' } }; // White text for visibility on red
+                } else {
+                    // No attendance record, just show empty or "Weekend"
+                    cell.value = '';
+                }
+                cell.alignment = { horizontal: 'center' };
+                continue; // Done for this cell
+            }
+
+            // PRIORITY 2: Holiday (Overrides Not Updated if no record)
+            if (isHoliday) {
+                cell.value = holidayName;
+                cell.fill = blueFill;
+                cell.alignment = { horizontal: 'center', wrapText: true }; // Wrap text for long holiday names
+                cell.font = { size: 10 }; // Slightly smaller for names
+                continue;
+            }
+
+            // PRIORITY 3: Record Exists (User filled timesheet) - for weekdays only
             if (record) {
                 let text = '';
                 let fontColor = '000000'; // Black
@@ -943,22 +1011,6 @@ export class EmployeeAttendanceService {
                 cell.font = { color: { argb: fontColor } };
                 cell.alignment = { horizontal: 'center' };
                 continue; // Done for this cell
-            }
-
-            // PRIORITY 2: Holiday (Overrides Weekend/Not Updated if no record)
-            if (isHoliday) {
-                cell.value = holidayName;
-                cell.fill = blueFill;
-                cell.alignment = { horizontal: 'center', wrapText: true }; // Wrap text for long holiday names
-                cell.font = { size: 10 }; // Slightly smaller for names
-                continue;
-            }
-
-            // PRIORITY 3: Weekend
-            if (isWeekend) {
-                cell.fill = weekendFill;
-                cell.value = ''; // Or 'Week Off'
-                continue;
             }
 
             // PRIORITY 4: Future / Past Logic
