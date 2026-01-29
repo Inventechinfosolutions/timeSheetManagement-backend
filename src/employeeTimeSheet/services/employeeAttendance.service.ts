@@ -7,15 +7,21 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Between, Repository } from 'typeorm';
-import { EmployeeAttendance } from '../entities/employeeAttendance.entity';
-import { AttendanceStatus } from '../enums/attendance-status.enum';
+import { Between, Repository, LessThanOrEqual, MoreThanOrEqual } from 'typeorm';
+import {
+  EmployeeAttendance,
+} from '../entities/employeeAttendance.entity';
+// import { Between, Repository } from 'typeorm';
+// import { EmployeeAttendance } from '../entities/employeeAttendance.entity';
+// import { AttendanceStatus } from '../enums/attendance-status.enum';
 import { LeaveRequest } from '../entities/leave-request.entity';
+// import { EmployeeDetails } from '../entities/employeeDetails.entity';
 import { EmployeeAttendanceDto } from '../dto/employeeAttendance.dto';
 import { MasterHolidayService } from '../../master/service/master-holiday.service';
 import { TimesheetBlockerService } from './timesheetBlocker.service';
 import { EmployeeDetails } from '../entities/employeeDetails.entity';
 import * as ExcelJS from 'exceljs';
+import { AttendanceStatus } from '../enums/attendance-status.enum';
 
 @Injectable()
 export class EmployeeAttendanceService {
@@ -26,6 +32,8 @@ export class EmployeeAttendanceService {
     private readonly employeeAttendanceRepository: Repository<EmployeeAttendance>,
     @InjectRepository(LeaveRequest)
     private readonly leaveRequestRepository: Repository<LeaveRequest>,
+    @InjectRepository(EmployeeDetails)
+    // private readonly employeeDetailsRepository: Repository<EmployeeDetails>,
     private readonly masterHolidayService: MasterHolidayService,
     private readonly blockerService: TimesheetBlockerService,
     @InjectRepository(EmployeeDetails)
@@ -469,13 +477,13 @@ export class EmployeeAttendanceService {
     const totalMonthlyHours = monthRecords.reduce((acc, curr) => acc + (curr.totalHours || 0), 0);
 
     // 3. Pending Updates
-    // Only count until yesterday or end of month if it's past
+    // Count until today inclusive (if current month) or end of month (if past month)
     const checkEndDate = new Date(today);
-    checkEndDate.setDate(today.getDate() - 1); // Yesterday
     checkEndDate.setHours(23, 59, 59, 999);
     
-    // If we are looking at a past month, check until end of that month.
-    // If current month, check until yesterday.
+    // Determine the boundary for checking pending updates:
+    // If we are looking at a past month, check until the end of that month.
+    // If current month, check until today.
     let pendingLimitDate = checkEndDate;
     if (monthEnd < pendingLimitDate) {
         pendingLimitDate = monthEnd;
@@ -560,13 +568,163 @@ export class EmployeeAttendanceService {
         loopDate.setDate(loopDate.getDate() + 1);
     }
 
+    const isFutureMonth = monthStart.getTime() > today.getTime();
+
     return {
       totalWeekHours: parseFloat(totalWeekHours.toFixed(2)),
       totalMonthlyHours: parseFloat(totalMonthlyHours.toFixed(2)),
       pendingUpdates,
+      monthStatus: (!isFutureMonth && pendingUpdates === 0) ? 'Completed' : 'Pending',
     };
   }
 
+  async getAllDashboardStats(queryMonth?: string, queryYear?: string) {
+    const today = new Date();
+    const currentMonth = queryMonth ? parseInt(queryMonth) : today.getMonth() + 1;
+    const currentYear = queryYear ? parseInt(queryYear) : today.getFullYear();
+    
+    // Range calculations
+    const dayOfWeek = today.getDay(); 
+    const diffToMonday = today.getDate() - dayOfWeek + (dayOfWeek === 0 ? -6 : 1);
+    const weekStart = new Date(today);
+    weekStart.setDate(diffToMonday);
+    weekStart.setHours(0, 0, 0, 0);
+
+    const weekEnd = new Date(weekStart);
+    weekEnd.setDate(weekStart.getDate() + 6);
+    weekEnd.setHours(23, 59, 59, 999);
+
+    const monthStart = new Date(currentYear, currentMonth - 1, 1);
+    const monthEnd = new Date(currentYear, currentMonth, 0, 23, 59, 59, 999);
+
+    const fetchStart = weekStart < monthStart ? new Date(weekStart) : new Date(monthStart);
+    const fetchEnd = weekEnd > monthEnd ? new Date(weekEnd) : new Date(monthEnd);
+
+    // Pending limit date logic
+    const checkEndDate = new Date(today);
+    checkEndDate.setHours(23, 59, 59, 999);
+    let pendingLimitDate = checkEndDate;
+    if (monthEnd < pendingLimitDate) {
+        pendingLimitDate = monthEnd;
+    }
+
+    // 1. Fetch all employees
+    const employees = await this.employeeDetailsRepository.find({
+      select: ['employeeId', 'fullName']
+    });
+
+    // 2. Fetch all attendance for the range
+    const allRecords = await this.employeeAttendanceRepository.find({
+      where: {
+        workingDate: Between(fetchStart, fetchEnd),
+      },
+    });
+
+    // Group records by employeeId
+    const attendanceByEmployee = new Map<string, any[]>();
+    allRecords.forEach(r => {
+      let list = attendanceByEmployee.get(r.employeeId);
+      if (!list) {
+        list = [];
+        attendanceByEmployee.set(r.employeeId, list);
+      }
+      list.push(r);
+    });
+
+    // 3. Fetch all approved leaves for the month for ALL employees
+    const allApprovedLeaves = await this.leaveRequestRepository.find({
+      where: {
+        status: 'Approved',
+        fromDate: LessThanOrEqual(monthEnd.toISOString().split('T')[0]),
+        toDate: MoreThanOrEqual(monthStart.toISOString().split('T')[0])
+      }
+    });
+
+    const leavesByEmployee = new Map<string, any[]>();
+    allApprovedLeaves.forEach(l => {
+        let list = leavesByEmployee.get(l.employeeId);
+        if (!list) {
+          list = [];
+          leavesByEmployee.set(l.employeeId, list);
+        }
+        list.push(l);
+    });
+
+    // 4. Global holidays
+    const yearHolidays = await this.masterHolidayService.findAll();
+    const toLocalYMD = (dateInput: Date | string) => {
+        const date = new Date(dateInput);
+        const y = date.getFullYear();
+        const m = String(date.getMonth() + 1).padStart(2, '0');
+        const d = String(date.getDate()).padStart(2, '0');
+        return `${y}-${m}-${d}`;
+    };
+    const holidayDates = new Set(yearHolidays.map(h => toLocalYMD(h.date || (h as any).holidayDate)));
+
+    const results = {};
+    const isFutureMonth = monthStart.getTime() > today.getTime();
+
+    for (const emp of employees) {
+        const empId = emp.employeeId;
+        const empRecords = attendanceByEmployee.get(empId) || [];
+        const empLeaves = leavesByEmployee.get(empId) || [];
+
+        // Week Hours
+        const totalWeekHours = empRecords
+            .filter(r => {
+                const d = new Date(r.workingDate);
+                return d >= weekStart && d <= weekEnd;
+            })
+            .reduce((acc, curr) => acc + (curr.totalHours || 0), 0);
+
+        // Monthly Hours
+        const totalMonthlyHours = empRecords
+            .filter(r => {
+                const d = new Date(r.workingDate);
+                return d >= monthStart && d <= monthEnd;
+            })
+            .reduce((acc, curr) => acc + (curr.totalHours || 0), 0);
+
+        // Pending Updates
+        const existingAttendanceDates = new Set(
+            empRecords
+                .filter(r => {
+                    const d = new Date(r.workingDate);
+                    return d >= monthStart && d <= monthEnd;
+                })
+                .map(r => toLocalYMD(r.workingDate))
+        );
+
+        let pendingUpdates = 0;
+        let loopDate = new Date(monthStart);
+        while (loopDate <= pendingLimitDate) {
+            if (loopDate > today) break;
+            const dateStr = toLocalYMD(loopDate);
+            
+            const isWeekend = this.masterHolidayService.isWeekend(loopDate);
+            const isHoliday = holidayDates.has(dateStr);
+            const hasAttendance = existingAttendanceDates.has(dateStr);
+            const hasLeave = empLeaves.some(l => {
+                 const lStartStr = toLocalYMD(l.fromDate);
+                 const lEndStr = toLocalYMD(l.toDate);
+                 return dateStr >= lStartStr && dateStr <= lEndStr;
+            });
+
+            if (!isWeekend && !isHoliday && !hasAttendance && !hasLeave) {
+                pendingUpdates++;
+            }
+            loopDate.setDate(loopDate.getDate() + 1);
+        }
+
+        results[empId] = {
+            totalWeekHours: parseFloat(totalWeekHours.toFixed(2)),
+            totalMonthlyHours: parseFloat(totalMonthlyHours.toFixed(2)),
+            pendingUpdates,
+            monthStatus: (!isFutureMonth && pendingUpdates === 0) ? 'Completed' : 'Pending',
+        };
+    }
+    return results;
+  }
   async generateMonthlyReport(month: number, year: number): Promise<Buffer> {
     // 1. Fetch all active employees, sorted by Name
     const employees = await this.employeeDetailsRepository.find({

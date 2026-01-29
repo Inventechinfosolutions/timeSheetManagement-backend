@@ -87,6 +87,17 @@ export class EmployeeAttendanceController {
     return this.employeeAttendanceService.findAll();
   }
 
+  @Get('all-dashboard-stats')
+  @ApiOperation({ summary: 'Get dashboard statistics for all employees' })
+  @ApiQuery({ name: 'month', type: String, required: false })
+  @ApiQuery({ name: 'year', type: String, required: false })
+  async getAllDashboardStats(
+    @Query('month') month?: string,
+    @Query('year') year?: string,
+  ) {
+    return this.employeeAttendanceService.getAllDashboardStats(month, year);
+  }
+
   @Get(':id')
   @ApiOperation({ summary: 'Get a single employee attendance record by ID' })
   @ApiResponse({
@@ -173,11 +184,16 @@ export class EmployeeAttendanceController {
   @Get('dashboard-stats/:employeeId')
   @ApiOperation({ summary: 'Get dashboard statistics (hours, pending updates)' })
   @ApiParam({ name: 'employeeId', type: String })
+  @ApiQuery({ name: 'month', type: String, required: false })
+  @ApiQuery({ name: 'year', type: String, required: false })
   async getDashboardStats(
     @Param('employeeId') employeeId: string,
+    @Query('month') month?: string,
+    @Query('year') year?: string,
   ) {
-    return this.employeeAttendanceService.getDashboardStats(employeeId);
+    return this.employeeAttendanceService.getDashboardStats(employeeId, month, year);
   }
+
 
   @UseGuards(JwtAuthGuard)
   @Put(':id')
