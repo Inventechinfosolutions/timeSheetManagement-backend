@@ -274,6 +274,12 @@ export class EmployeeDetailsService {
       );
       const employee = await this.getEmployeeById(id);
 
+      // Store original values for comparison
+      const originalEmployeeId = employee.employeeId;
+      const originalEmail = employee.email;
+      const updatedEmployeeId = updateData.employeeId || originalEmployeeId;
+      const updatedEmail = updateData.email || originalEmail;
+
       // Check for duplicate Employee ID if it's being updated
       if (
         updateData.employeeId &&
@@ -313,6 +319,140 @@ export class EmployeeDetailsService {
       const { confirmPassword, ...updateFields } = updateData;
       Object.assign(employee, updateFields);
       const result = await this.employeeDetailsRepository.save(employee);
+
+      // Check if employeeId or email changed - if so, handle activation link
+      const employeeIdChanged = updatedEmployeeId !== originalEmployeeId;
+      const emailChanged = updatedEmail !== originalEmail;
+
+      if (employeeIdChanged || emailChanged) {
+        this.logger.log(
+          `Employee ID or Email changed. EmployeeId: ${employeeIdChanged}, Email: ${emailChanged}. Processing activation link.`
+        );
+
+        // Fetch user details using the original employeeId (try both exact and lowercase for compatibility)
+        let user = await this.userRepository.findOne({
+          where: { loginId: originalEmployeeId },
+        });
+        if (!user) {
+          user = await this.userRepository.findOne({
+            where: { loginId: originalEmployeeId.toLowerCase() },
+          });
+        }
+
+        if (user) {
+          // Check if user.loginId matches the updated employeeId (case-insensitive comparison)
+          const userLoginIdMatches = user.loginId.toLowerCase() === updatedEmployeeId.toLowerCase();
+          
+          if (userLoginIdMatches && user.loginId === updatedEmployeeId) {
+            // Case 1: User loginId exactly matches updated employeeId (case-sensitive)
+            // Send activation link with updated employeeId and new password
+            this.logger.log(
+              `User loginId matches updated employeeId. Sending activation link with new password.`
+            );
+            try {
+              const activationInfo = await this.employeeLinkService.generateActivationLink(updatedEmployeeId);
+              
+              // generateActivationLink updates both employee and user passwords
+              // Reload employee to get the new password and verify user is synced
+              const updatedEmployee = await this.employeeDetailsRepository.findOne({
+                where: { employeeId: updatedEmployeeId },
+              });
+              const updatedUser = await this.userRepository.findOne({
+                where: { loginId: updatedEmployeeId },
+              });
+              
+              // Ensure user password matches employee password
+              if (updatedEmployee && updatedUser && updatedEmployee.password !== updatedUser.password) {
+                updatedUser.password = updatedEmployee.password;
+                updatedUser.resetRequired = true; // Set resetRequired to true so user must change password
+                await this.userRepository.save(updatedUser);
+                this.logger.log(`User password synchronized and resetRequired set to true after activation link generation`);
+              } else if (updatedUser) {
+                // Even if passwords match, ensure resetRequired is true when new password is generated
+                updatedUser.resetRequired = true;
+                await this.userRepository.save(updatedUser);
+                this.logger.log(`ResetRequired set to true for user: ${updatedEmployeeId}`);
+              }
+              
+              this.logger.log(`Activation link sent to updated email: ${updatedEmail}`);
+            } catch (linkError) {
+              this.logger.warn(
+                `Failed to send activation link: ${linkError.message}`
+              );
+            }
+          } else {
+            // Case 2: EmployeeId changed or case mismatch - update user.loginId to match exactly
+            // Update user table with new employeeId as loginId (preserve case)
+            // Then send activation link with updated employeeId to updated email
+            this.logger.log(
+              `EmployeeId changed or case mismatch. Updating user loginId from ${user.loginId} to ${updatedEmployeeId}`
+            );
+
+            // Update user loginId to new employeeId (preserve exact case)
+            user.loginId = updatedEmployeeId;
+            await this.userRepository.save(user);
+
+            // Send activation link (will generate new password and update both employee and user tables)
+            try {
+              const activationInfo = await this.employeeLinkService.generateActivationLink(updatedEmployeeId);
+              
+              // generateActivationLink updates both employee and user passwords
+              // Reload both to verify they're in sync
+              const updatedEmployee = await this.employeeDetailsRepository.findOne({
+                where: { employeeId: updatedEmployeeId },
+              });
+              const updatedUser = await this.userRepository.findOne({
+                where: { loginId: updatedEmployeeId },
+              });
+              
+              // Ensure user password matches employee password
+              if (updatedEmployee && updatedUser && updatedEmployee.password !== updatedUser.password) {
+                updatedUser.password = updatedEmployee.password;
+                updatedUser.resetRequired = true; // Set resetRequired to true so user must change password
+                await this.userRepository.save(updatedUser);
+                this.logger.log(`User password synchronized and resetRequired set to true after employeeId change and activation link generation`);
+              } else if (updatedUser) {
+                // Even if passwords match, ensure resetRequired is true when new password is generated
+                updatedUser.resetRequired = true;
+                await this.userRepository.save(updatedUser);
+                this.logger.log(`ResetRequired set to true for user: ${updatedEmployeeId}`);
+              }
+              
+              this.logger.log(`Activation link sent to updated email: ${updatedEmail}`);
+            } catch (linkError) {
+              this.logger.warn(
+                `Failed to send activation link: ${linkError.message}`
+              );
+            }
+          }
+        } else {
+          // User doesn't exist - create user and send activation link
+          this.logger.log(
+            `User not found for employeeId: ${originalEmployeeId}. Creating user and sending activation link.`
+          );
+          try {
+            // Create user if it doesn't exist (preserve exact case of employeeId)
+            const newUser = this.userRepository.create({
+              loginId: updatedEmployeeId, // Preserve exact case
+              aliasLoginName: result.fullName,
+              password: result.password || 'Initial@123',
+              userType: UserType.EMPLOYEE,
+              status: UserStatus.DRAFT,
+              resetRequired: true,
+            });
+            await this.userRepository.save(newUser);
+
+            // Send activation link
+            await this.employeeLinkService.generateActivationLink(updatedEmployeeId);
+            this.logger.log(`Activation link sent to updated email: ${updatedEmail}`);
+          } catch (linkError) {
+            this.logger.warn(
+              `Failed to create user or send activation link: ${linkError.message}`
+            );
+          }
+        }
+      }
+
       this.logger.log(`Employee ${id} updated successfully`);
       return result;
     } catch (error) {

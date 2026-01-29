@@ -8,10 +8,8 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Between, Repository } from 'typeorm';
-import {
-  EmployeeAttendance,
-  AttendanceStatus,
-} from '../entities/employeeAttendance.entity';
+import { EmployeeAttendance } from '../entities/employeeAttendance.entity';
+import { AttendanceStatus } from '../enums/attendance-status.enum';
 import { LeaveRequest } from '../entities/leave-request.entity';
 import { EmployeeAttendanceDto } from '../dto/employeeAttendance.dto';
 import { MasterHolidayService } from '../../master/service/master-holiday.service';
@@ -611,7 +609,10 @@ export class EmployeeAttendanceService {
         attendanceMap.set(record.employeeId, new Map());
       }
       const dateKey = new Date(record.workingDate).toISOString().split('T')[0];
-      attendanceMap.get(record.employeeId)!.set(dateKey, record);
+      const empMap = attendanceMap.get(record.employeeId);
+      if (empMap) {
+        empMap.set(dateKey, record);
+      }
     });
 
     // 4. Create Workbook
@@ -758,9 +759,13 @@ export class EmployeeAttendanceService {
                     fontColor = '0000FF'; // Blue
                 } else {
                     // Fallback
-                    if ((record.totalHours || 0) >= 6) text = 'Present';
-                    else if ((record.totalHours || 0) > 0) text = 'Half day';
-                    else text = 'Leave';
+                    if (record.totalHours !== null && record.totalHours !== undefined) {
+                        if (record.totalHours >= 6) text = 'Present';
+                        else if (record.totalHours > 0) text = 'Half day Leave';
+                        else text = 'Leave';
+                    } else {
+                        text = 'Leave';
+                    }
                 }
                 
                 cell.value = text;
@@ -812,6 +817,6 @@ export class EmployeeAttendanceService {
     sheet.getColumn(1).width = 25; // Name column wider
 
     const buffer = await workbook.xlsx.writeBuffer();
-    return buffer as unknown as Buffer;
+    return Buffer.from(buffer);
   }
 }
