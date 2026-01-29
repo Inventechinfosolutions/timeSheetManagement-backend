@@ -7,9 +7,7 @@ import {
   IsOptional,
   IsString,
 } from 'class-validator';
-import {
-  AttendanceStatus,
-} from '../entities/employeeAttendance.entity';
+import { AttendanceStatus } from '../enums/attendance-status.enum';
 
 export class EmployeeAttendanceDto {
   @IsNumber()

@@ -1,14 +1,5 @@
 import { Entity, Column, PrimaryGeneratedColumn, CreateDateColumn, UpdateDateColumn } from 'typeorm';
-
-export enum AttendanceStatus {
-  FULL_DAY = 'Full Day',
-  HALF_DAY = 'Half Day',
-  LEAVE = 'Leave',
-  PENDING = 'Pending',
-  NOT_UPDATED = 'Not Updated',
-  WEEKEND = 'Weekend',
-  HOLIDAY = 'Holiday'
-}
+import { AttendanceStatus } from '../enums/attendance-status.enum';
 
 @Entity('employee_attendance')
 export class EmployeeAttendance {
