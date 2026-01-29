@@ -16,6 +16,8 @@ import { LeaveRequest } from '../entities/leave-request.entity';
 import { EmployeeAttendanceDto } from '../dto/employeeAttendance.dto';
 import { MasterHolidayService } from '../../master/service/master-holiday.service';
 import { TimesheetBlockerService } from './timesheetBlocker.service';
+import { EmployeeDetails } from '../entities/employeeDetails.entity';
+import * as ExcelJS from 'exceljs';
 
 @Injectable()
 export class EmployeeAttendanceService {
@@ -28,6 +30,8 @@ export class EmployeeAttendanceService {
     private readonly leaveRequestRepository: Repository<LeaveRequest>,
     private readonly masterHolidayService: MasterHolidayService,
     private readonly blockerService: TimesheetBlockerService,
+    @InjectRepository(EmployeeDetails)
+    private readonly employeeDetailsRepository: Repository<EmployeeDetails>,
   ) {}
 
   async create(createEmployeeAttendanceDto: EmployeeAttendanceDto, isAdmin: boolean = false): Promise<EmployeeAttendance | null> {
@@ -563,5 +567,251 @@ export class EmployeeAttendanceService {
       totalMonthlyHours: parseFloat(totalMonthlyHours.toFixed(2)),
       pendingUpdates,
     };
+  }
+
+  async generateMonthlyReport(month: number, year: number): Promise<Buffer> {
+    // 1. Fetch all active employees, sorted by Name
+    const employees = await this.employeeDetailsRepository.find({
+      where: { userStatus: 'ACTIVE' },
+      order: { fullName: 'ASC' },
+    });
+
+    // 2. Fetch all holidays and weekends (metadata)
+    const startDate = new Date(year, month - 1, 1);
+    const endDate = new Date(year, month, 0);
+    const daysInMonth = endDate.getDate();
+
+    const holidays = await this.masterHolidayService.findAll();
+    const holidayMap = new Map<string, string>(); // Date -> Name
+    holidays.forEach(h => {
+        const d = h.holidayDate || (h as any).date;
+        const dateObj = new Date(d);
+        const y = dateObj.getFullYear();
+        const m = String(dateObj.getMonth() + 1).padStart(2, '0');
+        const day = String(dateObj.getDate()).padStart(2, '0');
+        const key = `${y}-${m}-${day}`;
+        holidayMap.set(key, (h as any).name || 'Holiday');
+    });
+
+    // 3. Fetch all attendance for the month
+    const startStr = startDate.toISOString().split('T')[0];
+    const endStr = endDate.toISOString().split('T')[0];
+    
+    const allAttendance = await this.employeeAttendanceRepository.find({
+      where: {
+        workingDate: Between(new Date(startStr + 'T00:00:00'), new Date(endStr + 'T23:59:59'))
+      }
+    });
+
+    // Map attendance: EmployeeID -> DateString -> Record
+    const attendanceMap = new Map<string, Map<string, EmployeeAttendance>>();
+    
+    allAttendance.forEach(record => {
+      if (!attendanceMap.has(record.employeeId)) {
+        attendanceMap.set(record.employeeId, new Map());
+      }
+      const dateKey = new Date(record.workingDate).toISOString().split('T')[0];
+      attendanceMap.get(record.employeeId).set(dateKey, record);
+    });
+
+    // 4. Create Workbook
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet(`Attendance - ${month}-${year}`);
+
+    // --- Header Construction ---
+    // Row 1: Title
+    // Row 2: Date
+    // Row 3: Day Name
+
+    const headerFill: ExcelJS.Fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: '92D050' } // Light Green from screenshot
+    };
+    
+    const weekendFill: ExcelJS.Fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FF0000' } // Red
+    };
+
+    const yellowFill: ExcelJS.Fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FFFF00' } // Yellow
+    };
+
+    const blueFill: ExcelJS.Fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'ADD8E6' } // Light Blue
+    };
+    
+    // Construct columns
+    const columns = ['Name']; // First column
+    const dateHeaders = ['']; 
+    const dayHeaders = ['Name'];
+
+    const dateKeys: string[] = [];
+
+    for (let day = 1; day <= daysInMonth; day++) {
+        const dateObj = new Date(year, month - 1, day);
+        // Fix: Manual string construction to avoid UTC timezone shift
+        const y = year;
+        const m = String(month).padStart(2, '0');
+        const d = String(day).padStart(2, '0');
+        const dateKey = `${y}-${m}-${d}`;
+
+        dateKeys.push(dateKey);
+
+        const dayName = dateObj.toLocaleDateString('en-US', { weekday: 'long' });
+        const dayNum = `${day}-${dateObj.toLocaleDateString('en-US', { month: 'short' })}`; // e.g., 1-Jan
+
+        dateHeaders.push(dayNum);
+        dayHeaders.push(dayName);
+    }
+
+    // Add Header Rows
+    const titleRow = sheet.addRow([`ATTENDANCE - ${new Date(year, month - 1).toLocaleString('default', { month: 'long' })} ${year}`]);
+    sheet.mergeCells(1, 1, 1, daysInMonth + 1);
+    titleRow.getCell(1).alignment = { horizontal: 'center', vertical: 'middle' };
+    titleRow.getCell(1).font = { bold: true, size: 14 };
+    titleRow.getCell(1).fill = headerFill;
+
+    const dateRow = sheet.addRow(dateHeaders); // Row 2
+    // Style Date Row (Light Green)
+    dateRow.eachCell((cell, colNumber) => {
+         if (colNumber > 1) { // Skip "Name" column
+             cell.fill = headerFill; 
+             cell.alignment = { horizontal: 'center' };
+             cell.font = { bold: true };
+         }
+    });
+
+    const dayRow = sheet.addRow(dayHeaders); // Row 3
+    // Style Day Row
+    dayRow.eachCell((cell, colNumber) => {
+        if (colNumber === 1) {
+             cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFF00' } }; // Yellow for Name
+             cell.font = { bold: true };
+        } else {
+             // Check if weekend based on header text? Easier to check date logic again
+             const dayIndex = colNumber - 2; // array index
+             const dateObj = new Date(year, month - 1, dayIndex + 1);
+             // Fix manual key
+             const m = String(month).padStart(2, '0');
+             const d = String(dayIndex + 1).padStart(2, '0');
+             const dateKey = `${year}-${m}-${d}`;
+             
+             const isWeekend = dateObj.getDay() === 0 || dateObj.getDay() === 6; // Sun=0, Sat=6
+             const holidayName = holidayMap.get(dateKey);
+
+             if (holidayName) {
+                 cell.fill = blueFill; 
+                 cell.font = { color: { argb: '000000' } }; // Black Text
+             } else if (isWeekend) {
+                 cell.fill = weekendFill;
+                 cell.font = { color: { argb: 'FFFFFFFF' } }; // White Text
+             } else {
+                 cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFE0' } }; // Light yellow/white
+             }
+             cell.alignment = { horizontal: 'center' };
+        }
+    });
+
+
+    // --- Data Rows ---
+    for (const employee of employees) {
+        const rowValues = [employee.fullName];
+        const row = sheet.addRow(rowValues);
+        
+        // Loop through days
+        for (let i = 0; i < daysInMonth; i++) {
+            const dateKey = dateKeys[i];
+            const dateObj = new Date(dateKey);
+            const isWeekend = dateObj.getDay() === 0 || dateObj.getDay() === 6;
+            const holidayName = holidayMap.get(dateKey);
+            const isHoliday = !!holidayName;
+            
+            const cell = row.getCell(i + 2); // +2 because 1-based and 1st col is Name
+
+            const empAttendanceMap = attendanceMap.get(employee.employeeId);
+            const record = empAttendanceMap?.get(dateKey);
+
+            // PRIORITY 1: Record Exists (User filled timesheet)
+            if (record) {
+                let text = '';
+                let fontColor = '000000'; // Black
+                
+                if (record.status === AttendanceStatus.FULL_DAY) {
+                    text = 'Present';
+                } else if (record.status === AttendanceStatus.HALF_DAY) {
+                    text = 'Half day Leave';
+                    fontColor = 'FF4500'; // Orange-Red
+                } else if (record.status === AttendanceStatus.LEAVE) {
+                    text = 'Leave';
+                    fontColor = 'FF0000'; // Red
+                } else if (record.workLocation === 'WFH') {
+                    text = 'WFH';
+                } else if (record.workLocation === 'Client Visit') {
+                    text = 'Client Visit';
+                    fontColor = '0000FF'; // Blue
+                } else {
+                    // Fallback
+                    if (record.totalHours >= 6) text = 'Present';
+                    else if (record.totalHours > 0) text = 'Half day Leave';
+                    else text = 'Leave';
+                }
+                
+                cell.value = text;
+                cell.font = { color: { argb: fontColor } };
+                cell.alignment = { horizontal: 'center' };
+                continue; // Done for this cell
+            }
+
+            // PRIORITY 2: Holiday (Overrides Weekend/Not Updated if no record)
+            if (isHoliday) {
+                cell.value = holidayName;
+                cell.fill = blueFill;
+                cell.alignment = { horizontal: 'center', wrapText: true }; // Wrap text for long holiday names
+                cell.font = { size: 10 }; // Slightly smaller for names
+                continue;
+            }
+
+            // PRIORITY 3: Weekend
+            if (isWeekend) {
+                cell.fill = weekendFill;
+                cell.value = ''; // Or 'Week Off'
+                continue;
+            }
+
+            // PRIORITY 4: Future / Past Logic
+            const today = new Date().toISOString().split('T')[0];
+            
+            if (dateKey > today) {
+                // Future -> "Upcoming"
+                cell.value = 'Upcoming';
+                cell.font = { italic: true, color: { argb: '808080' } }; // Grey
+                cell.alignment = { horizontal: 'center' };
+            } else {
+                // Past/Today weekday with NO record -> "Not Updated"
+                // "we have time till month end to update till that it should show as not updates"
+                // This implies "Not Updated" logic. 
+                // Previously was "Leave" but user specifically asked for "not updates"
+                cell.value = 'Not Updated';
+                cell.fill = yellowFill; // Light Orange/Yellow
+                cell.alignment = { horizontal: 'center' };
+            }
+        }
+    }
+
+    // Auto-fit columns
+    sheet.columns.forEach(column => {
+        column.width = 15;
+    });
+    sheet.getColumn(1).width = 25; // Name column wider
+
+    const buffer = await workbook.xlsx.writeBuffer();
+    return buffer as Buffer;
   }
 }
