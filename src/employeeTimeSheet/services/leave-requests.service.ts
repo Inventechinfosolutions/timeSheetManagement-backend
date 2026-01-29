@@ -650,6 +650,64 @@ export class LeaveRequestsService {
       { isReadEmployee: true }
     );
   }
+
+  async findMonthlyRequests(month: string, year: string, employeeId?: string, page: number = 1, limit: number = 10) {
+    const monthInt = parseInt(month);
+    const yearInt = parseInt(year);
+    
+    const monthStart = `${year}-${month.padStart(2, '0')}-01`;
+    const lastDay = new Date(yearInt, monthInt, 0).getDate();
+    const monthEnd = `${year}-${month.padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+
+    const query = this.leaveRequestRepository.createQueryBuilder('lr')
+      .leftJoin(EmployeeDetails, 'ed', 'ed.employeeId = lr.employeeId')
+      .select([
+        'lr.id AS id',
+        'lr.employeeId AS employeeId',
+        'lr.requestType AS requestType',
+        'lr.fromDate AS fromDate',
+        'lr.toDate AS toDate',
+        'lr.title AS title',
+        'lr.description AS description',
+        'lr.status AS status',
+        'lr.isRead AS isRead',
+        'lr.submittedDate AS submittedDate',
+        'lr.duration AS duration',
+        'lr.createdAt AS createdAt',
+        'ed.department AS department',
+        'ed.fullName AS fullName'
+      ]);
+
+    // Overlap condition: fromDate <= monthEnd AND toDate >= monthStart
+    query.where('lr.fromDate <= :monthEnd', { monthEnd })
+         .andWhere('lr.toDate >= :monthStart', { monthStart });
+
+    if (employeeId) {
+      query.andWhere('lr.employeeId = :employeeId', { employeeId });
+    }
+
+    const total = await query.getCount();
+
+    const data = await query
+      .addSelect(`CASE 
+        WHEN lr.status = 'Pending' THEN 1 
+        WHEN lr.status = 'Approved' THEN 2 
+        ELSE 3 
+      END`, 'priority')
+      .orderBy('priority', 'ASC')
+      .addOrderBy('lr.id', 'DESC')
+      .offset((page - 1) * limit)
+      .limit(limit)
+      .getRawMany();
+
+    return {
+      data,
+      total,
+      page: Number(page),
+      limit: Number(limit),
+      totalPages: Math.ceil(total / limit),
+    };
+  }
 }
 
 
