@@ -901,14 +901,9 @@ export class EmployeeAttendanceService {
 
     // --- Data Rows ---
     for (const employee of employees) {
-        // Initialize row with name and empty cells for all days
+        // Initialize row with name first
         const employeeName = employee.fullName || employee.employeeId || 'Unknown';
-        const rowData: any[] = [employeeName];
-        // Pre-populate with empty strings to ensure all cells exist
-        for (let i = 0; i < daysInMonth; i++) {
-            rowData.push('');
-        }
-        const row = sheet.addRow(rowData);
+        const row = sheet.addRow([employeeName]);
         
         // Style the name cell (column 1)
         const nameCell = row.getCell(1);
@@ -930,46 +925,7 @@ export class EmployeeAttendanceService {
             const empAttendanceMap = attendanceMap.get(employee.employeeId);
             const record = empAttendanceMap?.get(dateKey);
 
-            // PRIORITY 1: Weekend - Always red background, even if attendance is submitted
-            if (isWeekend) {
-                cell.fill = weekendFill;
-                
-                // If there's attendance record, show the attendance text in white
-                if (record) {
-                    let text = '';
-                    
-                    if (record.status === AttendanceStatus.FULL_DAY) {
-                        text = 'Present';
-                    } else if (record.status === AttendanceStatus.HALF_DAY) {
-                        text = 'Half day';
-                    } else if (record.status === AttendanceStatus.LEAVE) {
-                        text = 'Leave';
-                    } else if (record.workLocation === 'WFH') {
-                        text = 'WFH';
-                    } else if (record.workLocation === 'Client Visit') {
-                        text = 'Client Visit';
-                    } else {
-                        // Fallback
-                        if (record.totalHours !== null && record.totalHours !== undefined) {
-                            if (record.totalHours >= 6) text = 'Present';
-                            else if (record.totalHours > 0) text = 'Half day';
-                            else text = 'Leave';
-                        } else {
-                            text = 'Weekend';
-                        }
-                    }
-                    
-                    cell.value = text;
-                    cell.font = { color: { argb: 'FFFFFFFF' } }; // White text for visibility on red
-                } else {
-                    // No attendance record, just show empty or "Weekend"
-                    cell.value = '';
-                }
-                cell.alignment = { horizontal: 'center' };
-                continue; // Done for this cell
-            }
-
-            // PRIORITY 2: Holiday (Overrides Not Updated if no record)
+            // PRIORITY 1: Holiday (Check first, overrides everything)
             if (isHoliday) {
                 cell.value = holidayName;
                 cell.fill = blueFill;
@@ -978,12 +934,53 @@ export class EmployeeAttendanceService {
                 continue;
             }
 
+            // PRIORITY 2: Weekend - Always red background
+            if (isWeekend) {
+                cell.fill = weekendFill;
+                
+                // Only show text if they applied Client Visit or WFH AND entered time
+                if (record) {
+                    // Check if they entered time (has hours or status)
+                    const hasTime = (record.totalHours !== null && record.totalHours !== undefined && record.totalHours > 0) ||
+                                   (record.status && record.status !== AttendanceStatus.NOT_UPDATED);
+                    
+                    if (hasTime) {
+                        // Only show if it's Client Visit or WFH
+                        if (record.workLocation === 'Client Visit') {
+                            cell.value = 'Client Visit';
+                            cell.font = { color: { argb: 'FFFFFFFF' } }; // White text for visibility on red
+                        } else if (record.workLocation === 'WFH') {
+                            cell.value = 'WFH';
+                            cell.font = { color: { argb: 'FFFFFFFF' } }; // White text for visibility on red
+                        } else {
+                            // Has time but not Client Visit or WFH - leave empty
+                            cell.value = '';
+                        }
+                    } else {
+                        // No time entered - leave empty
+                        cell.value = '';
+                    }
+                } else {
+                    // No attendance record - leave empty
+                    cell.value = '';
+                }
+                cell.alignment = { horizontal: 'center' };
+                continue; // Done for this cell
+            }
+
             // PRIORITY 3: Record Exists (User filled timesheet) - for weekdays only
             if (record) {
                 let text = '';
                 let fontColor = '000000'; // Black
                 
-                if (record.status === AttendanceStatus.FULL_DAY) {
+                // Priority: Client Visit > WFH > Status
+                if (record.workLocation === 'Client Visit') {
+                    text = 'Client Visit';
+                    fontColor = '000000'; // Black
+                } else if (record.workLocation === 'WFH') {
+                    text = 'WFH';
+                    fontColor = '000000'; // Black
+                } else if (record.status === AttendanceStatus.FULL_DAY) {
                     text = 'Present';
                 } else if (record.status === AttendanceStatus.HALF_DAY) {
                     text = 'Half day';
@@ -991,11 +988,6 @@ export class EmployeeAttendanceService {
                 } else if (record.status === AttendanceStatus.LEAVE) {
                     text = 'Leave';
                     fontColor = 'FF0000'; // Red
-                } else if (record.workLocation === 'WFH') {
-                    text = 'WFH';
-                } else if (record.workLocation === 'Client Visit') {
-                    text = 'Client Visit';
-                    fontColor = '0000FF'; // Blue
                 } else {
                     // Fallback
                     if (record.totalHours !== null && record.totalHours !== undefined) {
@@ -1003,7 +995,7 @@ export class EmployeeAttendanceService {
                         else if (record.totalHours > 0) text = 'Half day Leave';
                         else text = 'Leave';
                     } else {
-                        text = 'Leave';
+                        text = 'Present'; // Default to Present if no status
                     }
                 }
                 
@@ -1013,7 +1005,7 @@ export class EmployeeAttendanceService {
                 continue; // Done for this cell
             }
 
-            // PRIORITY 4: Future / Past Logic
+            // PRIORITY 4: Future / Past Logic - for weekdays with no record
             const today = new Date().toISOString().split('T')[0];
             
             if (dateKey > today) {
@@ -1022,12 +1014,9 @@ export class EmployeeAttendanceService {
                 cell.font = { italic: true, color: { argb: '808080' } }; // Grey
                 cell.alignment = { horizontal: 'center' };
             } else {
-                // Past/Today weekday with NO record -> "Not Updated"
-                // "we have time till month end to update till that it should show as not updates"
-                // This implies "Not Updated" logic. 
-                // Previously was "Leave" but user specifically asked for "not updates"
-                cell.value = 'Not Updated';
-                cell.fill = yellowFill; // Light Orange/Yellow
+                // Past/Today weekday with NO record -> Show "Present" as default
+                cell.value = 'Present';
+                cell.font = { color: { argb: '000000' } }; // Black
                 cell.alignment = { horizontal: 'center' };
             }
         }
