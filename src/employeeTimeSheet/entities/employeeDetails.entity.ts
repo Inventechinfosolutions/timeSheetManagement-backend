@@ -1,7 +1,10 @@
-import { Entity, Column, PrimaryGeneratedColumn } from 'typeorm';
+import { Entity, Column, PrimaryGeneratedColumn, Index } from 'typeorm';
 import { BaseEntity } from '../../common/core/models/base.entity';
 
 @Entity('employee_details')
+@Index('IDX_EMPLOYEE_DETAILS_DEPARTMENT', ['department'])
+@Index('IDX_EMPLOYEE_DETAILS_USER_STATUS', ['userStatus'])
+@Index('IDX_EMPLOYEE_DETAILS_EMPLOYEE_ID', ['employeeId'])
 export class EmployeeDetails extends BaseEntity {
   @PrimaryGeneratedColumn()
   id: number;

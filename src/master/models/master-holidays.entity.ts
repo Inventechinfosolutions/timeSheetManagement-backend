@@ -1,7 +1,8 @@
-import { Entity, PrimaryGeneratedColumn, Column } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, Index } from 'typeorm';
 import { BaseEntity } from '../../common/core/models/base.entity';
 
 @Entity('master_holidays')
+@Index('IDX_MASTER_HOLIDAYS_DATE', ['date'], { unique: true })
 export class MasterHolidays extends BaseEntity {
   @PrimaryGeneratedColumn()
   id: number;

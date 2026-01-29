@@ -1,4 +1,4 @@
-import { Entity, Column, PrimaryGeneratedColumn, CreateDateColumn, UpdateDateColumn } from 'typeorm';
+import { Entity, Column, PrimaryGeneratedColumn, CreateDateColumn, UpdateDateColumn, Index } from 'typeorm';
 
 export enum AttendanceStatus {
   FULL_DAY = 'Full Day',
@@ -11,6 +11,10 @@ export enum AttendanceStatus {
 }
 
 @Entity('employee_attendance')
+@Index('IDX_EMPLOYEE_ATTENDANCE_EMPLOYEE_ID', ['employeeId'])
+@Index('IDX_EMPLOYEE_ATTENDANCE_WORKING_DATE', ['workingDate'])
+@Index('IDX_EMPLOYEE_ATTENDANCE_EMPLOYEE_DATE', ['employeeId', 'workingDate'])
+@Index('IDX_EMPLOYEE_ATTENDANCE_STATUS', ['status'])
 export class EmployeeAttendance {
   @PrimaryGeneratedColumn()
   id: number;

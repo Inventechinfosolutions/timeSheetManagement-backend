@@ -1,7 +1,13 @@
-import { Entity, Column, PrimaryGeneratedColumn, CreateDateColumn } from 'typeorm';
+import { Entity, Column, PrimaryGeneratedColumn, CreateDateColumn, Index } from 'typeorm';
 import { BaseEntity } from '../../common/core/models/base.entity';
 
 @Entity('leave_requests')
+@Index('IDX_LEAVE_REQUEST_EMPLOYEE_ID', ['employeeId'])
+@Index('IDX_LEAVE_REQUEST_STATUS', ['status'])
+@Index('IDX_LEAVE_REQUEST_EMPLOYEE_STATUS', ['employeeId', 'status'])
+@Index('IDX_LEAVE_REQUEST_FROM_DATE', ['fromDate'])
+@Index('IDX_LEAVE_REQUEST_TO_DATE', ['toDate'])
+@Index('IDX_LEAVE_REQUEST_IS_READ', ['isRead'])
 export class LeaveRequest extends BaseEntity {
   @PrimaryGeneratedColumn()
   id: number;

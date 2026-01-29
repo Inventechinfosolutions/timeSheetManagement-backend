@@ -1,7 +1,11 @@
-import { Entity, Column, PrimaryGeneratedColumn, CreateDateColumn } from 'typeorm';
+import { Entity, Column, PrimaryGeneratedColumn, CreateDateColumn, Index } from 'typeorm';
 import { BaseEntity } from 'src/common/entities/base.entity';
 
 @Entity('timesheet_blocker')
+@Index('IDX_TIMESHEET_BLOCKER_EMPLOYEE_ID', ['employeeId'])
+@Index('IDX_TIMESHEET_BLOCKER_BLOCKED_FROM', ['blockedFrom'])
+@Index('IDX_TIMESHEET_BLOCKER_BLOCKED_TO', ['blockedTo'])
+@Index('IDX_TIMESHEET_BLOCKER_EMPLOYEE_DATES', ['employeeId', 'blockedFrom', 'blockedTo'])
 export class TimesheetBlocker extends BaseEntity {
   @PrimaryGeneratedColumn()
   id: number;
