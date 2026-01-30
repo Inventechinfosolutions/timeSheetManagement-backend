@@ -981,31 +981,35 @@ export class EmployeeAttendanceService {
                 let text = '';
                 let fontColor = '000000'; // Black
                 
-                // Priority: Client Visit > WFH > Status
-                if (record.workLocation === 'Client Visit') {
+                // 1. Check specific statuses first (Leave, Half Day, Absent)
+                if (record.status === AttendanceStatus.ABSENT) {
+                    text = 'Absent';
+                    fontColor = '8B0000'; // Dark Red
+                } else if (record.status === AttendanceStatus.LEAVE) {
+                    text = 'Leave';
+                    fontColor = 'FF6666'; // Light Red (User asked for light red)
+                } else if (record.status === AttendanceStatus.HALF_DAY) {
+                    text = 'Half day';
+                    fontColor = 'FFA500'; // Orange
+                } 
+                // 2. Then check Work Location (Client Visit / WFH)
+                else if (record.workLocation === 'Client Visit') {
                     text = 'Client Visit';
                     fontColor = '0000FF'; // Blue
                 } else if (record.workLocation === 'WFH') {
                     text = 'WFH';
                     fontColor = '000000'; 
-                } else if (record.status === AttendanceStatus.FULL_DAY) {
+                } 
+                // 3. Finally standard Present
+                else if (record.status === AttendanceStatus.FULL_DAY) {
                     text = 'Present';
-                } else if (record.status === AttendanceStatus.HALF_DAY) {
-                    text = 'Half day';
-                    fontColor = 'FF4500'; // Orange-Red
-                } else if (record.status === AttendanceStatus.LEAVE) {
-                    text = 'Leave';
-                    fontColor = 'FF0000'; // Red
                 } else {
                     // Fallback
                     if (record.totalHours !== null && record.totalHours !== undefined) {
                         if (record.totalHours >= 6) text = 'Present';
-                        else if (record.totalHours > 0) text = 'Half day Leave';
-                        else text = 'Leave';
+                        else if (record.totalHours > 0) text = 'Half day';
+                        else text = 'Absent'; // 0 hours fallback to Absent now logic
                     } else {
-                        // User said if 0 hours/missing -> show Weekend (handled above for Sat). 
-                        // For weekday, defaults to Present if no specific status but record exists?
-                        // Let's keep existing logic: default Present if generic record exists without Hours info
                         text = 'Present'; 
                     }
                 }
