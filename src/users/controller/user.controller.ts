@@ -11,6 +11,7 @@ import {
   HttpException,
   Logger,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { UsersService } from '../service/user.service';
 import { ChangePasswordDto } from '../dto/change-password.dto';
 import { CreateUserDto } from '../dto/create-user.dto';
@@ -34,7 +35,10 @@ import {
 export class UsersController {
   private logger = new Logger('UsersController');
 
-  constructor(private readonly usersService: UsersService) {}
+  constructor(
+    private readonly usersService: UsersService,
+    private readonly configService: ConfigService,
+  ) {}
 
   @Post('create')
   @ApiOperation({ summary: 'Create new user' })
@@ -60,10 +64,16 @@ export class UsersController {
   async login(@Body() userLoginDto: UserLoginDto, @Res() res): Promise<any> {
     const response = await this.usersService.login(userLoginDto);
 
+    const nodeEnv = this.configService.get<string>('NODE_ENV', 'development');
+    const isProduction = nodeEnv === 'production';
+    const cookieMaxAge = this.configService.get<number>('COOKIE_MAX_AGE', 7 * 24 * 60 * 60 * 1000); // Default 7 days
+
     res.cookie('refreshToken', response.refreshToken, {
       httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'strict',
+      secure: isProduction,
+      sameSite: isProduction ? 'strict' : 'lax',
+      maxAge: cookieMaxAge,
+      path: '/',
     });
 
     return res.json({
@@ -90,10 +100,16 @@ export class UsersController {
       }
       const response = await this.usersService.me(refreshToken);
 
+      const nodeEnv = this.configService.get<string>('NODE_ENV', 'development');
+      const isProduction = nodeEnv === 'production';
+      const cookieMaxAge = this.configService.get<number>('COOKIE_MAX_AGE', 7 * 24 * 60 * 60 * 1000); // Default 7 days
+
       res.cookie('refreshToken', response.refreshToken, {
         httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'strict',
+        secure: isProduction,
+        sameSite: isProduction ? 'strict' : 'lax',
+        maxAge: cookieMaxAge,
+        path: '/',
       });
 
       // Remove sensitive info before returning
@@ -118,17 +134,22 @@ export class UsersController {
   })
   async userLogout(@Req() req: any, @Res() res: any): Promise<any> {
     try {
+      const nodeEnv = this.configService.get<string>('NODE_ENV', 'development');
+      const isProduction = nodeEnv === 'production';
+      
       res.cookie('refreshToken', '', {
         httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'strict',
+        secure: isProduction,
+        sameSite: isProduction ? 'strict' : 'lax',
         maxAge: 0,
+        path: '/',
       });
       res.cookie('accessToken', '', {
         httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'strict',
+        secure: isProduction,
+        sameSite: isProduction ? 'strict' : 'lax',
         maxAge: 0,
+        path: '/',
       });
 
       return res.json({ success: true });

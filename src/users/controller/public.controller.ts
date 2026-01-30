@@ -11,6 +11,7 @@ import {
   Req,
   Res,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import {
   ApiBadRequestResponse,
   ApiInternalServerErrorResponse,
@@ -34,6 +35,7 @@ export class PublicController {
 
   constructor(
     private readonly publicService: PublicService,
+    private readonly configService: ConfigService,
   ) {}
 
   @Post('login')
@@ -50,10 +52,16 @@ export class PublicController {
       this.logger.log(`Login attempt for user: ${userDetails.loginId}`);
       const response: LoginResponse = await this.publicService.login(userDetails);
 
+      const nodeEnv = this.configService.get<string>('NODE_ENV', 'development');
+      const isProduction = nodeEnv === 'production';
+      const cookieMaxAge = this.configService.get<number>('COOKIE_MAX_AGE', 7 * 24 * 60 * 60 * 1000); // Default 7 days
+
       res.cookie('refreshToken', response.refreshToken, {
         httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'strict',
+        secure: isProduction,
+        sameSite: isProduction ? 'strict' : 'lax',
+        maxAge: cookieMaxAge,
+        path: '/',
       });
 
       const { accessToken, userId, name, email, resetRequired, status } = response;
@@ -85,10 +93,16 @@ export class PublicController {
       this.logger.log(`Verifying activation for employee link`);
       const result = await this.publicService.verifyAndActivateEmployee(token);
 
+      const nodeEnv = this.configService.get<string>('NODE_ENV', 'development');
+      const isProduction = nodeEnv === 'production';
+      const cookieMaxAge = this.configService.get<number>('COOKIE_MAX_AGE', 7 * 24 * 60 * 60 * 1000); // Default 7 days
+
       res.cookie('refreshToken', result.refreshToken, {
         httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'strict',
+        secure: isProduction,
+        sameSite: isProduction ? 'strict' : 'lax',
+        maxAge: cookieMaxAge,
+        path: '/',
       });
 
       const { accessToken, userId, fullName, email, employeeId } = result;

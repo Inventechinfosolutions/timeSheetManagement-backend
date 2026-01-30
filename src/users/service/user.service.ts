@@ -1,4 +1,5 @@
 import { Injectable, ConflictException, NotFoundException, Inject, forwardRef, Logger, HttpException, HttpStatus } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import * as bcrypt from 'bcrypt';
@@ -21,6 +22,7 @@ export class UsersService {
     @Inject(forwardRef(() => AuthService))
     private readonly authService: AuthService,
     private readonly jwtService: JwtService,
+    private readonly configService: ConfigService,
   ) {}
 
   async create(userData: Partial<User>): Promise<User> {
@@ -43,11 +45,19 @@ export class UsersService {
   }
 
   async findByLoginId(loginId: string): Promise<User | null> {
-    return await this.usersRepository
-      .createQueryBuilder('user')
-      .where('user.loginId = BINARY :loginId', { loginId })
-      .addSelect('user.password')
-      .getOne();
+    try {
+      if (!loginId || loginId.trim() === '') {
+        return null;
+      }
+      return await this.usersRepository
+        .createQueryBuilder('user')
+        .where('user.loginId = BINARY :loginId', { loginId: loginId.trim() })
+        .addSelect('user.password')
+        .getOne();
+    } catch (error) {
+      this.logger.error(`Error finding user by loginId: ${error.message}`);
+      throw error;
+    }
   }
 
   async comparePassword(plainPassword: string, hashedPassword: string): Promise<boolean> {
@@ -64,6 +74,10 @@ export class UsersService {
   async login(userLoginDto: UserLoginDto): Promise<LoginResponse | any> {
     this.logger.log('Starting login process for user: ' + userLoginDto.loginId);
 
+    if (!userLoginDto.loginId || !userLoginDto.password) {
+      throw new HttpException('Login ID and password are required', HttpStatus.BAD_REQUEST);
+    }
+
     if (userLoginDto.loginId === 'Admin' && userLoginDto.password === 'Admin@123') {
        const existingAdmin = await this.usersRepository.findOne({ where: { loginId: 'Admin' } });
        if (!existingAdmin) {
@@ -79,9 +93,16 @@ export class UsersService {
 
     try {
       const user = await this.findByLoginId(userLoginDto.loginId);
+      this.logger.log(`User lookup result: ${user ? 'Found' : 'Not found'}`);
 
       // Strict case-sensitive and character check
-      if (!user || user.loginId !== userLoginDto.loginId) {
+      if (!user) {
+        this.logger.warn(`User not found: ${userLoginDto.loginId}`);
+        throw new HttpException('Invalid login credentials', HttpStatus.UNAUTHORIZED);
+      }
+
+      if (user.loginId !== userLoginDto.loginId) {
+        this.logger.warn(`Login ID mismatch for: ${userLoginDto.loginId}`);
         throw new HttpException('Invalid login credentials', HttpStatus.UNAUTHORIZED);
       }
 
@@ -89,8 +110,14 @@ export class UsersService {
         throw new HttpException('User is blocked', HttpStatus.FORBIDDEN);
       }
 
+      if (!user.password) {
+        this.logger.error(`User ${userLoginDto.loginId} has no password set`);
+        throw new HttpException('Invalid login credentials', HttpStatus.UNAUTHORIZED);
+      }
+
       const isMatch = await this.comparePassword(userLoginDto.password, user.password);
       if (!isMatch) {
+         this.logger.warn(`Password mismatch for user: ${userLoginDto.loginId}`);
          throw new HttpException('Invalid login credentials', HttpStatus.UNAUTHORIZED);
       }
 
@@ -101,6 +128,7 @@ export class UsersService {
       user.lastLoggedIn = new Date();
       await this.usersRepository.save(user);
 
+      this.logger.log(`Login successful for user: ${userLoginDto.loginId}`);
       return {
         userId: user.id,
         name: user.aliasLoginName,
@@ -113,14 +141,19 @@ export class UsersService {
       };
 
     } catch (error) {
-      throw new HttpException(error.message, error.status || HttpStatus.INTERNAL_SERVER_ERROR);
+      this.logger.error(`Login error for ${userLoginDto.loginId}: ${error.message}`, error.stack);
+      if (error instanceof HttpException) {
+        throw error;
+      }
+      throw new HttpException(error.message || 'Login failed', error.status || HttpStatus.INTERNAL_SERVER_ERROR);
     }
   }
 
   async me(refreshToken: string): Promise<any> {
     try {
+      const refreshSecret = this.configService.get<string>('JWT_REFRESH_SECRET') || 'your-refresh-secret-key';
       const payload = await this.jwtService.verifyAsync(refreshToken, {
-         secret: process.env.JWT_REFRESH_SECRET || 'your-refresh-secret-key'
+         secret: refreshSecret
       });
 
       const user = await this.findById(payload.sub);

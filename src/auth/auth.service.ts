@@ -5,6 +5,7 @@ import {
   Inject,
   forwardRef,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { UsersService } from '../users/service/user.service';
 import { RegisterDto } from './dto/register.dto';
@@ -18,6 +19,7 @@ export class AuthService {
     @Inject(forwardRef(() => UsersService))
     private usersService: UsersService,
     private jwtService: JwtService,
+    private configService: ConfigService,
   ) {}
 
   async register(registerDto: RegisterDto): Promise<AuthResponseDto> {
@@ -83,9 +85,11 @@ export class AuthService {
 
   async generateJWTTokenWithRefresh(payload: any) {
     const access_token = this.jwtService.sign(payload);
+    const refreshSecret = this.configService.get<string>('JWT_REFRESH_SECRET') || 'your-refresh-secret-key';
+    const refreshExpiration = this.configService.get<string>('JWT_REFRESH_EXPIRATION') || '30d'; // Extended to 30 days
     const refresh_token = this.jwtService.sign(payload, {
-      secret: process.env.JWT_REFRESH_SECRET || 'your-refresh-secret-key',
-      expiresIn: process.env.JWT_REFRESH_EXPIRATION || '7d',
+      secret: refreshSecret,
+      expiresIn: refreshExpiration as any,
     } as any);
     return { accessToken: access_token, refreshToken: refresh_token };
   }

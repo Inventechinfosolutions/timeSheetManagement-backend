@@ -3,6 +3,7 @@ import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import { ConfigService } from '@nestjs/config';
 import { AuthService } from '../auth.service';
+import { UserStatus } from '../../users/enums/user-status.enum';
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
@@ -20,7 +21,12 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
   async validate(payload: any) {
     const user = await this.authService.validateUser(payload.sub);
     if (!user) {
-      throw new UnauthorizedException();
+      // User doesn't exist in database (might have been deleted/cleared)
+      throw new UnauthorizedException('User not found or token invalid');
+    }
+    // Check if user is active
+    if (user.status === UserStatus.INACTIVE) {
+      throw new UnauthorizedException('User account is inactive');
     }
     return user;
   }

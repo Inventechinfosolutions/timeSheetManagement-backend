@@ -24,7 +24,7 @@ import { EmployeeDetails } from '../employeeTimeSheet/entities/employeeDetails.e
       imports: [ConfigModule],
       useFactory: (configService: ConfigService): JwtModuleOptions => {
         const secret = configService.get<string>('JWT_SECRET') || 'your-secret-key';
-        const expiresIn = configService.get<string>('JWT_EXPIRES_IN') || '7d';
+        const expiresIn = configService.get<string>('JWT_EXPIRES_IN') || '30d'; // Extended to 30 days for better persistence
         return {
           secret,
           signOptions: {
