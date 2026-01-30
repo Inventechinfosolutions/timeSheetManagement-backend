@@ -871,7 +871,7 @@ export class EmployeeAttendanceService {
     // Style Day Row
     dayRow.eachCell((cell, colNumber) => {
         if (colNumber === 1) {
-             cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFF00' } }; // Yellow for Name
+             cell.fill = headerFill; // Match other headers (Green) instead of Yellow
              cell.font = { bold: true };
         } else {
              // Check if weekend based on header text? Easier to check date logic again
@@ -907,7 +907,7 @@ export class EmployeeAttendanceService {
         
         // Style the name cell (column 1)
         const nameCell = row.getCell(1);
-        nameCell.fill = yellowFill;
+        // nameCell.fill = yellowFill; // Removed per user request
         nameCell.font = { bold: true };
         nameCell.alignment = { horizontal: 'left', vertical: 'middle' };
         nameCell.value = employeeName; // Ensure value is set
@@ -934,41 +934,33 @@ export class EmployeeAttendanceService {
                 continue;
             }
 
-            // PRIORITY 2: Weekend - Always red background
-            if (isWeekend) {
+            // PRIORITY 2: Strict Sunday Rule (Even if worked, Excel shows Weekend as per requirement)
+            if (dateObj.getDay() === 0) { // 0 = Sunday
                 cell.fill = weekendFill;
-                
-                // Only show text if they applied Client Visit or WFH AND entered time
-                if (record) {
-                    // Check if they entered time (has hours or status)
-                    const hasTime = (record.totalHours !== null && record.totalHours !== undefined && record.totalHours > 0) ||
-                                   (record.status && record.status !== AttendanceStatus.NOT_UPDATED);
-                    
-                    if (hasTime) {
-                        // Only show if it's Client Visit or WFH
-                        if (record.workLocation === 'Client Visit') {
-                            cell.value = 'Client Visit';
-                            cell.font = { color: { argb: 'FFFFFFFF' } }; // White text for visibility on red
-                        } else if (record.workLocation === 'WFH') {
-                            cell.value = 'WFH';
-                            cell.font = { color: { argb: 'FFFFFFFF' } }; // White text for visibility on red
-                        } else {
-                            // Has time but not Client Visit or WFH - leave empty
-                            cell.value = '';
-                        }
-                    } else {
-                        // No time entered - leave empty
-                        cell.value = '';
-                    }
-                } else {
-                    // No attendance record - leave empty
-                    cell.value = '';
-                }
+                cell.value = 'Weekend';
+                cell.font = { color: { argb: 'FFFFFFFF' } }; // White text
                 cell.alignment = { horizontal: 'center' };
-                continue; // Done for this cell
+                continue;
             }
 
-            // PRIORITY 3: Record Exists (User filled timesheet) - for weekdays only
+            // PRIORITY 3: Saturday Logic (Show Status ONLY if totalHours > 0)
+            if (dateObj.getDay() === 6) { // 6 = Saturday
+                 // Check if valid work
+                 const hasWork = record && (record.totalHours !== null && record.totalHours > 0);
+                 
+                 if (!hasWork) {
+                     // No work on Saturday -> Show Weekend
+                    cell.fill = weekendFill;
+                    cell.value = 'Weekend';
+                    cell.font = { color: { argb: 'FFFFFFFF' } }; // White text
+                    cell.alignment = { horizontal: 'center' };
+                    continue;
+                 }
+                 // If hasWork, fall through to "Record Exists" logic below (which will display Present/etc)
+            }
+
+            // PRIORITY 4: Record Exists (User filled timesheet)
+            // Handles Weekdays AND worked Saturdays
             if (record) {
                 let text = '';
                 let fontColor = '000000'; // Black
@@ -976,10 +968,10 @@ export class EmployeeAttendanceService {
                 // Priority: Client Visit > WFH > Status
                 if (record.workLocation === 'Client Visit') {
                     text = 'Client Visit';
-                    fontColor = '000000'; // Black
+                    fontColor = '0000FF'; // Blue
                 } else if (record.workLocation === 'WFH') {
                     text = 'WFH';
-                    fontColor = '000000'; // Black
+                    fontColor = '000000'; 
                 } else if (record.status === AttendanceStatus.FULL_DAY) {
                     text = 'Present';
                 } else if (record.status === AttendanceStatus.HALF_DAY) {
@@ -995,7 +987,10 @@ export class EmployeeAttendanceService {
                         else if (record.totalHours > 0) text = 'Half day Leave';
                         else text = 'Leave';
                     } else {
-                        text = 'Present'; // Default to Present if no status
+                        // User said if 0 hours/missing -> show Weekend (handled above for Sat). 
+                        // For weekday, defaults to Present if no specific status but record exists?
+                        // Let's keep existing logic: default Present if generic record exists without Hours info
+                        text = 'Present'; 
                     }
                 }
                 
@@ -1004,6 +999,14 @@ export class EmployeeAttendanceService {
                 cell.alignment = { horizontal: 'center' };
                 continue; // Done for this cell
             }
+
+            // PRIORITY 5: Weekend (Sunday handled top, Saturday handled top. This catches remaining? No, strictly handled above)
+            // But good to keep as safety or for clarity logic if we had strictly checked isWeekend at start.
+            // Since we handled Sun and Sat specifically above, we don't need a generic "if (isWeekend)" block here anymore.
+            // But let's keep the logic flow clean.
+
+
+
 
             // PRIORITY 4: Future / Past Logic - for weekdays with no record
             const today = new Date().toISOString().split('T')[0];
@@ -1014,9 +1017,9 @@ export class EmployeeAttendanceService {
                 cell.font = { italic: true, color: { argb: '808080' } }; // Grey
                 cell.alignment = { horizontal: 'center' };
             } else {
-                // Past/Today weekday with NO record -> Show "Present" as default
-                cell.value = 'Present';
-                cell.font = { color: { argb: '000000' } }; // Black
+                // Past/Today weekday with NO record -> "Not Updated"
+                cell.value = 'Not Updated';
+                cell.fill = yellowFill; // Light Orange/Yellow
                 cell.alignment = { horizontal: 'center' };
             }
         }
