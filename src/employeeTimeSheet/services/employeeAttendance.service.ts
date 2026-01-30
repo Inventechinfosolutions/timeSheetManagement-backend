@@ -161,8 +161,17 @@ export class EmployeeAttendanceService {
     today.setHours(0,0,0,0);
     workingDateObj.setHours(0,0,0,0);
 
-    // Rule: Delete future records if hours are cleared
-    if ((updateDto.totalHours === 0 || updateDto.totalHours === null) && workingDateObj > today) {
+    // Check if record has workLocation (WFH, Client Visit) - these should never be deleted
+    const hasWorkLocation = attendance.workLocation === 'WFH' || 
+                           attendance.workLocation === 'Work From Home' || 
+                           attendance.workLocation === 'Client Visit' ||
+                           updateDto.workLocation === 'WFH' ||
+                           updateDto.workLocation === 'Work From Home' ||
+                           updateDto.workLocation === 'Client Visit';
+
+    // Rule: Delete future records if hours are cleared AND no workLocation is set
+    // But NEVER delete records with workLocation (WFH, Client Visit) - preserve them even with 0 hours
+    if ((updateDto.totalHours === 0 || updateDto.totalHours === null) && workingDateObj > today && !hasWorkLocation) {
         await this.employeeAttendanceRepository.delete(id);
         return null;
     }
@@ -177,7 +186,14 @@ export class EmployeeAttendanceService {
       }
     }
 
+    // Preserve workLocation if it exists and updateDto doesn't explicitly change it
+    const existingWorkLocation = attendance.workLocation;
     Object.assign(attendance, updateDto);
+    
+    // If workLocation was set (WFH, Client Visit) and updateDto doesn't explicitly clear it, preserve it
+    if (hasWorkLocation && (updateDto.workLocation === undefined || updateDto.workLocation === null)) {
+      attendance.workLocation = existingWorkLocation; // Preserve original workLocation
+    }
     
     if (attendance.totalHours !== undefined && attendance.totalHours !== null) {
       attendance.status = await this.determineStatus(attendance.totalHours, attendance.workingDate, attendance.workLocation || undefined);
@@ -218,8 +234,8 @@ export class EmployeeAttendanceService {
       dateObj.setHours(0, 0, 0, 0);
       
       if (dateObj <= today) {
-          // Past or Today weekday with 0 hours -> LEAVE
-          return AttendanceStatus.LEAVE;
+          // Past or Today weekday with 0 hours -> ABSENT (user purposefully didn't update)
+          return AttendanceStatus.ABSENT;
       } else {
           // Future weekday -> NOT_UPDATED (Upcoming)
           return AttendanceStatus.NOT_UPDATED;
@@ -327,8 +343,8 @@ export class EmployeeAttendanceService {
           return attendance;
         }
 
-        // Priority 4: Default to Leave for past weekdays with missing status
-        attendance.status = AttendanceStatus.LEAVE;
+        // Priority 4: Default to Absent for past weekdays with missing status (0 hours)
+        attendance.status = AttendanceStatus.ABSENT;
       }
     }
     return attendance;
@@ -965,31 +981,35 @@ export class EmployeeAttendanceService {
                 let text = '';
                 let fontColor = '000000'; // Black
                 
-                // Priority: Client Visit > WFH > Status
-                if (record.workLocation === 'Client Visit') {
+                // 1. Check specific statuses first (Leave, Half Day, Absent)
+                if (record.status === AttendanceStatus.ABSENT) {
+                    text = 'Absent';
+                    fontColor = '8B0000'; // Dark Red
+                } else if (record.status === AttendanceStatus.LEAVE) {
+                    text = 'Leave';
+                    fontColor = 'FF6666'; // Light Red (User asked for light red)
+                } else if (record.status === AttendanceStatus.HALF_DAY) {
+                    text = 'Half day';
+                    fontColor = 'FFA500'; // Orange
+                } 
+                // 2. Then check Work Location (Client Visit / WFH)
+                else if (record.workLocation === 'Client Visit') {
                     text = 'Client Visit';
                     fontColor = '0000FF'; // Blue
                 } else if (record.workLocation === 'WFH') {
                     text = 'WFH';
                     fontColor = '000000'; 
-                } else if (record.status === AttendanceStatus.FULL_DAY) {
+                } 
+                // 3. Finally standard Present
+                else if (record.status === AttendanceStatus.FULL_DAY) {
                     text = 'Present';
-                } else if (record.status === AttendanceStatus.HALF_DAY) {
-                    text = 'Half day';
-                    fontColor = 'FF4500'; // Orange-Red
-                } else if (record.status === AttendanceStatus.LEAVE) {
-                    text = 'Leave';
-                    fontColor = 'FF0000'; // Red
                 } else {
                     // Fallback
                     if (record.totalHours !== null && record.totalHours !== undefined) {
                         if (record.totalHours >= 6) text = 'Present';
-                        else if (record.totalHours > 0) text = 'Half day Leave';
-                        else text = 'Leave';
+                        else if (record.totalHours > 0) text = 'Half day';
+                        else text = 'Absent'; // 0 hours fallback to Absent now logic
                     } else {
-                        // User said if 0 hours/missing -> show Weekend (handled above for Sat). 
-                        // For weekday, defaults to Present if no specific status but record exists?
-                        // Let's keep existing logic: default Present if generic record exists without Hours info
                         text = 'Present'; 
                     }
                 }
