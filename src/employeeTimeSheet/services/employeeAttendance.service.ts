@@ -161,8 +161,17 @@ export class EmployeeAttendanceService {
     today.setHours(0,0,0,0);
     workingDateObj.setHours(0,0,0,0);
 
-    // Rule: Delete future records if hours are cleared
-    if ((updateDto.totalHours === 0 || updateDto.totalHours === null) && workingDateObj > today) {
+    // Check if record has workLocation (WFH, Client Visit) - these should never be deleted
+    const hasWorkLocation = attendance.workLocation === 'WFH' || 
+                           attendance.workLocation === 'Work From Home' || 
+                           attendance.workLocation === 'Client Visit' ||
+                           updateDto.workLocation === 'WFH' ||
+                           updateDto.workLocation === 'Work From Home' ||
+                           updateDto.workLocation === 'Client Visit';
+
+    // Rule: Delete future records if hours are cleared AND no workLocation is set
+    // But NEVER delete records with workLocation (WFH, Client Visit) - preserve them even with 0 hours
+    if ((updateDto.totalHours === 0 || updateDto.totalHours === null) && workingDateObj > today && !hasWorkLocation) {
         await this.employeeAttendanceRepository.delete(id);
         return null;
     }
@@ -177,7 +186,14 @@ export class EmployeeAttendanceService {
       }
     }
 
+    // Preserve workLocation if it exists and updateDto doesn't explicitly change it
+    const existingWorkLocation = attendance.workLocation;
     Object.assign(attendance, updateDto);
+    
+    // If workLocation was set (WFH, Client Visit) and updateDto doesn't explicitly clear it, preserve it
+    if (hasWorkLocation && (updateDto.workLocation === undefined || updateDto.workLocation === null)) {
+      attendance.workLocation = existingWorkLocation; // Preserve original workLocation
+    }
     
     if (attendance.totalHours !== undefined && attendance.totalHours !== null) {
       attendance.status = await this.determineStatus(attendance.totalHours, attendance.workingDate, attendance.workLocation || undefined);
@@ -218,8 +234,8 @@ export class EmployeeAttendanceService {
       dateObj.setHours(0, 0, 0, 0);
       
       if (dateObj <= today) {
-          // Past or Today weekday with 0 hours -> LEAVE
-          return AttendanceStatus.LEAVE;
+          // Past or Today weekday with 0 hours -> ABSENT (user purposefully didn't update)
+          return AttendanceStatus.ABSENT;
       } else {
           // Future weekday -> NOT_UPDATED (Upcoming)
           return AttendanceStatus.NOT_UPDATED;
@@ -327,8 +343,8 @@ export class EmployeeAttendanceService {
           return attendance;
         }
 
-        // Priority 4: Default to Leave for past weekdays with missing status
-        attendance.status = AttendanceStatus.LEAVE;
+        // Priority 4: Default to Absent for past weekdays with missing status (0 hours)
+        attendance.status = AttendanceStatus.ABSENT;
       }
     }
     return attendance;
