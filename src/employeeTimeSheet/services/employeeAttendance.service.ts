@@ -74,6 +74,19 @@ export class EmployeeAttendanceService {
       });
 
       if (existingRecord) {
+        // Priority check: Leave and Work From Home have higher priority than Client Visit
+        // Don't overwrite Leave or WFH records with Client Visit
+        const isLeave = existingRecord.status === AttendanceStatus.LEAVE;
+        const isWorkFromHome = existingRecord.workLocation === 'WFH' || 
+                              existingRecord.workLocation === 'Work From Home';
+        const isClientVisit = createEmployeeAttendanceDto.workLocation === 'Client Visit';
+        
+        // If existing record is Leave or WFH, and incoming is Client Visit, preserve the existing record
+        if ((isLeave || isWorkFromHome) && isClientVisit) {
+          // Return existing record without modification
+          return existingRecord;
+        }
+        
         // Update existing record
         Object.assign(existingRecord, createEmployeeAttendanceDto);
         if (
@@ -186,13 +199,32 @@ export class EmployeeAttendanceService {
       }
     }
 
+    // Priority check: Leave and Work From Home have higher priority than Client Visit
+    // Don't overwrite Leave or WFH records with Client Visit
+    const isLeave = attendance.status === AttendanceStatus.LEAVE;
+    const isWorkFromHome = attendance.workLocation === 'WFH' || 
+                          attendance.workLocation === 'Work From Home';
+    const isClientVisit = updateDto.workLocation === 'Client Visit';
+    
+    // If existing record is Leave or WFH, and incoming is Client Visit, preserve the existing record
+    if ((isLeave || isWorkFromHome) && isClientVisit) {
+      // Return existing record without modification
+      return attendance;
+    }
+
     // Preserve workLocation if it exists and updateDto doesn't explicitly change it
     const existingWorkLocation = attendance.workLocation;
+    const existingStatus = attendance.status;
     Object.assign(attendance, updateDto);
     
     // If workLocation was set (WFH, Client Visit) and updateDto doesn't explicitly clear it, preserve it
     if (hasWorkLocation && (updateDto.workLocation === undefined || updateDto.workLocation === null)) {
       attendance.workLocation = existingWorkLocation; // Preserve original workLocation
+    }
+    
+    // Preserve Leave status if it exists and updateDto doesn't explicitly change it
+    if (isLeave && (updateDto.status === undefined || updateDto.status === null)) {
+      attendance.status = existingStatus; // Preserve Leave status
     }
     
     if (attendance.totalHours !== undefined && attendance.totalHours !== null) {
@@ -266,6 +298,20 @@ export class EmployeeAttendanceService {
         employeeId, 
         workingDate: Between(new Date(`${workingDate}T00:00:00`), new Date(`${workingDate}T23:59:59`)) 
       },
+    });
+    return Promise.all(records.map(record => this.applyStatusBusinessRules(record)));
+  }
+
+  async findByDateRange(employeeId: string, startDate: string, endDate: string): Promise<EmployeeAttendance[]> {
+    const start = new Date(`${startDate}T00:00:00`);
+    const end = new Date(`${endDate}T23:59:59`);
+    
+    const records = await this.employeeAttendanceRepository.find({
+      where: { 
+        employeeId, 
+        workingDate: Between(start, end) 
+      },
+      order: { workingDate: 'ASC' },
     });
     return Promise.all(records.map(record => this.applyStatusBusinessRules(record)));
   }
