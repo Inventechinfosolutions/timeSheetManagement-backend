@@ -10,6 +10,7 @@ import { LoginResponse } from '../types/login-response.type';
 import { User } from '../entities/user.entity';
 import { UserStatus } from '../enums/user-status.enum';
 import { UserType } from '../enums/user-type.enum';
+import { EmployeeDetails } from '../../employeeTimeSheet/entities/employeeDetails.entity';
 
 @Injectable()
 export class UsersService {
@@ -18,6 +19,8 @@ export class UsersService {
   constructor(
     @InjectRepository(User)
     private usersRepository: Repository<User>,
+    @InjectRepository(EmployeeDetails)
+    private employeeDetailsRepository: Repository<EmployeeDetails>,
     @Inject(forwardRef(() => AuthService))
     private readonly authService: AuthService,
     private readonly jwtService: JwtService,
@@ -101,11 +104,31 @@ export class UsersService {
       user.lastLoggedIn = new Date();
       await this.usersRepository.save(user);
 
+      // Fetch employee details using loginId (which matches employeeId)
+      let role: string | null = null;
+      if (user.userType === UserType.EMPLOYEE) {
+        try {
+          const employee = await this.employeeDetailsRepository.findOne({
+            where: { employeeId: user.loginId },
+            select: ['designation'],
+          });
+          console.log('employee', employee);
+          if (employee) {
+            role = employee.designation;
+          }
+        } catch (error) {
+          this.logger.warn(`Failed to fetch employee details for loginId: ${user.loginId}`, error);
+        }
+      }
+
+      console.log('role', role);
+
       return {
         userId: user.id,
         name: user.aliasLoginName,
         email: user.loginId,
         userType: user.userType,
+        role: role,
         accessToken: tokens.accessToken,
         refreshToken: tokens.refreshToken,
         resetRequired: user.resetRequired,

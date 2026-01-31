@@ -74,8 +74,10 @@ export class UsersController {
         name: response.name,
         email: response.email,
         userType: response.userType,
+        role: response.role || null,
         accessToken: response.accessToken,
         resetRequired: response.resetRequired,
+        status: response.status,
       },
     });
   }

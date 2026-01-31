@@ -56,7 +56,11 @@ export class PublicController {
         sameSite: 'strict',
       });
 
-      const { accessToken, userId, name, email, resetRequired, status } = response;
+      console.log('Full response from service:', JSON.stringify(response, null, 2));
+      
+      const { accessToken, userId, name, email, userType, role, resetRequired, status } = response;
+
+      console.log('Controller destructured values:', { accessToken, userId, name, email, userType, role, resetRequired, status });
 
       return res.json({
         success: true,
@@ -64,6 +68,8 @@ export class PublicController {
         userId,
         name,
         email,
+        userType,
+        role: role || null, // Explicitly include role even if null
         resetRequired,
         status
       });
