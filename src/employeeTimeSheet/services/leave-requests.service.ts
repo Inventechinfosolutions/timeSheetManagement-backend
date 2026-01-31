@@ -541,26 +541,20 @@ export class LeaveRequestsService {
           }
 
           const statusColor = status === 'Approved' ? '#28a745' : '#dc3545';
-          const subject = `${typeLabel} Update: ${status}`;
+          const requestTypeLower = request.requestType === 'Apply Leave' ? 'leave' : request.requestType.toLowerCase();
+          const subject = `${request.requestType} Update: ${status}`;
           const htmlContent = `
             <div style="font-family: Arial, sans-serif; padding: 20px; border: 1px solid #eee; border-radius: 10px;">
-              <h2 style="color: #333;">${typeLabel} Update</h2>
-              <p>Dear <strong>${employee.fullName}</strong> (${employee.employeeId}),</p>
-              <p>Your request for <strong>${request.requestType}</strong> titled "<strong>${request.title}</strong>" has been processed.</p>
+              <p>This is to inform you that your ${requestTypeLower} request "<strong>${request.title}</strong>" has been reviewed and ${status.toLowerCase()}${status === 'Approved' ? ' successfully' : ''}.</p>
               
               <div style="background-color: #f8f9fa; padding: 15px; border-radius: 8px; margin: 15px 0;">
+                <p style="margin: 5px 0; font-size: 14px;"><strong>Status:</strong> <span style="color: ${statusColor}; font-weight: bold;">${status}</span></p>
                 <p style="margin: 5px 0; font-size: 14px;"><strong>From:</strong> ${request.fromDate}</p>
                 <p style="margin: 5px 0; font-size: 14px;"><strong>To:</strong> ${request.toDate}</p>
                 <p style="margin: 5px 0; font-size: 14px;"><strong>Duration:</strong> ${request.duration} Day(s)</p>
               </div>
 
-              <p style="font-size: 16px;">
-                Status: <span style="color: ${statusColor}; font-weight: bold; font-size: 18px;">${status}</span>
-              </p>
-              
-              <p style="color: #666; font-size: 12px; margin-top: 20px;">
-                Processed By Admin
-              </p>
+              <p>If you have any questions or require further assistance, please feel free to reach out.</p>
 
               <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;" />
               <p style="font-size: 12px; color: #999;">
