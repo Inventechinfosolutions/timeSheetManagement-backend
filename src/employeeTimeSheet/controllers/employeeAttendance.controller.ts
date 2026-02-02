@@ -164,6 +164,23 @@ export class EmployeeAttendanceController {
     return this.employeeAttendanceService.findByDate(workingDate, employeeId);
   }
 
+  @Get('date-range/:employeeId/:startDate/:endDate')
+  @ApiOperation({ summary: 'Get attendance records by employee ID and date range' })
+  @ApiParam({ name: 'employeeId', type: String, description: 'Employee ID' })
+  @ApiParam({ name: 'startDate', type: String, description: 'Start date (YYYY-MM-DD)' })
+  @ApiParam({ name: 'endDate', type: String, description: 'End date (YYYY-MM-DD)' })
+  @ApiResponse({
+    status: 200,
+    description: 'List of attendance records for the specified employee and date range.',
+  })
+  async findByDateRange(
+    @Param('employeeId') employeeId: string,
+    @Param('startDate') startDate: string,
+    @Param('endDate') endDate: string,
+  ) {
+    return this.employeeAttendanceService.findByDateRange(employeeId, startDate, endDate);
+  }
+
   @Get('worked-days/:employeeId/:startDate/:endDate')
   @ApiOperation({ summary: 'Get worked days for a specific employee' })
   @ApiParam({ name: 'employeeId', type: String })

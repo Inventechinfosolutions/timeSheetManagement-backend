@@ -72,7 +72,8 @@ export class LeaveRequestsService {
       data.submittedDate = now.toISOString().split('T')[0]; // Format: YYYY-MM-DD
     }
 
-    if (data.fromDate && data.toDate) {
+    // Only calculate duration if not already provided
+    if (data.fromDate && data.toDate && (data.duration === undefined || data.duration === null || data.duration === 0)) {
       const start = new Date(data.fromDate);
       const end = new Date(data.toDate);
       const diffTime = Math.abs(end.getTime() - start.getTime());
