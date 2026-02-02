@@ -21,6 +21,7 @@ import { DocumentUploaderService } from '../../common/document-uploader/services
 import { DocumentMetaInfo, EntityType, ReferenceType } from '../../common/document-uploader/models/documentmetainfo.model';
 import * as XLSX from 'xlsx';
 import { BulkUploadResultDto, BulkUploadErrorDto } from '../dto/bulk-upload-result.dto';
+import { EmployeeAttendanceService } from './employeeAttendance.service';
 
 
 
@@ -36,6 +37,7 @@ export class EmployeeDetailsService {
     private readonly usersService: UsersService,
     private readonly employeeLinkService: EmployeeLinkService,
     private readonly documentUploaderService: DocumentUploaderService,
+    private readonly employeeAttendanceService: EmployeeAttendanceService,
   ) {}
 
   async createEmployee(
@@ -199,6 +201,105 @@ export class EmployeeDetailsService {
         'Failed to fetch employees',
         HttpStatus.INTERNAL_SERVER_ERROR,
       );
+    }
+  }
+
+  async getTimesheetList(
+    search: string = '',
+    sortBy: string = 'id',
+    sortOrder: 'ASC' | 'DESC' = 'DESC',
+    department?: string,
+    page: number = 1,
+    limit: number = 10,
+    status?: string,
+    month?: number,
+    year?: number,
+  ): Promise<{ data: any[]; totalItems: number }> {
+    try {
+      this.logger.log('Fetching employees for timesheet list with filter:', {
+        search,
+        sortBy,
+        sortOrder,
+        department,
+        page,
+        limit,
+        status,
+        month,
+        year,
+      });
+
+      const allowedSortFields = [
+        'id',
+        'fullName',
+        'employeeId',
+        'email',
+        'department',
+        'designation',
+        'dateOfJoining',
+        'createdAt',
+        'updatedAt',
+      ];
+
+      const validSortBy = allowedSortFields.includes(sortBy) ? sortBy : 'id';
+
+      const query = this.employeeDetailsRepository
+        .createQueryBuilder('employee')
+        .orderBy(`employee.${validSortBy}`, sortOrder);
+
+      query.where('1=1');
+
+      if (search) {
+        query.andWhere(
+          '(employee.fullName LIKE :search OR employee.employeeId LIKE :search OR employee.email LIKE :search)',
+          { search: `%${search}%` },
+        );
+      }
+
+      if (department && department !== 'All') {
+        query.andWhere('employee.department = :department', { department });
+      }
+
+      let allStats: Record<string, any> = {};
+      if (month && year) {
+        allStats = await this.employeeAttendanceService.getAllDashboardStats(month.toString(), year.toString());
+      }
+
+      if (status && status !== 'All' && month && year) {
+        const filteredEmployeeIds = Object.keys(allStats).filter(empId => {
+          const empStatus = allStats[empId].monthStatus === 'Completed' ? 'Submitted' : 'Pending';
+          return empStatus === status;
+        });
+
+        if (filteredEmployeeIds.length > 0) {
+          query.andWhere('employee.employeeId IN (:...filteredEmployeeIds)', { filteredEmployeeIds });
+        } else {
+          return { data: [], totalItems: 0 };
+        }
+      }
+
+      const [data, totalItems] = await query
+        .skip((page - 1) * limit)
+        .take(limit)
+        .leftJoinAndMapOne('employee.user', User, 'user', 'user.loginId = employee.employeeId')
+        .getManyAndCount();
+
+      const enrichedData = data.map((emp: any) => ({
+        id: emp.id,
+        fullName: emp.fullName,
+        employeeId: emp.employeeId,
+        department: emp.department,
+        designation: emp.designation,
+        email: emp.email,
+        userStatus: emp.user?.status || UserStatus.DRAFT,
+        resetRequired: emp.user?.resetRequired ?? true,
+        lastLoggedIn: emp.user?.lastLoggedIn || null,
+        monthStatus: allStats[emp.employeeId]?.monthStatus || 'Pending',
+      }));
+
+      return { data: enrichedData, totalItems };
+    } catch (error) {
+      this.logger.error(`Error fetching timesheet list: ${error.message}`, error.stack);
+      throw new HttpException('Failed to fetch timesheet list', HttpStatus.INTERNAL_SERVER_ERROR);
     }
   }
 

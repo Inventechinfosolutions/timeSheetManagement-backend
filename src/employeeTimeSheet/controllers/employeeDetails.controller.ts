@@ -95,6 +95,41 @@ export class EmployeeDetailsController {
   }
 
 
+  @Get('timesheet-list')
+  @ApiOperation({ summary: 'Get employees for timesheet list with status' })
+  @ApiQuery({ name: 'search', required: false, type: String })
+  @ApiQuery({ name: 'sort', required: false, type: String })
+  @ApiQuery({ name: 'order', required: false, enum: ['ASC', 'DESC'] })
+  @ApiQuery({ name: 'department', required: false, type: String })
+  @ApiQuery({ name: 'status', required: false, enum: ['Submitted', 'Pending'] })
+  @ApiQuery({ name: 'month', required: false, type: Number })
+  @ApiQuery({ name: 'year', required: false, type: Number })
+  @ApiQuery({ name: 'page', required: false, type: Number })
+  @ApiQuery({ name: 'limit', required: false, type: Number })
+  async getTimesheetList(
+    @Query('search') search: string,
+    @Query('sort') sort: string,
+    @Query('order') order: 'ASC' | 'DESC',
+    @Query('department') department: string,
+    @Query('status') status: string,
+    @Query('month') month: number,
+    @Query('year') year: number,
+    @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
+    @Query('limit', new DefaultValuePipe(10), ParseIntPipe) limit: number,
+  ) {
+    return this.employeeDetailsService.getTimesheetList(
+      search,
+      sort,
+      order,
+      department,
+      page,
+      limit,
+      status,
+      month,
+      year,
+    );
+  }
+
   @Get(':employeeId')
   @ApiOperation({ summary: 'Get employee by Employee ID' })
   @ApiParam({ name: 'employeeId', type: String, description: 'Employee String ID (e.g. emp001)' })
@@ -140,6 +175,7 @@ export class EmployeeDetailsController {
       limit,
     );
   }
+
 
   @Put(':employeeId')
   @ApiOperation({ summary: 'Update employee by Employee ID' })
