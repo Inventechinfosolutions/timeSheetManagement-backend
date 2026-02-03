@@ -46,10 +46,7 @@ export class EmployeeAttendanceService {
       today.setHours(0,0,0,0);
       workingDateObj.setHours(0,0,0,0);
 
-      // Rule: Do not create future records with 0 hours, UNLESS status or workLocation is provided
-      if (!createEmployeeAttendanceDto.status && !createEmployeeAttendanceDto.workLocation && (!createEmployeeAttendanceDto.totalHours || createEmployeeAttendanceDto.totalHours === 0) && workingDateObj > today) {
-         return null; 
-      }
+      // (Moved future check down)
 
       if (!isAdmin && createEmployeeAttendanceDto.employeeId && createEmployeeAttendanceDto.workingDate) {
         const isBlocked = await this.blockerService.isBlocked(
@@ -72,6 +69,12 @@ export class EmployeeAttendanceService {
           workingDate: Between(startOfDay, endOfDay),
         },
       });
+
+      // Rule: Do not create future records with 0 hours, UNLESS status or workLocation is provided.
+      // Only apply this checks if NO existing record exists. If record exists, we might intend to update/clear it.
+      if (!existingRecord && !createEmployeeAttendanceDto.status && !createEmployeeAttendanceDto.workLocation && (!createEmployeeAttendanceDto.totalHours || createEmployeeAttendanceDto.totalHours === 0) && workingDateObj > today) {
+         return null; 
+      }
 
       if (existingRecord) {
         // Priority check: Leave and Work From Home have higher priority than Client Visit
@@ -217,13 +220,15 @@ export class EmployeeAttendanceService {
     const existingStatus = attendance.status;
     Object.assign(attendance, updateDto);
     
-    // If workLocation was set (WFH, Client Visit) and updateDto doesn't explicitly clear it, preserve it
-    if (hasWorkLocation && (updateDto.workLocation === undefined || updateDto.workLocation === null)) {
+    // If workLocation was set (WFH, Client Visit) and updateDto doesn't explicitly clear it (undefined), preserve it.
+    // Explicit null MEANs clear it.
+    if (hasWorkLocation && updateDto.workLocation === undefined) {
       attendance.workLocation = existingWorkLocation; // Preserve original workLocation
     }
     
-    // Preserve Leave status if it exists and updateDto doesn't explicitly change it
-    if (isLeave && (updateDto.status === undefined || updateDto.status === null)) {
+    // Preserve Leave status if it exists and updateDto doesn't explicitly change it (undefined).
+    // Explicit null MEANs clear it.
+    if (isLeave && updateDto.status === undefined) {
       attendance.status = existingStatus; // Preserve Leave status
     }
     
