@@ -238,7 +238,7 @@ export class EmployeeAttendanceController {
 
   
   @UseGuards(JwtAuthGuard)
-  @Post('attendence-data/:employeeId')
+  @Post('attendance-data/:employeeId')
   @ApiOperation({ summary: 'Bulk create/update attendance records' })
   @ApiBody({ type: [EmployeeAttendanceDto] })
   async createBulk(@Body() createDtos: EmployeeAttendanceDto[], @Req() req: any) {

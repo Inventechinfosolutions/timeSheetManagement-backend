@@ -119,11 +119,15 @@ export class S3ClientService implements OnModuleInit {
       const savedDoc = await this.documentRepo.save(newDocument);
       this.logger.debug(`Document metadata saved with ID: ${savedDoc.id}`);
  
+      savedDoc.s3Key = savedDoc.id;
+      await this.documentRepo.save(savedDoc);
+      this.logger.debug(`Document metadata updated with S3 Key: ${savedDoc.s3Key}`);
+ 
       this.logger.debug('Uploading file to S3');
       await this.s3Client.send(
         new PutObjectCommand({
           Bucket: targetBucket,
-          Key: savedDoc.id,
+          Key: savedDoc.s3Key,
           Body: file.buffer,
           Metadata: {
             'Content-Type': file.mimetype,
@@ -137,12 +141,12 @@ export class S3ClientService implements OnModuleInit {
           },
         }),
       );
-      this.logger.log(`File uploaded successfully with ID: ${savedDoc.id}`);
+      this.logger.log(`File uploaded successfully with S3 Key: ${savedDoc.s3Key}`);
  
       return {
         url: unqurl,
         fileName: file.originalname.replace(/[^a-zA-Z0-9.]/g, ''),
-        key: savedDoc.id,
+        key: savedDoc.s3Key,
       };
     } catch (error) {
       this.logger.error(`Failed to upload file: ${error.stack}`);
@@ -168,18 +172,30 @@ export class S3ClientService implements OnModuleInit {
         throw new HttpException('Document not found', HttpStatus.NOT_FOUND);
       }
  
+      const s3KeyToDelete = documents.s3Key || documents.id;
+      
       this.logger.debug('Deleting document metadata');
       await this.documentRepo.delete({ id: objetName });
- 
-      this.logger.debug('Deleting file from S3');
-      const result = await this.s3Client.send(
-        new DeleteObjectCommand({
-          Bucket: targetBucket,
-          Key: objetName,
-        }),
-      );
-      this.logger.log(`File deleted successfully: ${objetName}`);
-      return result;
+
+      // Only delete from S3 if no other records are using this S3 key
+      const remainingCount = await this.documentRepo.count({
+        where: { s3Key: s3KeyToDelete }
+      });
+
+      if (remainingCount === 0) {
+        this.logger.debug(`Deleting file from S3: ${s3KeyToDelete}`);
+        const result = await this.s3Client.send(
+          new DeleteObjectCommand({
+            Bucket: targetBucket,
+            Key: s3KeyToDelete,
+          }),
+        );
+        this.logger.log(`File deleted successfully from S3: ${s3KeyToDelete}`);
+        return result;
+      } else {
+        this.logger.log(`S3 Key ${s3KeyToDelete} still has ${remainingCount} referencing entries; keeping file in storage.`);
+        return { message: 'Metadata deleted; file retained for other references' } as any;
+      }
     } catch (error) {
       this.logger.error(`Failed to delete object: ${error.stack}`);
       throw new HttpException('Failed to delete object', HttpStatus.INTERNAL_SERVER_ERROR);
