@@ -5,8 +5,11 @@ import {
   IsOptional,
   IsString,
   MaxLength,
+  IsEnum,
 } from 'class-validator';
 import { Transform } from 'class-transformer';
+import { Department } from '../enums/department.enum';
+import { UserType } from '../../users/enums/user-type.enum';
 
 export class EmployeeDetailsDto {
   @IsOptional()
@@ -25,11 +28,9 @@ export class EmployeeDetailsDto {
   @Transform(({ value }) => value?.trim())
   employeeId: string;
 
-  @IsString()
+  @IsEnum(Department)
   @IsNotEmpty()
-  @MaxLength(200)
-  @Transform(({ value }) => value?.trim())
-  department: string;
+  department: Department;
 
   @IsString()
   @IsNotEmpty()
@@ -52,4 +53,8 @@ export class EmployeeDetailsDto {
   @MaxLength(255)
   @IsOptional()
   confirmPassword?: string;
+
+  @IsEnum(UserType)
+  @IsOptional()
+  role?: UserType;
 }

@@ -1,4 +1,5 @@
-import { Controller, Get, Post, Body, Query, Delete, Param, Patch, UseInterceptors, UploadedFiles, ParseIntPipe, Req, Res, HttpException, HttpStatus, HttpCode } from '@nestjs/common';
+import { Controller, Get, Post, Body, Query, Delete, Param, Patch, UseInterceptors, UploadedFiles, ParseIntPipe, Req, Res, HttpException, HttpStatus, HttpCode, UseGuards } from '@nestjs/common';
+import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { FileFieldsInterceptor } from '@nestjs/platform-express';
 import { LeaveRequestsService } from '../services/leave-requests.service';
 import { LeaveRequestDto } from '../dto/leave-request.dto';
@@ -27,7 +28,9 @@ export class LeaveRequestsController {
   }
 
   @Get()
+  @UseGuards(JwtAuthGuard)
   findAll(
+    @Req() req: any,
     @Query('employeeId') employeeId?: string,
     @Query('department') department?: string,
     @Query('status') status?: string,
@@ -38,7 +41,18 @@ export class LeaveRequestsController {
     if (employeeId) {
       return this.leaveRequestsService.findByEmployeeId(employeeId, page, limit);
     }
-    return this.leaveRequestsService.findAll(department, status, search, page, limit);
+
+    const user = req.user;
+    let managerName: string | undefined;
+    let managerId: string | undefined;
+
+    const roleUpper = (user?.role || '').toUpperCase();
+    if (user && (user.userType === 'MANAGER' || roleUpper.includes('MNG') || roleUpper.includes('MANAGER'))) {
+        managerName = user.aliasLoginName;
+        managerId = user.loginId;
+    }
+
+    return this.leaveRequestsService.findAll(department, status, search, page, limit, managerName, managerId);
   }
 
   @Get('employee/:employeeId')
@@ -236,13 +250,25 @@ export class LeaveRequestsController {
   }
 
   @Get('monthly-details/:month/:year')
+  @UseGuards(JwtAuthGuard)
   async findAllMonthlyDetails(
+    @Req() req: any,
     @Param('month') month: string,
     @Param('year') year: string,
     @Query('page') page: number = 1,
     @Query('limit') limit: number = 10,
   ) {
-    return this.leaveRequestsService.findMonthlyRequests(month, year, undefined, page, limit);
+    const user = req.user;
+    let managerName: string | undefined;
+    let managerId: string | undefined;
+
+    const roleUpper = (user?.role || '').toUpperCase();
+    if (user && (user.userType === 'MANAGER' || roleUpper.includes('MNG') || roleUpper.includes('MANAGER'))) {
+        managerName = user.aliasLoginName;
+        managerId = user.loginId;
+    }
+
+    return this.leaveRequestsService.findMonthlyRequests(month, year, undefined, page, limit, managerName, managerId);
   }
 
   @Get('monthly-details/:employeeId/:month/:year')

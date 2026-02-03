@@ -177,7 +177,7 @@ export class LeaveRequestsService {
     return savedRequest;
   }
 
-  async findAll(department?: string, status?: string, search?: string, page: number = 1, limit: number = 10) {
+  async findAll(department?: string, status?: string, search?: string, page: number = 1, limit: number = 10, managerName?: string, managerId?: string) {
     const query = this.leaveRequestRepository.createQueryBuilder('lr')
       .leftJoin(EmployeeDetails, 'ed', 'ed.employeeId = lr.employeeId')
       .select([
@@ -210,6 +210,20 @@ export class LeaveRequestsService {
         qb.where('LOWER(ed.fullName) LIKE LOWER(:search)', { search: `%${search}%` })
           .orWhere('LOWER(lr.employeeId) LIKE LOWER(:search)', { search: `%${search}%` });
       }));
+    }
+
+    // Filter by Manager if provided
+    if (managerName || managerId) {
+      const { ManagerMapping } = require('../../managerMapping/entities/managerMapping.entity');
+      query.innerJoin(ManagerMapping, 'mm', 'mm.employeeId = lr.employeeId');
+      query.andWhere(
+          '(mm.managerName LIKE :managerNameQuery OR mm.managerName LIKE :managerIdQuery)', 
+          { 
+              managerNameQuery: `%${managerName}%`, 
+              managerIdQuery: `%${managerId}%` 
+          }
+      );
+      query.andWhere('mm.status = :mmStatus', { mmStatus: 'ACTIVE' });
     }
 
     const total = await query.getCount();
@@ -672,7 +686,7 @@ export class LeaveRequestsService {
     );
   }
 
-  async findMonthlyRequests(month: string, year: string, employeeId?: string, page: number = 1, limit: number = 10) {
+  async findMonthlyRequests(month: string, year: string, employeeId?: string, page: number = 1, limit: number = 10, managerName?: string, managerId?: string) {
     const monthInt = parseInt(month);
     const yearInt = parseInt(year);
     
@@ -705,6 +719,20 @@ export class LeaveRequestsService {
 
     if (employeeId) {
       query.andWhere('lr.employeeId = :employeeId', { employeeId });
+    }
+
+    // Filter by Manager if provided
+    if (managerName || managerId) {
+      const { ManagerMapping } = require('../../managerMapping/entities/managerMapping.entity');
+      query.innerJoin(ManagerMapping, 'mm', 'mm.employeeId = lr.employeeId');
+      query.andWhere(
+          '(mm.managerName LIKE :managerNameQuery OR mm.managerName LIKE :managerIdQuery)', 
+          { 
+              managerNameQuery: `%${managerName}%`, 
+              managerIdQuery: `%${managerId}%` 
+          }
+      );
+      query.andWhere('mm.status = :mmStatus', { mmStatus: 'ACTIVE' });
     }
 
     const total = await query.getCount();

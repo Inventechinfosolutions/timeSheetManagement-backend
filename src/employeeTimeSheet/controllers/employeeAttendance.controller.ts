@@ -88,14 +88,27 @@ export class EmployeeAttendanceController {
   }
 
   @Get('all-dashboard-stats')
+  @UseGuards(JwtAuthGuard)
   @ApiOperation({ summary: 'Get dashboard statistics for all employees' })
   @ApiQuery({ name: 'month', type: String, required: false })
   @ApiQuery({ name: 'year', type: String, required: false })
   async getAllDashboardStats(
+    @Req() req: any,
     @Query('month') month?: string,
     @Query('year') year?: string,
   ) {
-    return this.employeeAttendanceService.getAllDashboardStats(month, year);
+    const user = req.user;
+    let managerName: string | undefined;
+    let managerId: string | undefined;
+
+    // Filter for Managers (consistent with other dashboard endpoints)
+    const roleUpper = (user?.role || '').toUpperCase();
+    if (user && (user.userType === 'MANAGER' || roleUpper.includes('MNG') || roleUpper.includes('MANAGER'))) {
+        managerName = user.aliasLoginName;
+        managerId = user.loginId;
+    }
+
+    return this.employeeAttendanceService.getAllDashboardStats(month, year, managerName, managerId);
   }
 
   @Get(':id')
@@ -247,15 +260,27 @@ export class EmployeeAttendanceController {
   }
 
   @Get('monthly-details-all/:month/:year')
+  @UseGuards(JwtAuthGuard)
   @ApiOperation({ summary: 'Get all employees monthly attendance' })
   @ApiParam({ name: 'month', type: String })
   @ApiParam({ name: 'year', type: String })
   async findAllMonthlyDetails(
+    @Req() req: any,
     @Param('month') month: string,
     @Param('year') year: string,
   ) {
-    this.logger.log(`Fetching all employees attendance - Month: ${month}, Year: ${year}`);
-    return this.employeeAttendanceService.findAllMonthlyDetails(month, year);
+    const user = req.user;
+    let managerName: string | undefined;
+    let managerId: string | undefined;
+
+    const roleUpper = (user?.role || '').toUpperCase();
+    if (user && (user.userType === 'MANAGER' || roleUpper.includes('MNG') || roleUpper.includes('MANAGER'))) {
+        managerName = user.aliasLoginName;
+        managerId = user.loginId;
+    }
+
+    this.logger.log(`Fetching all employees attendance - Month: ${month}, Year: ${year}, Manager: ${managerName || 'None'}`);
+    return this.employeeAttendanceService.findAllMonthlyDetails(month, year, managerName, managerId);
   }
 
 }

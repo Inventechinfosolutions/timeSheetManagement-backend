@@ -15,7 +15,9 @@ import {
   UploadedFile,
   Req,
   Res,
+  UseGuards,
 } from '@nestjs/common';
+import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { Response } from 'express';
 import { Readable } from 'stream';
 import { FileInterceptor } from '@nestjs/platform-express';
@@ -45,6 +47,31 @@ export class EmployeeDetailsController {
   constructor(
     private readonly employeeDetailsService: EmployeeDetailsService,
   ) {}
+
+  @Get('departments')
+  @ApiOperation({ summary: 'Get all departments from enum' })
+  @ApiOkResponse({ type: [String] })
+  async getDepartments() {
+    return this.employeeDetailsService.getDepartments();
+  }
+
+  @Get('roles')
+  @ApiOperation({ summary: 'Get all roles from enum' })
+  @ApiOkResponse({ type: [String] })
+  async getRoles() {
+    return this.employeeDetailsService.getRoles();
+  }
+
+  @Get('list-select')
+  @ApiOperation({ summary: 'Get lightweight employee list for selection' })
+  @ApiQuery({ name: 'department', required: false, type: String })
+  @ApiQuery({ name: 'role', required: false, type: String, description: 'Filter by role (comma separated)' })
+  async getListSelect(
+    @Query('department') department: string,
+    @Query('role') role: string,
+  ) {
+    return this.employeeDetailsService.getListSelect(department, role);
+  }
 
   @Post()
   @ApiOperation({ summary: 'Create a new employee' })
@@ -100,6 +127,12 @@ export class EmployeeDetailsController {
   @ApiQuery({ name: 'search', required: false, type: String })
   @ApiQuery({ name: 'sort', required: false, type: String })
   @ApiQuery({ name: 'order', required: false, enum: ['ASC', 'DESC'] })
+  @Get('timesheet-list')
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({ summary: 'Get employees for timesheet list' })
+  @ApiQuery({ name: 'search', required: false, type: String })
+  @ApiQuery({ name: 'sort', required: false, type: String })
+  @ApiQuery({ name: 'order', required: false, enum: ['ASC', 'DESC'] })
   @ApiQuery({ name: 'department', required: false, type: String })
   @ApiQuery({ name: 'status', required: false, enum: ['Submitted', 'Pending'] })
   @ApiQuery({ name: 'month', required: false, type: Number })
@@ -116,7 +149,19 @@ export class EmployeeDetailsController {
     @Query('year') year: number,
     @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
     @Query('limit', new DefaultValuePipe(10), ParseIntPipe) limit: number,
+    @Req() req: any,
   ) {
+    const user = req.user;
+    let managerName: string | undefined;
+    let managerId: string | undefined;
+
+    // Filter for Managers (consistent with getAllEmployees)
+    const roleUpper = (user?.role || '').toUpperCase();
+    if (user && (user.userType === 'MANAGER' || roleUpper.includes('MNG') || roleUpper.includes('MANAGER'))) {
+        managerName = user.aliasLoginName;
+        managerId = user.loginId;
+    }
+
     return this.employeeDetailsService.getTimesheetList(
       search,
       sort,
@@ -127,6 +172,8 @@ export class EmployeeDetailsController {
       status,
       month,
       year,
+      managerName,
+      managerId
     );
   }
 
@@ -142,6 +189,7 @@ export class EmployeeDetailsController {
   }
 
   @Get()
+  @UseGuards(JwtAuthGuard)
   @ApiOperation({ summary: 'Get all employees with optional search' })
   @ApiQuery({
     name: 'search',
@@ -165,7 +213,24 @@ export class EmployeeDetailsController {
     @Query('department') department: string,
     @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
     @Query('limit', new DefaultValuePipe(10), ParseIntPipe) limit: number,
+    @Req() req: any,
   ) {
+    const user = req.user;
+    this.logger.log(`User in getAllEmployees: ${JSON.stringify(user)}`);
+    
+    let managerName: string | undefined;
+    let managerId: string | undefined;
+
+    // Filter for Managers (check both userType and role for robustness)
+    const roleUpper = (user?.role || '').toUpperCase();
+    if (user && (user.userType === 'MANAGER' || roleUpper.includes('MNG') || roleUpper.includes('MANAGER'))) {
+        managerName = user.aliasLoginName;
+        managerId = user.loginId; // Fallback or alternative match
+        this.logger.log(`Manager filter applied: Name=${managerName}, ID=${managerId}`);
+    } else {
+        this.logger.log('Manager filter NOT applied');
+    }
+
     return this.employeeDetailsService.getAllEmployees(
       search,
       sort,
@@ -173,6 +238,8 @@ export class EmployeeDetailsController {
       department,
       page,
       limit,
+      managerName,
+      managerId
     );
   }
 

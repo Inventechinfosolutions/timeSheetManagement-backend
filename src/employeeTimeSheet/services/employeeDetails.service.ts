@@ -11,6 +11,7 @@ import { Not, Repository } from 'typeorm';
 import * as bcrypt from 'bcrypt';
 import { EmployeeDetails } from '../entities/employeeDetails.entity';
 import { EmployeeDetailsDto } from '../dto/employeeDetails.dto';
+import { Department } from '../enums/department.enum';
 import { ResetPasswordDto } from '../dto/resetPassword.dto';
 import { UsersService } from '../../users/service/user.service';
 import { UserType } from '../../users/enums/user-type.enum';
@@ -22,6 +23,7 @@ import { DocumentMetaInfo, EntityType, ReferenceType } from '../../common/docume
 import * as XLSX from 'xlsx';
 import { BulkUploadResultDto, BulkUploadErrorDto } from '../dto/bulk-upload-result.dto';
 import { EmployeeAttendanceService } from './employeeAttendance.service';
+import { ManagerMapping } from '../../managerMapping/entities/managerMapping.entity';
 
 
 
@@ -82,9 +84,11 @@ export class EmployeeDetailsService {
       // Remove confirmPassword as it's not in the entity
       const { confirmPassword, ...employeeData } = createEmployeeDetailsDto;
 
-      const employee = this.employeeDetailsRepository.create(
-        employeeData,
-      );
+      const employee = this.employeeDetailsRepository.create({
+        ...employeeData,
+        department: employeeData.department as Department,
+        role: employeeData.role as UserType,
+      });
       const result = await this.employeeDetailsRepository.save(employee);
       
       // Also create User entity for authentication
@@ -93,7 +97,7 @@ export class EmployeeDetailsService {
           loginId: result.employeeId,
           aliasLoginName: result.fullName,
           password: createEmployeeDetailsDto.password || 'Initial@123', // Admin can provide or it will be reset
-          userType: UserType.EMPLOYEE,
+          userType: createEmployeeDetailsDto.role ? (createEmployeeDetailsDto.role as UserType) : UserType.EMPLOYEE,
           status: UserStatus.DRAFT,
           resetRequired: true,
         });
@@ -126,6 +130,14 @@ export class EmployeeDetailsService {
     }
   }
 
+  async getDepartments(): Promise<string[]> {
+    return Object.values(Department);
+  }
+
+  async getRoles(): Promise<string[]> {
+    return Object.values(UserType);
+  }
+
   async getAllEmployees(
     search: string = '',
     sortBy: string = 'id',
@@ -133,6 +145,8 @@ export class EmployeeDetailsService {
     department?: string,
     page: number = 1,
     limit: number = 10,
+    managerName?: string,
+    managerId?: string,
   ): Promise<{ data: EmployeeDetails[]; totalItems: number }> {
     try {
       this.logger.log('Fetching employees with filter:', {
@@ -142,6 +156,8 @@ export class EmployeeDetailsService {
         department,
         page,
         limit,
+        managerName, 
+        managerId
       });
 
       // Validate sortBy field to prevent SQL injection
@@ -176,6 +192,20 @@ export class EmployeeDetailsService {
         query.andWhere('employee.department = :department', { department });
       }
 
+      // Filter by Manager if provided
+      if (managerName || managerId) {
+        query.innerJoin(ManagerMapping, 'mm', 'mm.employeeId = employee.employeeId');
+        query.andWhere(
+            '(mm.managerName LIKE :managerNameQuery OR mm.managerName LIKE :managerIdQuery)', 
+            { 
+                managerNameQuery: `%${managerName}%`, 
+                managerIdQuery: `%${managerId}%` 
+            }
+        );
+        // Ensure only active mappings are considered
+        query.andWhere('mm.status = :status', { status: 'ACTIVE' });
+      }
+
       const [data, totalItems] = await query
         .skip((page - 1) * limit)
         .take(limit)
@@ -204,6 +234,69 @@ export class EmployeeDetailsService {
     }
   }
 
+  async getListSelect(
+    department?: string,
+    role?: string,
+  ): Promise<any[]> {
+    try {
+      const query = this.employeeDetailsRepository
+        .createQueryBuilder('employee')
+        .select([
+          'employee.id',
+          'employee.fullName',
+          'employee.employeeId',
+          'employee.department',
+          'employee.role',
+        ])
+        .leftJoinAndMapOne('employee.user', User, 'user', 'user.loginId = employee.employeeId')
+        .addSelect(['user.status']); 
+
+      if (department && department !== 'All') {
+        query.andWhere('employee.department = :department', { department });
+      }
+
+      // Filter to only include ACTIVE users
+      query.andWhere('user.status = :activeStatus', { activeStatus: UserStatus.ACTIVE });
+
+      if (role) {
+        const roles = role.split(',');
+        query.andWhere('employee.role IN (:...roles)', { roles });
+
+        // If fetching employees, exclude those who are already mapped to a manager
+        // UNLESS the manager they are mapped to is INACTIVE.
+        if (roles.includes('EMPLOYEE')) {
+             query.leftJoin(ManagerMapping, 'mm', 'mm.employeeId = employee.employeeId AND mm.status = :mappingStatus', { mappingStatus: 'ACTIVE' });
+             
+             // Join to check manager status
+             query.leftJoin('employee_details', 'm_details', 'mm.managerName = m_details.full_name');
+             query.leftJoin('users', 'm_user', 'm_details.employee_id = m_user.loginId');
+             
+             // Keep if:
+             // 1. Not mapped at all (mm.id is NULL)
+             // 2. Mapped, but manager is NOT Active (m_user.status != ACTIVE or NULL)
+             query.andWhere(
+               '(mm.id IS NULL OR m_user.status != :activeStatus OR m_user.status IS NULL)', 
+               { activeStatus: UserStatus.ACTIVE }
+             );
+        }
+      }
+      
+      const data = await query.getMany();
+
+      return data.map((emp: any) => ({
+        id: emp.id,
+        fullName: emp.fullName,
+        employeeId: emp.employeeId,
+        department: emp.department,
+        role: emp.role,
+        userStatus: emp.user?.status || UserStatus.DRAFT,
+      }));
+    } catch (error) {
+      this.logger.error(`Error fetching employee list select: ${error.message}`, error.stack);
+      throw new HttpException('Failed to fetch employee list', HttpStatus.INTERNAL_SERVER_ERROR);
+    }
+  }
+
   async getTimesheetList(
     search: string = '',
     sortBy: string = 'id',
@@ -214,6 +307,8 @@ export class EmployeeDetailsService {
     status?: string,
     month?: number,
     year?: number,
+    managerName?: string,
+    managerId?: string,
   ): Promise<{ data: any[]; totalItems: number }> {
     try {
       this.logger.log('Fetching employees for timesheet list with filter:', {
@@ -257,6 +352,20 @@ export class EmployeeDetailsService {
 
       if (department && department !== 'All') {
         query.andWhere('employee.department = :department', { department });
+      }
+
+      // Filter by Manager if provided
+      if (managerName || managerId) {
+        query.innerJoin(ManagerMapping, 'mm', 'mm.employeeId = employee.employeeId');
+        query.andWhere(
+            '(mm.managerName LIKE :managerNameQuery OR mm.managerName LIKE :managerIdQuery)', 
+            { 
+                managerNameQuery: `%${managerName}%`, 
+                managerIdQuery: `%${managerId}%` 
+            }
+        );
+        // Ensure only active mappings are considered
+        query.andWhere('mm.status = :status', { status: 'ACTIVE' });
       }
 
       let allStats: Record<string, any> = {};
@@ -418,7 +527,11 @@ export class EmployeeDetailsService {
       }
 
       const { confirmPassword, ...updateFields } = updateData;
-      Object.assign(employee, updateFields);
+      Object.assign(employee, {
+        ...updateFields,
+        department: updateFields.department as Department,
+        role: updateFields.role as UserType,
+      });
       const result = await this.employeeDetailsRepository.save(employee);
 
       // Check if employeeId or email changed - if so, handle activation link
@@ -919,7 +1032,7 @@ export class EmployeeDetailsService {
           const employee = this.employeeDetailsRepository.create({
             fullName: String(rowData.fullName).trim(),
             employeeId: employeeId,
-            department: String(rowData.department).trim(),
+            department: String(rowData.department).trim() as Department,
             designation: String(rowData.designation).trim(),
             email: email,
             password: hashedPassword,
