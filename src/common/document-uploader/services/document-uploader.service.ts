@@ -83,7 +83,8 @@ export class DocumentUploaderService {
       const docs: DocumentDetailsDto[] = [];
       for (const e of objects) {
         try {
-          const metadata = await this.getMetaData(e.id);
+          const s3Key = e.s3Key || e.id;
+          const metadata = await this.getMetaData(s3Key);
           const docDetails = new DocumentDetailsDto();
           docDetails.entityType = metadata.entityType;
           docDetails.entityId = parseInt(metadata.entityId);

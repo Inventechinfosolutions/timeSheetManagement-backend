@@ -84,10 +84,52 @@ export class LeaveRequestsController {
   remove(@Param('id') id: string) {
     return this.leaveRequestsService.remove(+id);
   }
-  
+
   @Post(':id/update-status')
-  updateStatus(@Param('id') id: string, @Body('status') status: 'Approved' | 'Rejected' | 'Cancelled') {
+  updateStatus(
+    @Param('id') id: string,
+    @Body('status') status: 'Approved' | 'Rejected' | 'Cancelled' | 'Cancellation Approved',
+  ) {
     return this.leaveRequestsService.updateStatus(+id, status);
+  }
+
+  @Post(':id/request-modified')
+  createModification(
+    @Param('id') id: string,
+    @Body() data: { fromDate: string; toDate: string; sourceRequestId: number; sourceRequestType: string },
+  ) {
+    return this.leaveRequestsService.createModification(+id, data);
+  }
+
+  @Patch(':id/cancel-approved')
+  async cancelApproved(@Param('id') id: string, @Body('employeeId') employeeId: string) {
+    return this.leaveRequestsService.cancelApprovedRequest(+id, employeeId);
+  }
+
+  @Patch(':id/reject-cancellation')
+  async rejectCancellation(@Param('id') id: string, @Body('employeeId') employeeId: string) {
+    return this.leaveRequestsService.rejectCancellation(+id, employeeId);
+  }
+
+  @Get(':id/cancellable-dates')
+  async getCancellableDates(@Param('id') id: string, @Query('employeeId') employeeId: string) {
+    return this.leaveRequestsService.getCancellableDates(+id, employeeId);
+  }
+
+  @Patch(':id/cancel-dates')
+  async cancelApprovedDates(@Param('id') id: string, @Body('employeeId') employeeId: string, @Body('dates') dates: string[]) {
+
+    return this.leaveRequestsService.cancelApprovedDates(
+      +id,
+      employeeId,
+      dates,
+    );
+  }
+
+  @Patch(':id/undo-cancellation')
+  async undoCancellation(@Param('id') id: string, @Body('employeeId') employeeId: string) {
+    // Logic handled in service
+    return this.leaveRequestsService.undoCancellationRequest(+id, employeeId);
   }
 
   @Get('stats/:employeeId')
@@ -98,6 +140,16 @@ export class LeaveRequestsController {
   @Get(':id')
   findOne(@Param('id') id: string) {
     return this.leaveRequestsService.findOne(+id);
+  }
+
+  @Patch('parent-update')
+  async updateParentRequest(
+    @Body('parentId', ParseIntPipe) parentId: number, 
+    @Body('duration', ParseIntPipe) duration: number, 
+    @Body('fromDate') fromDate: string, 
+    @Body('toDate') toDate: string
+  ) {
+    return this.leaveRequestsService.updateParentRequest(parentId, duration, fromDate, toDate);
   }
 
   @Post('upload-file/entityId/:entityId/refId/:refId')

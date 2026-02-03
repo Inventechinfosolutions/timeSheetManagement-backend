@@ -41,4 +41,7 @@ export class DocumentMetaInfo extends BaseEntity {
     nullable: false,
   })
   entityType: EntityType;
+
+  @Column({ nullable: true })
+  s3Key: string;
 }

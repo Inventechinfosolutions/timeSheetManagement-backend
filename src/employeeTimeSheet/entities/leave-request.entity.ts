@@ -38,4 +38,7 @@ export class LeaveRequest extends BaseEntity {
 
   @Column({ name: 'is_read_employee', default: true })
   isReadEmployee: boolean;
+
+  @Column({ name: 'request_modified_from', nullable: true })
+  requestModifiedFrom: string;
 }
