@@ -7,6 +7,7 @@ import { AuthModule } from './auth/auth.module';
 import { UsersModule } from './users/users.module';
 import { EmployeeTimeSheetModule } from './employeeTimeSheet/employeeTimeSheet.module';
 import { MasterModule } from './master/master.module';
+import { ProjectModule } from './projects/project.module';
 import * as fs from 'fs';
 import * as path from 'path';
 import { ScheduleModule } from '@nestjs/schedule';
@@ -44,6 +45,7 @@ function getEnvFiles(): string[] {
     AuthModule,
     EmployeeTimeSheetModule,
     MasterModule,
+    ProjectModule,
     ScheduleModule.forRoot(),
     TypeOrmModule.forFeature([EmployeeAttendance, EmployeeDetails]),
     MailModule,
