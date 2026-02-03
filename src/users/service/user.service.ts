@@ -46,11 +46,11 @@ export class UsersService {
   }
 
   async findByLoginId(loginId: string): Promise<User | null> {
-    return await this.usersRepository
-      .createQueryBuilder('user')
-      .where('user.loginId = BINARY :loginId', { loginId })
-      .addSelect('user.password')
-      .getOne();
+    const user = await this.usersRepository.findOne({
+      where: { loginId },
+      select: ['id', 'loginId', 'aliasLoginName', 'password', 'role', 'userType', 'status', 'resetRequired', 'lastLoggedIn'],
+    });
+    return user;
   }
 
   async comparePassword(plainPassword: string, hashedPassword: string): Promise<boolean> {
@@ -58,10 +58,30 @@ export class UsersService {
   }
 
   async findById(id: string): Promise<User | null> {
-    return await this.usersRepository.findOne({
+    const user = await this.usersRepository.findOne({
       where: { id },
-      select: ['id', 'aliasLoginName', 'loginId', 'userType', 'createdAt', 'updatedAt', 'password'],
+      select: ['id', 'aliasLoginName', 'loginId', 'userType', 'role', 'createdAt', 'updatedAt', 'password'],
     });
+
+    if (user && !user.role && user.userType === UserType.EMPLOYEE) {
+        try {
+            const employee = await this.employeeDetailsRepository.findOne({
+                where: { employeeId: user.loginId },
+                select: ['designation', 'role'],
+            });
+            if (employee) {
+                user.role = (employee.role ? String(employee.role) : employee.designation) as UserType;
+                const roleUpper = (user.role || '').toUpperCase();
+                if (roleUpper.includes('MNG') || roleUpper.includes('MANAGER')) {
+                    user.userType = UserType.MANAGER;
+                }
+            }
+        } catch (error) {
+            // fail silently, return user as is
+        }
+    }
+
+    return user;
   }
 
   async login(userLoginDto: UserLoginDto): Promise<LoginResponse | any> {
@@ -104,30 +124,29 @@ export class UsersService {
       user.lastLoggedIn = new Date();
       await this.usersRepository.save(user);
 
-      // Fetch employee details using loginId (which matches employeeId)
-      let role: string | null = null;
-      if (user.userType === UserType.EMPLOYEE) {
+      let role: string | null = user.role ? String(user.role) : null;
+      if (!role && user.userType === UserType.EMPLOYEE) {
         try {
           const employee = await this.employeeDetailsRepository.findOne({
             where: { employeeId: user.loginId },
-            select: ['designation'],
+            select: ['designation', 'role'],
           });
-          console.log('employee', employee);
           if (employee) {
-            role = employee.designation;
+            role = employee.role ? String(employee.role) : employee.designation;
           }
         } catch (error) {
           this.logger.warn(`Failed to fetch employee details for loginId: ${user.loginId}`, error);
         }
       }
 
-      console.log('role', role);
+      const roleUpper = (role || '').toUpperCase();
+      const isManager = roleUpper.includes('MNG') || roleUpper.includes('MANAGER');
 
       return {
         userId: user.id,
         name: user.aliasLoginName,
         email: user.loginId,
-        userType: user.userType,
+        userType: isManager ? UserType.MANAGER : user.userType,
         role: role,
         accessToken: tokens.accessToken,
         refreshToken: tokens.refreshToken,
@@ -154,11 +173,27 @@ export class UsersService {
       const newPayload = { sub: user.id, loginId: user.loginId };
       const tokens = await this.authService.generateJWTTokenWithRefresh(newPayload);
 
+      let role: string | null = user.role ? String(user.role) : null;
+      if (!role) {
+         try {
+           const employee = await this.employeeDetailsRepository.findOne({
+             where: { employeeId: user.loginId },
+             select: ['role', 'designation'],
+           });
+           if (employee) {
+             role = employee.role ? String(employee.role) : employee.designation;
+           }
+         } catch (e) {
+             // ignore
+         }
+      }
+
       return {
         userId: user.id,
         name: user.aliasLoginName,
         email: user.loginId,
-        userType: user.userType,
+        userType: role?.toUpperCase().includes(UserType.MANAGER) ? UserType.MANAGER : user.userType,
+        role: role,
         accessToken: tokens.accessToken,
         refreshToken: tokens.refreshToken,
         resetRequired: user.resetRequired,
