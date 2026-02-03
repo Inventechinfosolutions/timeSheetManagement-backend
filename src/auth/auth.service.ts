@@ -37,6 +37,7 @@ export class AuthService {
           id: user.id,
           name: user.aliasLoginName,
           email: user.loginId,
+          userType: user.userType,
         },
       };
     } catch (error) {
@@ -73,6 +74,7 @@ export class AuthService {
         id: user.id,
         name: user.aliasLoginName,
         email: user.loginId,
+        userType: user.userType,
       },
     };
   }
