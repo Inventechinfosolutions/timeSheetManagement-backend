@@ -177,6 +177,7 @@ export class EmployeeDetailsService {
 
       const query = this.employeeDetailsRepository
         .createQueryBuilder('employee')
+        .leftJoin(User, 'user_filter', 'user_filter.loginId = employee.employeeId')
         .orderBy(`employee.${validSortBy}`, sortOrder);
 
       query.where('1=1');
@@ -194,15 +195,23 @@ export class EmployeeDetailsService {
 
       // Filter by Manager if provided
       if (managerName || managerId) {
-        query.innerJoin(ManagerMapping, 'mm', 'mm.employeeId = employee.employeeId');
+        // For managers, only show ACTIVE employees
+        query.andWhere('user_filter.status = :activeStatus', { activeStatus: UserStatus.ACTIVE });
+
+        // Exclude the manager themselves from their own list
+        if (managerId) {
+            query.andWhere('employee.employeeId != :excludeManagerId', { excludeManagerId: managerId });
+        }
+
+        query.leftJoin(ManagerMapping, 'mm', 'mm.employeeId = employee.employeeId');
         query.andWhere(
             '(mm.managerName LIKE :managerNameQuery OR mm.managerName LIKE :managerIdQuery)', 
             { 
                 managerNameQuery: `%${managerName}%`, 
-                managerIdQuery: `%${managerId}%` 
+                managerIdQuery: `%${managerId}%`
             }
         );
-        // Ensure only active mappings are considered
+        // Ensure only active mappings are considered for MAPPED employees
         query.andWhere('mm.status = :status', { status: 'ACTIVE' });
       }
 
@@ -267,9 +276,9 @@ export class EmployeeDetailsService {
         if (roles.includes('EMPLOYEE')) {
              query.leftJoin(ManagerMapping, 'mm', 'mm.employeeId = employee.employeeId AND mm.status = :mappingStatus', { mappingStatus: 'ACTIVE' });
              
-             // Join to check manager status
-             query.leftJoin('employee_details', 'm_details', 'mm.managerName = m_details.full_name');
-             query.leftJoin('users', 'm_user', 'm_details.employee_id = m_user.loginId');
+             // Join to check manager status using Entity classes
+             query.leftJoin(EmployeeDetails, 'm_details', 'mm.managerName = m_details.fullName');
+             query.leftJoin(User, 'm_user', 'm_details.employeeId = m_user.loginId');
              
              // Keep if:
              // 1. Not mapped at all (mm.id is NULL)
@@ -339,6 +348,7 @@ export class EmployeeDetailsService {
 
       const query = this.employeeDetailsRepository
         .createQueryBuilder('employee')
+        .leftJoin(User, 'user_filter', 'user_filter.loginId = employee.employeeId')
         .orderBy(`employee.${validSortBy}`, sortOrder);
 
       query.where('1=1');
@@ -356,6 +366,14 @@ export class EmployeeDetailsService {
 
       // Filter by Manager if provided
       if (managerName || managerId) {
+        // For managers, only show ACTIVE employees
+        query.andWhere('user_filter.status = :activeStatus', { activeStatus: UserStatus.ACTIVE });
+        
+        // Exclude the manager themselves from their own list
+        if (managerId) {
+            query.andWhere('employee.employeeId != :excludeManagerId', { excludeManagerId: managerId });
+        }
+
         query.innerJoin(ManagerMapping, 'mm', 'mm.employeeId = employee.employeeId');
         query.andWhere(
             '(mm.managerName LIKE :managerNameQuery OR mm.managerName LIKE :managerIdQuery)', 

@@ -7,6 +7,7 @@ import { Repository, In } from 'typeorm';
 import { ManagerMappingDTO } from '../dto/managerMapping.dto';
 import { ManagerMapping, ManagerMappingStatus } from '../entities/managerMapping.entity';
 import { User } from '../../users/entities/user.entity';
+import { EmployeeDetails } from '../../employeeTimeSheet/entities/employeeDetails.entity';
 import { ManagerMappingMapper } from '../mappers/managerMapping.mapper';
 
 @Injectable()
@@ -31,9 +32,19 @@ export class ManagerMappingService {
     try {
       const queryBuilder = this.managerMappingRepository.createQueryBuilder('managerMapping');
 
+      // Join to users table to get employee status early for filtering
+      queryBuilder
+        .leftJoin(
+          "users",
+          "e_user",
+          "managerMapping.employeeId = e_user.loginId",
+        )
+        .addSelect("e_user.status", "userStatus");
+
       // Apply filters
       if (status) {
-        queryBuilder.andWhere('managerMapping.status = :status', { status });
+        // Filter by the ACTUAL user status of the employee
+        queryBuilder.andWhere('e_user.status = :status', { status });
       }
 
       if (managerName) {
@@ -43,11 +54,11 @@ export class ManagerMappingService {
           .andWhere(
             '(managerMapping.managerName = :managerName OR user.loginId = :managerName OR manager.employee_id = :managerName)',
             { managerName },
-          );
+          )
+          .andWhere('user.status = :activeStatus', { activeStatus: 'ACTIVE' });
       }
 
       // Add search functionality if searchTerm is provided
-      let ignorePagination = false;
       if (searchTerm && searchTerm.trim()) {
         const term = `%${searchTerm.trim().toLowerCase()}%`;
         queryBuilder.andWhere(
@@ -59,26 +70,31 @@ export class ManagerMappingService {
           )`,
           { term },
         );
-        ignorePagination = true;
       }
 
       // Default sorting by id
-      queryBuilder.orderBy('managerMapping.id', sortOrder);
+      queryBuilder.orderBy("managerMapping.id", sortOrder);
 
       this.logger.debug(`SQL: ${queryBuilder.getSql()}`);
-      this.logger.debug(`Query parameters: ${JSON.stringify(queryBuilder.getParameters())}`);
-      
-      const totalMatching = await queryBuilder.getCount();
-      this.logger.log(`Total matching rows (before pagination): ${totalMatching}`);
+      this.logger.debug(
+        `Query parameters: ${JSON.stringify(queryBuilder.getParameters())}`,
+      );
 
-      if (!ignorePagination && options && options.limit) {
+      const totalMatching = await queryBuilder.getCount();
+      this.logger.log(
+        `Total matching rows (before pagination): ${totalMatching}`,
+      );
+
+      if (options && options.limit) {
         const limitNum = Number(options.limit) || 1;
         const requestedPage = Number(options.page) || 1;
         const totalPages = Math.ceil(totalMatching / limitNum);
         if (totalPages === 0) {
           options.page = 1;
         } else if (requestedPage > totalPages) {
-          this.logger.log(`Requested page ${requestedPage} > totalPages ${totalPages}, clamping to ${totalPages}`);
+          this.logger.log(
+            `Requested page ${requestedPage} > totalPages ${totalPages}, clamping to ${totalPages}`,
+          );
           options.page = totalPages;
         } else {
           options.page = requestedPage;
@@ -87,75 +103,47 @@ export class ManagerMappingService {
 
       // Add join to get managerId (loginId) for each mapping
       queryBuilder
-        .leftJoin('employee_details', 'm_details', 'managerMapping.managerName = m_details.full_name')
-        .leftJoin('users', 'm_user', 'm_details.employee_id = m_user.loginId')
-        .addSelect('m_user.loginId', 'managerId');
-      
-      // Join to users table to get employee status
-      queryBuilder
-        .leftJoin('users', 'e_user', 'managerMapping.employeeId = e_user.loginId')
-        .addSelect('e_user.status', 'userStatus');
+        .leftJoin(
+          "employee_details",
+          "m_details",
+          "managerMapping.managerName = m_details.full_name",
+        )
+        .leftJoin("users", "m_user", "m_details.employee_id = m_user.loginId")
+        .addSelect("m_user.loginId", "managerId");
 
-      if (ignorePagination) {
-        const raws = await queryBuilder.getRawMany();
-        const items = raws.map((raw) => {
-          const entity = this.managerMappingRepository.create({
-            id: raw.managerMapping_id,
-            managerName: raw.managerMapping_manager_name,
-            employeeId: raw.managerMapping_employee_id,
-            employeeName: raw.managerMapping_employee_name,
-            status: raw.managerMapping_status,
-            department: raw.managerMapping_department,
-          });
-          const dto = ManagerMappingMapper.fromEntityToDTO(entity);
-          if (dto) {
-             dto.managerId = raw.managerId;
-             // Override status with user status if available
-             if (raw.userStatus) {
-                dto.status = raw.userStatus;
-             }
-          }
-          return dto;
-        }).filter(dto => dto !== undefined);
-
-        return {
-          items,
-          meta: {
-            totalItems: items.length,
-            itemCount: items.length,
-            itemsPerPage: items.length,
-            totalPages: 1,
-            currentPage: 1,
-          },
-          links: {},
-        };
-      } else {
-        const paginatedResult = await paginate<ManagerMapping>(queryBuilder, options);
-        // After pagination, we need to get the managerId for these items.
-        // A simple way is to map them and if name is provided, use it, or fetch.
-        // But for performance, let's just use the fact that we might have filtered by managerId.
-        const rawItems = await Promise.all(paginatedResult.items.map(async (entity) => {
+      const paginatedResult = await paginate<ManagerMapping>(
+        queryBuilder,
+        options,
+      );
+      // After pagination, we need to get the managerId for these items.
+      const rawItems = await Promise.all(
+        paginatedResult.items.map(async (entity) => {
           const dto = ManagerMappingMapper.fromEntityToDTO(entity);
           if (dto && managerName) {
-             dto.managerId = managerName; 
+            dto.managerId = managerName;
           }
           if (dto) {
-             // Fetch user status
-             const user = await this.userRepository.findOne({ where: { loginId: entity.employeeId } });
-             if (user) {
-                dto.status = user.status;
-             }
+            // Attach user status from raw query results if available, else fetch
+            // Since we joined e_user early, we can use the count/select approach or a quick fetch
+            const user = await this.userRepository.findOne({
+              where: { loginId: entity.employeeId },
+            });
+            if (user) {
+              dto.status = user.status;
+            }
           }
           return dto;
-        }));
-        
-        const items = rawItems.filter((item): item is ManagerMappingDTO => item !== undefined);
+        }),
+      );
 
-        return {
-          ...paginatedResult,
-          items,
-        };
-      }
+      const items = rawItems.filter(
+        (item): item is ManagerMappingDTO => item !== undefined,
+      );
+
+      return {
+        ...paginatedResult,
+        items,
+      };
     } catch (error) {
       this.logger.error('Error fetching ManagerMappings with pagination and search', error.stack);
       throw new HttpException(error.message, HttpStatus.INTERNAL_SERVER_ERROR);
@@ -315,31 +303,126 @@ export class ManagerMappingService {
 
 
 
-  async getMappingHistory(): Promise<any[]> {
-    this.logger.log('Fetching grouped Manager Mapping history with Login ID');
+  async getMappingHistory(
+    page: number = 1,
+    limit: number = 10,
+    search?: string,
+    sortBy: string = 'createdAt',
+    sortOrder: string = 'DESC',
+    department?: string,
+    status?: string
+  ): Promise<any> {
+    this.logger.log(`Fetching grouped Manager Mapping history with pagination. Search: ${search || 'None'}, Status: ${status || 'All'}, Page: ${page}`);
     try {
       const queryBuilder = this.managerMappingRepository.createQueryBuilder('managerMapping');
       
-      const results = await queryBuilder
-        .leftJoin('employee_details', 'manager', 'managerMapping.managerName = manager.full_name')
-        .leftJoin('users', 'user', 'manager.employee_id = user.loginId')
+      queryBuilder
+        .leftJoin(EmployeeDetails, 'manager', 'managerMapping.managerName = manager.fullName')
+        .leftJoin(User, 'user', 'manager.employeeId = user.loginId')
+        .leftJoin(User, 'e_user', 'managerMapping.employeeId = e_user.loginId')
         .select('managerMapping.managerName', 'managerName')
         .addSelect('managerMapping.department', 'department')
         .addSelect('MAX(user.status)', 'managerStatus')
-        .addSelect('COUNT(managerMapping.employeeId)', 'employeeCount')
-        .addSelect('MAX(manager.employee_id)', 'managerEmployeeId')
+        .addSelect("COUNT(CASE WHEN managerMapping.status = 'ACTIVE' AND e_user.status = 'ACTIVE' AND user.status = 'ACTIVE' THEN 1 END)", 'employeeCount')
+        .addSelect('MAX(manager.employeeId)', 'managerEmployeeId')
         .addSelect('MAX(user.loginId)', 'loginId')
+        .addSelect('MAX(managerMapping.createdAt)', 'createdAt')
         .groupBy('managerMapping.managerName')
-        .addGroupBy('managerMapping.department')
+        .addGroupBy('managerMapping.department');
+
+      // Filters
+      if (department && department !== 'All' && department !== 'All Departments') {
+        queryBuilder.andWhere('managerMapping.department = :department', { department });
+      }
+
+      if (search && search.trim()) {
+        const term = `%${search.trim().toLowerCase()}%`;
+        queryBuilder.andWhere(
+          `(LOWER(managerMapping.managerName) LIKE :term OR 
+            LOWER(manager.employeeId) LIKE :term OR 
+            LOWER(managerMapping.department) LIKE :term)`,
+          { term }
+        );
+      }
+
+      if (status && (status === 'ACTIVE' || status === 'INACTIVE')) {
+        queryBuilder.having('MAX(user.status) = :status', { status });
+      }
+
+      // To get the total number of groups for pagination meta
+      const countQuery = this.managerMappingRepository.createQueryBuilder('managerMapping')
+        .leftJoin(EmployeeDetails, 'manager', 'managerMapping.managerName = manager.fullName')
+        .select('managerMapping.managerName', 'managerName')
+        .addSelect('managerMapping.department', 'department')
+        .groupBy('managerMapping.managerName')
+        .addGroupBy('managerMapping.department');
+
+      if (department && department !== 'All' && department !== 'All Departments') {
+        countQuery.andWhere('managerMapping.department = :department', { department });
+      }
+      if (search && search.trim()) {
+        const term = `%${search.trim().toLowerCase()}%`;
+        countQuery.andWhere(
+          `(LOWER(managerMapping.managerName) LIKE :term OR 
+            LOWER(manager.employeeId) LIKE :term OR 
+            LOWER(managerMapping.department) LIKE :term)`,
+          { term }
+        );
+      }
+
+      if (status && (status === 'ACTIVE' || status === 'INACTIVE')) {
+        countQuery
+          .leftJoin(User, 'user', 'manager.employeeId = user.loginId')
+          .having('MAX(user.status) = :status', { status });
+      }
+
+      const totalItemsResults = await countQuery.getRawMany();
+      const totalItems = totalItemsResults.length;
+
+      // Sorting
+      const validSortFields = ['managerName', 'department', 'employeeCount', 'managerId', 'managerStatus', 'createdAt'];
+      const actualSortBy = validSortFields.includes(sortBy) ? sortBy : 'createdAt';
+      const actualSortOrder = (sortOrder.toUpperCase() === 'DESC') ? 'DESC' : 'ASC';
+
+      if (actualSortBy === 'managerId') {
+        queryBuilder.orderBy('loginId', actualSortOrder);
+      } else if (actualSortBy === 'managerStatus') {
+        queryBuilder.orderBy('managerStatus', actualSortOrder);
+      } else if (actualSortBy === 'employeeCount') {
+        queryBuilder.orderBy('employeeCount', actualSortOrder);
+      } else if (actualSortBy === 'department') {
+        queryBuilder.orderBy('managerMapping.department', actualSortOrder);
+      } else if (actualSortBy === 'createdAt') {
+        queryBuilder.orderBy('createdAt', actualSortOrder);
+      } else {
+        queryBuilder.orderBy('managerMapping.managerName', actualSortOrder);
+      }
+
+      // Pagination
+      const skip = (page - 1) * limit;
+      const results = await queryBuilder
+        .offset(skip)
+        .limit(limit)
         .getRawMany();
 
-      return results.map(r => ({
+      const items = results.map(r => ({
         managerName: r.managerName,
         managerId: r.loginId || r.managerEmployeeId || r.managerName,
         department: r.department,
         status: r.managerStatus || 'ACTIVE',
         employeeCount: parseInt(r.employeeCount, 10)
       }));
+
+      return {
+        items,
+        meta: {
+          totalItems,
+          itemCount: items.length,
+          itemsPerPage: limit,
+          totalPages: Math.ceil(totalItems / limit),
+          currentPage: page
+        }
+      };
     } catch (error) {
       this.logger.error('Error fetching mapping history', error.stack);
       throw new HttpException(error.message, HttpStatus.INTERNAL_SERVER_ERROR);
@@ -353,10 +436,12 @@ export class ManagerMappingService {
       
       const mappings = await queryBuilder
         .select('managerMapping.employeeId')
-        .leftJoin('employee_details', 'manager', 'managerMapping.managerName = manager.full_name') // Join to get manager details
-        .leftJoin('users', 'user', 'manager.employee_id = user.loginId') // Join to get manager user status
+        .leftJoin(EmployeeDetails, 'manager', 'managerMapping.managerName = manager.fullName') // Join to get manager details
+        .leftJoin(User, 'user', 'manager.employeeId = user.loginId') // Join to get manager user status
+        .leftJoin(User, 'e_user', 'managerMapping.employeeId = e_user.loginId') // Join to get employee status
         .where('managerMapping.status = :mappingStatus', { mappingStatus: ManagerMappingStatus.ACTIVE })
         .andWhere('user.status = :managerUserStatus', { managerUserStatus: 'ACTIVE' }) // Only consider mapping active if manager is active
+        .andWhere('e_user.status = :employeeUserStatus', { employeeUserStatus: 'ACTIVE' }) // Only consider mapping active if employee is active
         .getMany();
 
       return mappings.map((m) => m.employeeId);
