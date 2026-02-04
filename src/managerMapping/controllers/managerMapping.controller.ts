@@ -123,8 +123,27 @@ export class ManagerMappingController {
   @HttpCode(200)
   @ApiOperation({ summary: 'Get aggregated manager mapping history' })
   @ApiResponse({ status: 200, description: 'Get history grouped by manager' })
-  async getHistory(): Promise<any[]> {
-    return await this.managerMappingService.getMappingHistory();
+  async getHistory(
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+    @Query('search') search?: string,
+    @Query('sortBy') sortBy?: string,
+    @Query('sortOrder') sortOrder?: string,
+    @Query('department') department?: string,
+    @Query('status') status?: string,
+  ): Promise<any> {
+    const pageNumber = page ? parseInt(page, 10) : 1;
+    const limitNumber = limit ? parseInt(limit, 10) : 10;
+    
+    return await this.managerMappingService.getMappingHistory(
+      pageNumber,
+      limitNumber,
+      search,
+      sortBy,
+      sortOrder,
+      department,
+      status
+    );
   }
 
   @Get('/mapped-employee-ids')
