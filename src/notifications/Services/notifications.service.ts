@@ -4,7 +4,7 @@ import { Repository } from 'typeorm';
 import { EmployeeDetails } from '../../employeeTimeSheet/entities/employeeDetails.entity';
 import { Notification } from '../entities/notification.entity';
 import { MailService } from '../../common/mail/mail.service';
-import { getNotificationEmailTemplate } from '../../common/mail/email-templates';
+import { getGeneralNotificationTemplate } from '../../common/mail/templates';
 
 @Injectable()
 export class NotificationsService {
@@ -26,8 +26,12 @@ export class NotificationsService {
     for (const emp of employees) {
       if (emp.email) {
         const title = 'Weekly Attendance Reminder';
-        const message = 'Dear Employee,\n\nPlease make sure to update your timesheets for the current week.\n\nRegards,\nAdmin Team';
-        const html = getNotificationEmailTemplate(title, message);
+        const message = 'Please make sure to update your timesheets for the current week.\n\nRegards,\nAdmin Team';
+        const html = getGeneralNotificationTemplate({
+          recipientName: emp.fullName || 'Employee',
+          title: title,
+          message: message
+        });
 
         await this.mailService.sendMail(
           emp.email,
@@ -61,8 +65,12 @@ export class NotificationsService {
     for (const emp of employees) {
       if (emp.email) {
         const title = 'Month-End Attendance Reminder';
-        const message = 'Dear Employee,\n\nThis is a reminder to ensure all your attendance records for the month are up to date. Please finalize your timesheets.\n\nRegards,\nAdmin Team';
-        const html = getNotificationEmailTemplate(title, message);
+        const message = 'This is a reminder to ensure all your attendance records for the month are up to date. Please finalize your timesheets.\n\nRegards,\nAdmin Team';
+        const html = getGeneralNotificationTemplate({
+          recipientName: emp.fullName || 'Employee',
+          title: title,
+          message: message
+        });
 
         await this.mailService.sendMail(
           emp.email,
