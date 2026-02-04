@@ -8,6 +8,11 @@ import { EmailService } from '../../email/email.service';
 import { DocumentUploaderService } from '../../common/document-uploader/services/document-uploader.service';
 import { DocumentMetaInfo, EntityType, ReferenceType } from '../../common/document-uploader/models/documentmetainfo.model';
 import dayjs from 'dayjs';
+import { 
+  getRequestNotificationTemplate, 
+  getStatusUpdateTemplate, 
+  getCancellationTemplate 
+} from '../../common/mail/templates';
 
 @Injectable()
 export class LeaveRequestsService {
@@ -57,7 +62,7 @@ export class LeaveRequestsService {
             employeeId: data.employeeId,
             fromDate: LessThanOrEqual(data.toDate),
             toDate: MoreThanOrEqual(data.fromDate),
-            status: In(['Pending', 'Approved']),
+            status: In(['Pending', 'Approved', 'Cancellation Rejected']),
             requestType: In(conflictingTypes),
           },
         });
@@ -100,36 +105,20 @@ export class LeaveRequestsService {
 
         // 3. Construct HTML Content
         const requestTypeLabel =
-          data.requestType === 'Apply Leave' ? 'Leave' : data.requestType;
+          (data.requestType === 'Apply Leave' ? 'Leave' : data.requestType) || 'Request';
         const subject = `New ${requestTypeLabel} Request - ${employee.fullName}`;
 
-        const htmlContent = `
-            <div style="font-family: Arial, sans-serif; padding: 20px; border: 1px solid #eee; border-radius: 10px;">
-              <h2 style="color: #333;">New ${requestTypeLabel} Request</h2>
-              <p><strong>Employee:</strong> ${employee.fullName} (${employee.employeeId})</p>
-              
-              <div style="background-color: #f8f9fa; padding: 15px; border-radius: 8px; margin: 15px 0;">
-                <p style="margin: 5px 0;"><strong>Title:</strong> ${data.title || 'No Title'}</p>
-                <p style="margin: 5px 0;"><strong>From:</strong> ${data.fromDate}</p>
-                <p style="margin: 5px 0;"><strong>To:</strong> ${data.toDate}</p>
-                <p style="margin: 5px 0;"><strong>Reason:</strong> ${data.description || 'N/A'}</p>
-              </div>
-
-              <p>Please log in to the admin panel to approve or reject this request.</p>
-
-              <div style="text-align: center; margin: 25px 0;">
-                <a href="https://timesheet.inventech-developer.in" 
-                   style="background-color: #007bff; color: #ffffff; padding: 12px 24px; text-decoration: none; border-radius: 5px; font-weight: bold; display: inline-block;">
-                   Login to Portal
-                </a>
-              </div>
-              
-              <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;" />
-              <p style="font-size: 12px; color: #999;">
-                This is an automated notification.
-              </p>
-            </div>
-        `;
+        const htmlContent = getRequestNotificationTemplate({
+          employeeName: employee.fullName || 'Employee',
+          employeeId: employee.employeeId,
+          requestType: requestTypeLabel,
+          title: data.title || 'No Title',
+          fromDate: data.fromDate || '',
+          toDate: data.toDate || '',
+          duration: data.duration || 0,
+          status: 'Pending',
+          description: data.description || 'N/A'
+        });
 
         if (adminEmail) {
           // 4. Send Email
@@ -180,7 +169,22 @@ export class LeaveRequestsService {
     return savedRequest;
   }
 
-  async findAll(department?: string, status?: string, search?: string, page: number = 1, limit: number = 10, managerName?: string, managerId?: string) {
+  async findUnifiedRequests(
+    filters: {
+      employeeId?: string;
+      department?: string;
+      status?: string;
+      search?: string;
+      month?: string;
+      year?: string;
+      page?: number;
+      limit?: number;
+      managerName?: string;
+      managerId?: string;
+    }
+  ) {
+    const { employeeId, department, status, search, month = 'All', year = 'All', page = 1, limit = 10, managerName, managerId } = filters;
+
     const query = this.leaveRequestRepository.createQueryBuilder('lr')
       .leftJoin(EmployeeDetails, 'ed', 'ed.employeeId = lr.employeeId')
       .select([
@@ -201,22 +205,12 @@ export class LeaveRequestsService {
         'ed.fullName AS fullName'
       ]);
 
-    if (department) {
-      query.andWhere('ed.department = :department', { department });
+    // 1. Employee Filter
+    if (employeeId) {
+      query.andWhere('lr.employeeId = :employeeId', { employeeId });
     }
 
-    if (status) {
-      query.andWhere('lr.status = :status', { status });
-    }
-
-    if (search) {
-      query.andWhere(new Brackets(qb => {
-        qb.where('LOWER(ed.fullName) LIKE LOWER(:search)', { search: `%${search}%` })
-          .orWhere('LOWER(lr.employeeId) LIKE LOWER(:search)', { search: `%${search}%` });
-      }));
-    }
-
-    // Filter by Manager if provided
+    // 2. Manager Filter (from Upstream)
     if (managerName || managerId) {
       const { ManagerMapping } = require('../../managerMapping/entities/managerMapping.entity');
       query.innerJoin(ManagerMapping, 'mm', 'mm.employeeId = lr.employeeId');
@@ -230,6 +224,51 @@ export class LeaveRequestsService {
       query.andWhere('mm.status = :mmStatus', { mmStatus: 'ACTIVE' });
     }
 
+    // 3. Department Filter
+    if (department && department !== 'All') {
+      query.andWhere('ed.department = :department', { department });
+    }
+
+    // 4. Status Filter
+    if (status && status !== 'All') {
+      query.andWhere('lr.status = :status', { status });
+    }
+
+    // 5. Search Filter
+    if (search && search.trim() !== '') {
+      query.andWhere(new Brackets(qb => {
+        const searchPattern = `%${search.toLowerCase()}%`;
+        qb.where('LOWER(ed.fullName) LIKE :searchPattern', { searchPattern })
+          .orWhere('LOWER(lr.employeeId) LIKE :searchPattern', { searchPattern })
+          .orWhere('LOWER(lr.title) LIKE :searchPattern', { searchPattern });
+      }));
+    }
+
+    // 6. Date Boundaries Filter
+    if (year !== 'All' || month !== 'All') {
+      if (year !== 'All' && month !== 'All') {
+        const monthInt = parseInt(month);
+        const yearInt = parseInt(year);
+        const monthStart = `${year}-${month.padStart(2, '0')}-01`;
+        const lastDay = new Date(yearInt, monthInt, 0).getDate();
+        const monthEnd = `${year}-${month.padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+        
+        query.andWhere('lr.fromDate <= :monthEnd', { monthEnd })
+             .andWhere('lr.toDate >= :monthStart', { monthStart });
+      } else if (year !== 'All' && month === 'All') {
+        const yearStart = `${year}-01-01`;
+        const yearEnd = `${year}-12-31`;
+        query.andWhere('lr.fromDate <= :yearEnd', { yearEnd })
+             .andWhere('lr.toDate >= :yearStart', { yearStart });
+      } else if (year === 'All' && month !== 'All') {
+        const m = parseInt(month);
+        query.andWhere(new Brackets(qb => {
+           qb.where('MONTH(lr.fromDate) = :m', { m })
+             .orWhere('MONTH(lr.toDate) = :m', { m });
+        }));
+      }
+    }
+
     const total = await query.getCount();
 
     const data = await query
@@ -238,10 +277,11 @@ export class LeaveRequestsService {
         WHEN lr.status = 'Requesting for Cancellation' THEN 2
         WHEN lr.status = 'Approved' THEN 3
         WHEN lr.status = 'Cancellation Approved' THEN 4
-        WHEN lr.status = 'Request Modified' THEN 5
-        WHEN lr.status = 'Rejected' THEN 5
-        WHEN lr.status = 'Cancelled' THEN 6
-        ELSE 7 
+        WHEN lr.status = 'Cancellation Rejected' THEN 5
+        WHEN lr.status = 'Request Modified' THEN 6
+        WHEN lr.status = 'Rejected' THEN 6
+        WHEN lr.status = 'Cancelled' THEN 7
+        ELSE 8 
       END`, 'priority')
       .orderBy('priority', 'ASC')
       .addOrderBy('lr.id', 'DESC')
@@ -258,43 +298,12 @@ export class LeaveRequestsService {
     };
   }
 
-  async findByEmployeeId(employeeId: string, page: number = 1, limit: number = 10) {
-    const query = this.leaveRequestRepository.createQueryBuilder('lr')
-      .leftJoin(EmployeeDetails, 'ed', 'ed.employeeId = lr.employeeId')
-      .where('lr.employeeId = :employeeId', { employeeId })
-      .select([
-        'lr.id AS id',
-        'lr.employeeId AS employeeId',
-        'lr.requestType AS requestType',
-        'lr.fromDate AS fromDate',
-        'lr.toDate AS toDate',
-        'lr.title AS title',
-        'lr.description AS description',
-        'lr.status AS status',
-        'lr.isRead AS isRead',
-        'lr.submittedDate AS submittedDate',
-        'lr.duration AS duration',
-        'lr.createdAt AS createdAt',
-        'lr.request_modified_from AS requestModifiedFrom',
-        'ed.department AS department',
-        'ed.fullName AS fullName'
-      ]);
+  async findAll(department?: string, status?: string, search?: string, page: number = 1, limit: number = 10, managerName?: string, managerId?: string) {
+    return this.findUnifiedRequests({ department, status, search, page, limit, managerName, managerId });
+  }
 
-    const total = await query.getCount();
-
-    const data = await query
-      .orderBy('lr.id', 'DESC')
-      .offset((page - 1) * limit)
-      .limit(limit)
-      .getRawMany();
-
-    return {
-      data,
-      total,
-      page: Number(page),
-      limit: Number(limit),
-      totalPages: Math.ceil(total / limit),
-    };
+  async findByEmployeeId(employeeId: string, status?: string, page: number = 1, limit: number = 10) {
+    return this.findUnifiedRequests({ employeeId, status, page, limit });
   }
 
   async findOne(id: number) {
@@ -588,33 +597,16 @@ export class LeaveRequestsService {
           
           const displayDuration = totalDays || request.duration || 0;
 
-          const htmlContent = `
-            <div style="font-family: Arial, sans-serif; padding: 20px; border: 1px solid #eee; border-radius: 10px;">
-              <h2 style="color: #ffc107;">New Cancellation Request</h2>
-              <p><strong>Employee:</strong> ${employee.fullName} (${employee.employeeId})</p>
-              
-              <div style="background-color: #f8f9fa; padding: 15px; border-radius: 8px; margin: 15px 0;">
-                <p style="margin: 5px 0;"><strong>Type:</strong> ${requestTypeLabel}</p>
-                <p style="margin: 5px 0;"><strong>Original Title:</strong> ${request.title || 'No Title'}</p>
-                <p style="margin: 5px 0;"><strong>Dates to Cancel:</strong> ${request.fromDate} to ${request.toDate}</p>
-                <p style="margin: 5px 0;"><strong>Total Days:</strong> ${displayDuration}</p>
-              </div>
-
-              <p>The employee has requested to cancel an <strong>Approved</strong> ${requestTypeLabel} request. Please review and approve/reject this cancellation in the admin panel.</p>
-
-              <div style="text-align: center; margin: 25px 0;">
-                <a href="https://timesheet.inventech-developer.in" 
-                   style="background-color: #007bff; color: #ffffff; padding: 12px 24px; text-decoration: none; border-radius: 5px; font-weight: bold; display: inline-block;">
-                   Login to Portal
-                </a>
-              </div>
-              
-              <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;" />
-              <p style="font-size: 12px; color: #999;">
-                This is an automated notification.
-              </p>
-            </div>
-          `;
+          const htmlContent = getCancellationTemplate({
+            employeeName: employee.fullName,
+            employeeId: employee.employeeId,
+            requestType: requestTypeLabel,
+            title: request.title || 'No Title',
+            fromDate: request.fromDate,
+            toDate: request.toDate,
+            duration: displayDuration,
+            reason: request.description
+          });
 
           await this.emailService.sendEmail(
             adminEmail,
@@ -711,7 +703,63 @@ export class LeaveRequestsService {
 
     // Mark this request as Cancelled (invalidated)
     request.status = 'Cancelled';
-    return this.leaveRequestRepository.save(request);
+    const saved = await this.leaveRequestRepository.save(request);
+
+    // --- NEW: Email Notifications ---
+    try {
+      const employee = await this.employeeDetailsRepository.findOne({
+        where: { employeeId: request.employeeId },
+      });
+      const adminEmail = process.env.ADMIN_EMAIL || process.env.SMTP_USERNAME;
+
+      if (employee) {
+        // 1. Admin Email (actionType: 'revert')
+        if (adminEmail) {
+          const adminSubject = `Cancellation Reverted: ${request.requestType} - ${employee.fullName}`;
+          const adminHtml = getCancellationTemplate({
+            employeeName: employee.fullName,
+            employeeId: employee.employeeId,
+            requestType: request.requestType,
+            title: request.title,
+            fromDate: request.fromDate.toString(),
+            toDate: request.toDate.toString(),
+            duration: request.duration,
+            actionType: 'revert',
+          });
+          await this.emailService.sendEmail(
+            adminEmail,
+            adminSubject,
+            'Cancellation Reverted',
+            adminHtml,
+          );
+        }
+
+        // 2. Employee Email ("Reverted")
+        if (employee.email) {
+          const empSubject = `Cancellation Reverted: ${request.requestType} - ${request.title}`;
+          const empHtml = getStatusUpdateTemplate({
+            employeeName: employee.fullName,
+            requestType: request.requestType,
+            title: request.title,
+            fromDate: request.fromDate.toString(),
+            toDate: request.toDate.toString(),
+            duration: request.duration,
+            status: 'Reverted',
+            isCancellation: true,
+          });
+          await this.emailService.sendEmail(
+            employee.email,
+            empSubject,
+            'Your cancellation request has been reverted.',
+            empHtml,
+          );
+        }
+      }
+    } catch (error) {
+      this.logger.error('Failed to send undo cancellation emails:', error);
+    }
+
+    return saved;
   }
 
   async markAllAsRead() {
@@ -739,40 +787,24 @@ export class LeaveRequestsService {
         if (adminEmail) {
           const requestTypeLabel =
             request.requestType === 'Apply Leave' ? 'Leave' : request.requestType;
-          const subject = `Cancelled: ${requestTypeLabel} Request - ${employee.fullName}`;
+          const subject = `Request Reverted Back: ${requestTypeLabel} Request - ${employee.fullName}`;
 
-          const htmlContent = `
-            <div style="font-family: Arial, sans-serif; padding: 20px; border: 1px solid #eee; border-radius: 10px;">
-              <h2 style="color: #dc3545;">Request Cancelled by Employee</h2>
-              <p><strong>Employee:</strong> ${employee.fullName} (${employee.employeeId})</p>
-              
-              <div style="background-color: #f8f9fa; padding: 15px; border-radius: 8px; margin: 15px 0;">
-                <p style="margin: 5px 0;"><strong>Type:</strong> ${request.requestType}</p>
-                <p style="margin: 5px 0;"><strong>Title:</strong> ${request.title || 'No Title'}</p>
-                <p style="margin: 5px 0;"><strong>From:</strong> ${request.fromDate}</p>
-                <p style="margin: 5px 0;"><strong>To:</strong> ${request.toDate}</p>
-              </div>
-
-              <p>The above request has been cancelled by the employee and removed from the system.</p>
-              
-              <div style="text-align: center; margin: 25px 0;">
-                <a href="https://timesheet.inventech-developer.in" 
-                   style="background-color: #007bff; color: #ffffff; padding: 12px 24px; text-decoration: none; border-radius: 5px; font-weight: bold; display: inline-block;">
-                   Login to Portal
-                </a>
-              </div>
-
-              <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;" />
-               <p style="font-size: 12px; color: #999;">
-                This is an automated notification.
-              </p>
-            </div>
-           `;
+          const htmlContent = getCancellationTemplate({
+            employeeName: employee.fullName,
+            employeeId: employee.employeeId,
+            requestType: requestTypeLabel,
+            title: request.title || 'No Title',
+            fromDate: request.fromDate,
+            toDate: request.toDate,
+            duration: request.duration || 0,
+            reason: request.description,
+            actionType: 'revert_back'
+          });
 
           await this.emailService.sendEmail(
             adminEmail,
             subject,
-            `Request Cancelled by ${employee.fullName}`,
+            `Request Reverted Back by ${employee.fullName}`,
             htmlContent,
           );
         }
@@ -790,53 +822,73 @@ export class LeaveRequestsService {
     return this.leaveRequestRepository.save(request);
   }
 
-  async getStats(employeeId: string) {
-    const now = new Date();
-    const year = now.getFullYear();
-    const month = now.getMonth() + 1;
-    const monthStr = month < 10 ? `0${month}` : `${month}`;
-    const yearMonth = `${year}-${monthStr}`;
-
+  async getStats(employeeId: string, month: string = 'All', year: string = 'All') {
     const requests = await this.leaveRequestRepository.find({
       where: { employeeId },
     });
 
-    // Filter for current month based on submittedDate
-    const currentMonthRequests = requests.filter((req: any) => {
+    // Filter requests based on selected period
+    const filteredRequests = requests.filter((req: any) => {
       const dateToUse = req.submittedDate;
       if (!dateToUse) return false;
       
-      let datePart = '';
+      let reqDateStr = '';
       if (dateToUse instanceof Date) {
         const y = dateToUse.getFullYear();
         const m = dateToUse.getMonth() + 1;
-        datePart = `${y}-${m < 10 ? '0' + m : m}`;
+        reqDateStr = `${y}-${m < 10 ? '0' + m : m}`;
       } else {
-        datePart = String(dateToUse).substring(0, 7);
+        reqDateStr = String(dateToUse).substring(0, 10); // YYYY-MM-DD
       }
-      
-      return datePart === yearMonth;
+
+      const [reqYear, reqMonth] = reqDateStr.split('-');
+
+      if (year !== 'All' && reqYear !== year) return false;
+      if (month !== 'All' && parseInt(reqMonth) !== parseInt(month)) return false;
+
+      return true;
     });
 
     const stats = {
-      leave: { applied: 0, approved: 0, rejected: 0, total: 0 },
-      wfh: { applied: 0, approved: 0, rejected: 0, total: 0 },
-      clientVisit: { applied: 0, approved: 0, rejected: 0, total: 0 },
+      leave: { applied: 0, approved: 0, rejected: 0, cancelled: 0 },
+      wfh: { applied: 0, approved: 0, rejected: 0, cancelled: 0 },
+      clientVisit: { applied: 0, approved: 0, rejected: 0, cancelled: 0 },
     };
 
-    currentMonthRequests.forEach((req) => {
-      if (req.requestType === 'Apply Leave') {
-        stats.leave.applied++;
-        if (req.status === 'Approved') stats.leave.approved++;
-        if (req.status === 'Rejected') stats.leave.rejected++;
-      } else if (req.requestType === 'Work From Home') {
-        stats.wfh.applied++;
-        if (req.status === 'Approved') stats.wfh.approved++;
-        if (req.status === 'Rejected') stats.wfh.rejected++;
-      } else if (req.requestType === 'Client Visit') {
-        stats.clientVisit.applied++;
-        if (req.status === 'Approved') stats.clientVisit.approved++;
-        if (req.status === 'Rejected') stats.clientVisit.rejected++;
+    filteredRequests.forEach((req) => {
+      const status = req.status;
+
+      // Skip internal modification records, cancelled requests, and pending cancellation requests entirely from stats
+      if (
+        status === 'Request Modified' ||
+        status === 'Cancelled'
+      ) {
+        return;
+      }
+
+      const target =
+        req.requestType === 'Apply Leave'
+          ? stats.leave
+          : req.requestType === 'Work From Home'
+            ? stats.wfh
+            : req.requestType === 'Client Visit'
+              ? stats.clientVisit
+              : null;
+
+      if (!target) return;
+
+      // Logic: Increment 'applied' for all valid non-cancelled/non-modified sessions
+      // This keeps the big number at top-right representing active/valid applications
+      if (status !== 'Cancellation Approved' && status !== 'Requesting for Cancellation') {
+        target.applied++;
+      }
+
+      if (status === 'Approved' || status === 'Requesting for Cancellation') {
+        target.approved++;
+      } else if (status === 'Rejected') {
+        target.rejected++;
+      } else if (status === 'Cancellation Approved') {
+        target.cancelled++;
       }
     });
 
@@ -870,20 +922,45 @@ export class LeaveRequestsService {
       });
 
       if (employee) {
-        // CASE 1: Employee Cancelled (or Admin marked as Cancelled manually) -> Notify Admin
-        if (status === 'Cancelled' && previousStatus === 'Pending') {
-          // Logic for simple cancellation if needed
-        }
+      // CASE 1: Employee Cancelled (or Admin marked as Cancelled manually) -> Notify Admin
+      if (status === 'Cancelled' && previousStatus === 'Pending') {
+        const adminEmail = process.env.ADMIN_EMAIL || process.env.SMTP_USERNAME;
+        if (adminEmail) {
+          const requestTypeLabel =
+            request.requestType === 'Apply Leave' ? 'Leave' : request.requestType;
+          const adminSubject = `Request Reverted Back: ${requestTypeLabel} Request - ${employee.fullName}`;
 
-        // CASE 2: Approved/Rejected/Cancellation Approved -> Notify Employee
-        if (employee.email) {
-          const isCancellation = status === 'Cancellation Approved' || status === 'Cancelled';
-          const requestTypePretty = request.requestType;
-          
-          let mailSubject = `${requestTypePretty} Request Update`;
-          let headerTitle = `${requestTypePretty} Request Update`;
-          let mainMessage = `Your request for <strong>${requestTypePretty}</strong> titled "<strong>${request.title}</strong>" has been processed.`;
-          let displayStatus: string = status;
+          const adminHtml = getCancellationTemplate({
+            employeeName: employee.fullName,
+            employeeId: employee.employeeId,
+            requestType: requestTypeLabel,
+            title: request.title || 'No Title',
+            fromDate: request.fromDate.toString(),
+            toDate: request.toDate.toString(),
+            duration: request.duration || 0,
+            reason: request.description,
+            actionType: 'revert_back',
+          });
+
+          await this.emailService.sendEmail(
+            adminEmail,
+            adminSubject,
+            `Request Reverted Back by ${employee.fullName}`,
+            adminHtml,
+          );
+          this.logger.log(`Admin notification sent for pending-to-cancelled: ${id}`);
+        }
+      }
+
+      // CASE 2: Approved/Rejected/Cancellation Approved -> Notify Employee
+      if (employee.email) {
+        const isCancellation = status === 'Cancellation Approved';
+        const requestTypePretty = request.requestType;
+        
+        let mailSubject = `${requestTypePretty} Request Update`;
+        let headerTitle = `${requestTypePretty} Update`;
+        let mainMessage = `Your request for <strong>${requestTypePretty}</strong> titled \"<strong>${request.title}</strong>\" has been processed.`;
+        let displayStatus: string = status;
           
           if (status === 'Approved') {
                mailSubject = `${requestTypePretty} Request Approved`;
@@ -899,10 +976,10 @@ export class LeaveRequestsService {
                mainMessage = `Your request for cancel <strong>${requestTypePretty}</strong> titled "<strong>${request.title}</strong>" has been reviewed.`;
                displayStatus = 'Cancellation Approved';
           } else if (status === 'Cancelled') {
-               mailSubject = `${requestTypePretty} Request Cancellation`;
-               headerTitle = `${requestTypePretty} Request Cancellation`;
-               mainMessage = `Your request for <strong>${requestTypePretty}</strong> titled "<strong>${request.title}</strong>" has been Cancelled.`;
-          }
+             mailSubject = `${requestTypePretty} Request Cancelled`;
+             headerTitle = `${requestTypePretty} CANCELLED`;
+             mainMessage = `Your request for <strong>${requestTypePretty}</strong> titled \"<strong>${request.title}</strong>\" has been Cancelled.`;
+        }
 
           const statusColor =
             status === 'Approved' || status === 'Cancellation Approved'
@@ -913,44 +990,16 @@ export class LeaveRequestsService {
           const toDate = dayjs(request.toDate).format('YYYY-MM-DD');
           const duration = request.duration || 0;
   
-          const htmlContent = `
-            <div style="font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: 0 auto; border: 1px solid #e0e0e0; border-radius: 8px; overflow: hidden; background-color: #ffffff;">
-              <!-- Header -->
-              <div style="background-color: #1a1a1a; color: #ffffff; padding: 20px; text-align: center;">
-                  <h2 style="margin: 0; font-size: 20px;">${headerTitle}</h2>
-              </div>
-              
-              <!-- Body -->
-              <div style="padding: 24px;">
-                  <p style="margin-top: 0; font-size: 16px;">Dear <strong>${employee.fullName || 'Employee'}</strong> (${request.employeeId}),</p>
-                  <p style="font-size: 16px; line-height: 1.5; color: #555;">${mainMessage}</p>
-                  
-                  <!-- Details Card -->
-                  <div style="background-color: #f5f5f5; padding: 16px; border-radius: 8px; margin: 24px 0;">
-                      <p style="margin: 8px 0; font-size: 14px; color: #555;"><strong>From:</strong> ${fromDate}</p>
-                      <p style="margin: 8px 0; font-size: 14px; color: #555;"><strong>To:</strong> ${toDate}</p>
-                      <p style="margin: 8px 0; font-size: 14px; color: #555;"><strong>Duration:</strong> ${duration} Day(s)</p>
-                  </div>
-                  
-                  <p style="font-size: 16px; font-weight: bold;">
-                      Status: <span style="color: ${statusColor};">${displayStatus}</span>
-                  </p>
-
-                  <div style="text-align: center; margin: 30px 0;">
-                    <a href="https://timesheet.inventech-developer.in" 
-                       style="background-color: #007bff; color: #ffffff; padding: 12px 24px; text-decoration: none; border-radius: 5px; font-weight: bold; display: inline-block;">
-                       Login to Portal
-                    </a>
-                  </div>
-  
-                  <hr style="border: 0; border-top: 1px solid #eee; margin: 30px 0;">
-                  
-                  <p style="font-size: 12px; color: #999; text-align: center; margin-bottom: 0;">
-                       This is an automated message. Please do not reply.
-                  </p>
-              </div>
-            </div>
-          `;
+          const htmlContent = getStatusUpdateTemplate({
+            employeeName: employee.fullName || 'Employee',
+            requestType: requestTypePretty,
+            title: request.title,
+            fromDate: fromDate,
+            toDate: toDate,
+            duration: duration,
+            status: status as any,
+            isCancellation: isCancellation
+          });
   
           await this.emailService.sendEmail(
             employee.email,
@@ -978,7 +1027,7 @@ export class LeaveRequestsService {
     modification.toDate = data.toDate;
     modification.status = 'Request Modified';
     modification.title = parent.title;
-    modification.description = `${parent.description || ''} (Request Modified due to overlap with ${data.sourceRequestType} ID: ${data.sourceRequestId})`;
+    modification.description = `${parent.description || ''} (Request Modified due to new request on same date ${data.sourceRequestType} ID: ${data.sourceRequestId})`;
     modification.submittedDate = dayjs().format('YYYY-MM-DD');
     modification.isRead = true;
     modification.isReadEmployee = false;
@@ -1037,18 +1086,15 @@ export class LeaveRequestsService {
         await this.leaveRequestRepository.save(masterRequest);
       }
 
-      // Mark as REJECTED
-      request.status = 'Rejected';
-      request.title = 'Cancellation Rejected'; // Marker for Frontend
+      // Mark as CANCELLATION REJECTED
+      request.status = 'Cancellation Rejected';
     } else {
       // Case B: Full Cancellation (Master)
       // Revert to 'Approved'
       request.status = 'Approved';
     }
 
-    // Assign title 'Cancellation Rejected' for frontend notification Logic
-    // This allows frontend to show "Cancellation Rejected" even if status is reverted to 'Approved'
-    request.title = 'Cancellation Rejected';
+    // We don't overwrite title anymore
 
     // Mark as Unread for Employee so they get a notification
     request.isReadEmployee = false;
@@ -1066,45 +1112,17 @@ export class LeaveRequestsService {
       const displayStatus = 'Cancellation Rejected';
       const statusColor = '#dc3545'; // Red
 
-      const emailBody = `
-            <div style="font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: 0 auto; border: 1px solid #e0e0e0; border-radius: 8px; overflow: hidden; background-color: #ffffff;">
-              <!-- Header -->
-              <div style="background-color: #1a1a1a; color: #ffffff; padding: 20px; text-align: center;">
-                  <h2 style="margin: 0; font-size: 20px;">${headerTitle}</h2>
-              </div>
-              
-              <!-- Body -->
-              <div style="padding: 24px;">
-                  <p style="margin-top: 0; font-size: 16px;">Dear <strong>${employeeName}</strong> (${employeeId}),</p>
-                  <p style="font-size: 16px; line-height: 1.5; color: #555;">${mainMessage}</p>
-                  
-                  <!-- Details Card -->
-                  <div style="background-color: #f5f5f5; padding: 16px; border-radius: 8px; margin: 24px 0;">
-                      <p style="margin: 8px 0; font-size: 14px; color: #555;"><strong>From:</strong> ${checkStart}</p>
-                      <p style="margin: 8px 0; font-size: 14px; color: #555;"><strong>To:</strong> ${checkEnd}</p>
-                       <p style="margin: 8px 0; font-size: 14px; color: #555;"><strong>Reason:</strong> Admin Rejected Cancellation</p>
-                  </div>
-                  
-                   <p style="font-size: 16px; font-weight: bold;">
-                      Status: <span style="color: ${statusColor};">${displayStatus}</span>
-                  </p>
-                   <p style="margin-top: 10px; font-size: 14px;">The original leave request remains <strong>Approved</strong>.</p>
-
-                  <div style="text-align: center; margin: 30px 0;">
-                    <a href="https://timesheet.inventech-developer.in" 
-                       style="background-color: #007bff; color: #ffffff; padding: 12px 24px; text-decoration: none; border-radius: 5px; font-weight: bold; display: inline-block;">
-                       Login to Portal
-                    </a>
-                  </div>
-
-                  <hr style="border: 0; border-top: 1px solid #eee; margin: 30px 0;">
-                  
-                  <p style="font-size: 12px; color: #999; text-align: center; margin-bottom: 0;">
-                       This is an automated message. Please do not reply.
-                  </p>
-              </div>
-            </div>
-      `;
+      const emailBody = getStatusUpdateTemplate({
+        employeeName: employeeName,
+        requestType: request.requestType,
+        title: request.title,
+        fromDate: checkStart,
+        toDate: checkEnd,
+        duration: request.duration || 0,
+        status: 'Cancellation Rejected',
+        isCancellation: true
+      });
+      // Override status label if needed or just use Rejected
       
       await this.emailService.sendEmail(
         toEmail,
@@ -1252,23 +1270,16 @@ export class LeaveRequestsService {
 
       if (employee && adminEmail) {
         const subject = `Cancellation Requested: ${request.requestType} - ${employee.fullName}`;
-        const htmlContent = `
-            <div style="font-family: Arial, sans-serif; padding: 20px; border: 1px solid #eee; border-radius: 10px;">
-              <h2 style="color: #ffc107;">Cancellation Requested</h2>
-              <p><strong>Employee:</strong> ${employee.fullName} (${employee.employeeId})</p>
-              <p>The employee has requested to cancel a <strong>previously Approved</strong> request.</p>
-              
-              <div style="background-color: #f8f9fa; padding: 15px; border-radius: 8px; margin: 15px 0;">
-                <p><strong>Type:</strong> ${request.requestType}</p>
-                <p><strong>Dates:</strong> ${request.fromDate} to ${request.toDate}</p>
-                <p><strong>Current Status:</strong> Waiting for Admin Approval (Cancellation)</p>
-              </div>
-
-              <p>Please log in to the admin panel to Review this cancellation.</p>
-               <div style="text-align: center; margin: 25px 0;">
-                <a href="https://timesheet.inventech-developer.in" style="background-color: #007bff; color: #ffffff; padding: 12px 24px; text-decoration: none; border-radius: 5px;">Login to Portal</a>
-              </div>
-            </div>`;
+        const htmlContent = getCancellationTemplate({
+          employeeName: employee.fullName,
+          employeeId: employee.employeeId,
+          requestType: request.requestType,
+          title: request.title || 'No Title',
+          fromDate: request.fromDate.toString(),
+          toDate: request.toDate.toString(),
+          duration: request.duration || 0,
+          reason: request.description
+        });
 
         await this.emailService.sendEmail(
           adminEmail,
@@ -1291,7 +1302,7 @@ export class LeaveRequestsService {
       where: { 
         employeeId, 
         isReadEmployee: false, // Fetch unread updates
-        status: In(['Approved', 'Rejected', 'Cancellation Approved', 'Cancelled', 'Request Modified'])
+        status: In(['Approved', 'Rejected', 'Cancellation Approved', 'Cancelled', 'Request Modified', 'Cancellation Rejected'])
       },
       order: { createdAt: 'DESC' }
     });
@@ -1374,82 +1385,8 @@ export class LeaveRequestsService {
     );
   }
 
-  async findMonthlyRequests(month: string, year: string, employeeId?: string, page: number = 1, limit: number = 10, managerName?: string, managerId?: string) {
-    const monthInt = parseInt(month);
-    const yearInt = parseInt(year);
-    
-    const monthStart = `${year}-${month.padStart(2, '0')}-01`;
-    const lastDay = new Date(yearInt, monthInt, 0).getDate();
-    const monthEnd = `${year}-${month.padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
-
-    const query = this.leaveRequestRepository.createQueryBuilder('lr')
-      .leftJoin(EmployeeDetails, 'ed', 'ed.employeeId = lr.employeeId')
-      .select([
-        'lr.id AS id',
-        'lr.employeeId AS employeeId',
-        'lr.requestType AS requestType',
-        'lr.fromDate AS fromDate',
-        'lr.toDate AS toDate',
-        'lr.title AS title',
-        'lr.description AS description',
-        'lr.status AS status',
-        'lr.isRead AS isRead',
-        'lr.submittedDate AS submittedDate',
-        'lr.duration AS duration',
-        'lr.createdAt AS createdAt',
-        'lr.request_modified_from AS requestModifiedFrom',
-        'ed.department AS department',
-        'ed.fullName AS fullName'
-      ]);
-
-    // Overlap condition: fromDate <= monthEnd AND toDate >= monthStart
-    query.where('lr.fromDate <= :monthEnd', { monthEnd })
-         .andWhere('lr.toDate >= :monthStart', { monthStart });
-
-    if (employeeId) {
-      query.andWhere('lr.employeeId = :employeeId', { employeeId });
-    }
-
-    // Filter by Manager if provided
-    if (managerName || managerId) {
-      const { ManagerMapping } = require('../../managerMapping/entities/managerMapping.entity');
-      query.innerJoin(ManagerMapping, 'mm', 'mm.employeeId = lr.employeeId');
-      query.andWhere(
-          '(mm.managerName LIKE :managerNameQuery OR mm.managerName LIKE :managerIdQuery)', 
-          { 
-              managerNameQuery: `%${managerName}%`, 
-              managerIdQuery: `%${managerId}%` 
-          }
-      );
-      query.andWhere('mm.status = :mmStatus', { mmStatus: 'ACTIVE' });
-    }
-
-    const total = await query.getCount();
-
-    const data = await query
-      .addSelect(`CASE 
-        WHEN lr.status = 'Pending' THEN 1 
-        WHEN lr.status = 'Requesting for Cancellation' THEN 2
-        WHEN lr.status = 'Approved' THEN 3
-        WHEN lr.status = 'Cancellation Approved' THEN 4
-        WHEN lr.status = 'Request Modified' THEN 5
-        WHEN lr.status = 'Rejected' THEN 5
-        WHEN lr.status = 'Cancelled' THEN 6
-        ELSE 7 
-      END`, 'priority')
-      .orderBy('priority', 'ASC')
-      .addOrderBy('lr.id', 'DESC')
-      .offset((page - 1) * limit)
-      .limit(limit)
-      .getRawMany();
-
-    return {
-      data,
-      total,
-      page: Number(page),
-      limit: Number(limit),
-      totalPages: Math.ceil(total / limit),
-    };
+  async findMonthlyRequests(month: string, year: string, employeeId?: string, status?: string, page: number = 1, limit: number = 10) {
+    return this.findUnifiedRequests({ month, year, employeeId, status, page, limit });
   }
 }
 
