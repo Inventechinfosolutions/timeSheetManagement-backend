@@ -1,4 +1,5 @@
-import { Controller, Get, Post, Body, Query, Delete, Param, Patch, UseInterceptors, UploadedFiles, ParseIntPipe, Req, Res, HttpException, HttpStatus, HttpCode } from '@nestjs/common';
+import { Controller, Get, Post, Body, Query, Delete, Param, Patch, UseInterceptors, UploadedFiles, ParseIntPipe, Req, Res, HttpException, HttpStatus, HttpCode, UseGuards } from '@nestjs/common';
+import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { FileFieldsInterceptor } from '@nestjs/platform-express';
 import { LeaveRequestsService } from '../services/leave-requests.service';
 import { LeaveRequestDto } from '../dto/leave-request.dto';
@@ -27,27 +28,102 @@ export class LeaveRequestsController {
   }
 
   @Get()
+  @UseGuards(JwtAuthGuard)
   findAll(
+    @Req() req: any,
     @Query('employeeId') employeeId?: string,
     @Query('department') department?: string,
     @Query('status') status?: string,
     @Query('search') search?: string,
+    @Query('month') month: string = 'All',
+    @Query('year') year: string = 'All',
     @Query('page') page: number = 1,
     @Query('limit') limit: number = 10,
   ) {
-    if (employeeId) {
-      return this.leaveRequestsService.findByEmployeeId(employeeId, page, limit);
+    const user = req.user;
+    let managerName: string | undefined;
+    let managerId: string | undefined;
+
+    const roleUpper = (user?.role || '').toUpperCase();
+    if (user && (user.userType === 'MANAGER' || roleUpper.includes('MNG') || roleUpper.includes('MANAGER'))) {
+        managerName = user.aliasLoginName;
+        managerId = user.loginId;
     }
-    return this.leaveRequestsService.findAll(department, status, search, page, limit);
+
+    return this.leaveRequestsService.findUnifiedRequests({
+      employeeId,
+      department,
+      status,
+      search,
+      month,
+      year,
+      page,
+      limit,
+      managerName,
+      managerId
+    });
   }
 
   @Get('employee/:employeeId')
   findByEmployeeId(
     @Param('employeeId') employeeId: string,
+    @Query('status') status?: string,
+    @Query('month') month: string = 'All',
+    @Query('year') year: string = 'All',
     @Query('page') page: number = 1,
     @Query('limit') limit: number = 10,
   ) {
-    return this.leaveRequestsService.findByEmployeeId(employeeId, page, limit);
+    return this.leaveRequestsService.findUnifiedRequests({
+      employeeId,
+      status,
+      month,
+      year,
+      page,
+      limit
+    });
+  }
+
+  @Get('monthly-details/:month/:year')
+  @UseGuards(JwtAuthGuard)
+  async findAllMonthlyDetails(
+    @Req() req: any,
+    @Param('month') month: string,
+    @Param('year') year: string,
+    @Query('status') status?: string,
+    @Query('page') page: number = 1,
+    @Query('limit') limit: number = 10,
+  ) {
+    const user = req.user;
+    let managerName: string | undefined;
+    let managerId: string | undefined;
+
+    const roleUpper = (user?.role || '').toUpperCase();
+    if (user && (user.userType === 'MANAGER' || roleUpper.includes('MNG') || roleUpper.includes('MANAGER'))) {
+        managerName = user.aliasLoginName;
+        managerId = user.loginId;
+    }
+
+    return this.leaveRequestsService.findUnifiedRequests({ 
+      month, 
+      year, 
+      status, 
+      page, 
+      limit, 
+      managerName, 
+      managerId 
+    });
+  }
+
+  @Get('monthly-details/:employeeId/:month/:year')
+  async findEmployeeMonthlyDetails(
+    @Param('employeeId') employeeId: string,
+    @Param('month') month: string,
+    @Param('year') year: string,
+    @Query('status') status?: string,
+    @Query('page') page: number = 1,
+    @Query('limit') limit: number = 10,
+  ) {
+    return this.leaveRequestsService.findUnifiedRequests({ employeeId, month, year, status, page, limit });
   }
 
   @Get('notifications/unread')
@@ -133,8 +209,12 @@ export class LeaveRequestsController {
   }
 
   @Get('stats/:employeeId')
-  getStats(@Param('employeeId') employeeId: string) {
-    return this.leaveRequestsService.getStats(employeeId);
+  getStats(
+    @Param('employeeId') employeeId: string,
+    @Query('month') month: string = 'All',
+    @Query('year') year: string = 'All',
+  ) {
+    return this.leaveRequestsService.getStats(employeeId, month, year);
   }
 
   @Get(':id')
@@ -287,24 +367,4 @@ export class LeaveRequestsController {
     return result;
   }
 
-  @Get('monthly-details/:month/:year')
-  async findAllMonthlyDetails(
-    @Param('month') month: string,
-    @Param('year') year: string,
-    @Query('page') page: number = 1,
-    @Query('limit') limit: number = 10,
-  ) {
-    return this.leaveRequestsService.findMonthlyRequests(month, year, undefined, page, limit);
-  }
-
-  @Get('monthly-details/:employeeId/:month/:year')
-  async findEmployeeMonthlyDetails(
-    @Param('employeeId') employeeId: string,
-    @Param('month') month: string,
-    @Param('year') year: string,
-    @Query('page') page: number = 1,
-    @Query('limit') limit: number = 10,
-  ) {
-    return this.leaveRequestsService.findMonthlyRequests(month, year, employeeId, page, limit);
-  }
 }

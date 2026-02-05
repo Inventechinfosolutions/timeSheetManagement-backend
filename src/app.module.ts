@@ -8,6 +8,7 @@ import { UsersModule } from './users/users.module';
 import { EmployeeTimeSheetModule } from './employeeTimeSheet/employeeTimeSheet.module';
 import { MasterModule } from './master/master.module';
 import { ProjectModule } from './projects/project.module';
+import { ManagerMappingModule } from './managerMapping/managerMapping.module';
 import * as fs from 'fs';
 import * as path from 'path';
 import { ScheduleModule } from '@nestjs/schedule';
@@ -46,12 +47,15 @@ function getEnvFiles(): string[] {
     EmployeeTimeSheetModule,
     MasterModule,
     ProjectModule,
+    ManagerMappingModule,
     ScheduleModule.forRoot(),
     TypeOrmModule.forFeature([EmployeeAttendance, EmployeeDetails]),
     MailModule,
     NotificationsModule,
+    ManagerMappingModule,
   ],
   controllers: [AppController],
   providers: [AppService, AttendanceCronService],
 })
+// Registered ManagerMappingModule
 export class AppModule {}

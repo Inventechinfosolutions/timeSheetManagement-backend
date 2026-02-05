@@ -48,4 +48,11 @@ export class User extends BaseEntity {
   @Column({ nullable: true })
   mobileVerification: boolean;
 
+  @Column({
+    type: 'enum',
+    enum: UserType,
+    nullable: true,
+  })
+  role: UserType;
+
 }

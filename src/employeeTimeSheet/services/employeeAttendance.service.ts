@@ -17,6 +17,7 @@ import { EmployeeAttendanceDto } from '../dto/employeeAttendance.dto';
 import { MasterHolidayService } from '../../master/service/master-holiday.service';
 import { TimesheetBlockerService } from './timesheetBlocker.service';
 import { EmployeeDetails } from '../entities/employeeDetails.entity';
+import { ManagerMapping } from '../../managerMapping/entities/managerMapping.entity';
 import * as ExcelJS from 'exceljs';
 
 @Injectable()
@@ -505,15 +506,36 @@ export class EmployeeAttendanceService {
     return monthsData;
   }
 
-  async findAllMonthlyDetails(month: string, year: string): Promise<EmployeeAttendance[]> {
+  async findAllMonthlyDetails(month: string, year: string, managerName?: string, managerId?: string): Promise<EmployeeAttendance[]> {
     const start = new Date(`${year}-${month.padStart(2, '0')}-01T00:00:00`);
     const end = new Date(start.getFullYear(), start.getMonth() + 1, 0, 23, 59, 59);
 
-    const records = await this.employeeAttendanceRepository.find({
-      where: { workingDate: Between(start, end) },
-      order: { workingDate: 'ASC' },
-    });
-    return Promise.all(records.map(record => this.applyStatusBusinessRules(record)));
+    const query = this.employeeAttendanceRepository
+      .createQueryBuilder('attendance')
+      .where('attendance.workingDate BETWEEN :start AND :end', { start, end });
+
+    if (managerName || managerId) {
+      query.innerJoin(
+        ManagerMapping,
+        'mm',
+        'mm.employeeId = attendance.employeeId',
+      );
+      query.andWhere(
+        '(mm.managerName LIKE :managerNameQuery OR mm.managerName LIKE :managerIdQuery)',
+        {
+          managerNameQuery: `%${managerName}%`,
+          managerIdQuery: `%${managerId}%`,
+        },
+      );
+      query.andWhere('mm.status = :mappingStatus', { mappingStatus: 'ACTIVE' });
+    }
+
+    query.orderBy('attendance.workingDate', 'ASC');
+
+    const records = await query.getMany();
+    return Promise.all(
+      records.map((record) => this.applyStatusBusinessRules(record)),
+    );
   }
   async getDashboardStats(employeeId: string, queryMonth?: string, queryYear?: string) {
     const today = new Date();
@@ -656,7 +678,7 @@ export class EmployeeAttendanceService {
     };
   }
 
-  async getAllDashboardStats(queryMonth?: string, queryYear?: string) {
+  async getAllDashboardStats(queryMonth?: string, queryYear?: string, managerName?: string, managerId?: string) {
     const today = new Date();
     const currentMonth = queryMonth ? parseInt(queryMonth) : today.getMonth() + 1;
     const currentYear = queryYear ? parseInt(queryYear) : today.getFullYear();
@@ -686,10 +708,24 @@ export class EmployeeAttendanceService {
         pendingLimitDate = monthEnd;
     }
 
-    // 1. Fetch all employees
-    const employees = await this.employeeDetailsRepository.find({
-      select: ['employeeId', 'fullName']
-    });
+    // 1. Fetch all employees (filtered by manager if provided)
+    const query = this.employeeDetailsRepository
+      .createQueryBuilder('employee')
+      .select(['employee.employeeId', 'employee.fullName']);
+
+    if (managerName || managerId) {
+      query.innerJoin(ManagerMapping, 'mm', 'mm.employeeId = employee.employeeId');
+      query.andWhere(
+        '(mm.managerName LIKE :managerNameQuery OR mm.managerName LIKE :managerIdQuery)',
+        {
+          managerNameQuery: `%${managerName}%`,
+          managerIdQuery: `%${managerId}%`,
+        },
+      );
+      query.andWhere('mm.status = :status', { status: 'ACTIVE' });
+    }
+
+    const employees = await query.getMany();
 
     // 2. Fetch all attendance for the range
     const allRecords = await this.employeeAttendanceRepository.find({
