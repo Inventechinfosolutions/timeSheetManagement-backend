@@ -78,16 +78,21 @@ export class EmployeeAttendanceService {
       }
 
       if (existingRecord) {
-        // Priority check: Leave and Work From Home have higher priority than Client Visit
-        // Don't overwrite Leave or WFH records with Client Visit
-        const isLeave = existingRecord.status === AttendanceStatus.LEAVE;
-        const isWorkFromHome = existingRecord.workLocation === 'WFH' || 
-                              existingRecord.workLocation === 'Work From Home';
-        const isClientVisit = createEmployeeAttendanceDto.workLocation === 'Client Visit';
-        
-        // If existing record is Leave or WFH, and incoming is Client Visit, preserve the existing record
-        if ((isLeave || isWorkFromHome) && isClientVisit) {
-          // Return existing record without modification
+        // Priority Hierarchy: Leave (3) > Client Visit (2) > Work From Home (1)
+        const getPriority = (status: string | null, location: string | null) => {
+          if (status === AttendanceStatus.LEAVE || String(status).toLowerCase() === 'leave') return 3;
+          if (location === 'Client Visit' || String(location).toLowerCase() === 'client visit') return 2;
+          if (location === 'WFH' || location === 'Work From Home' || String(location).toLowerCase().includes('wfh')) return 1;
+          return 0;
+        };
+
+        const existingPriority = getPriority(existingRecord.status, existingRecord.workLocation);
+        const incomingPriority = getPriority(createEmployeeAttendanceDto.status || null, createEmployeeAttendanceDto.workLocation || null);
+
+        // Rule: Only overwrite if incoming priority is GREATER THAN OR EQUAL to existing priority
+        // Exception: Always allow updates if the incoming update is from an Admin or is explicitly clearing the status
+        if (incomingPriority < existingPriority && !isAdmin && createEmployeeAttendanceDto.status !== null && createEmployeeAttendanceDto.workLocation !== null) {
+          // If trying to downgrade priority (e.g., WFH trying to overwrite CV), ignore the change
           return existingRecord;
         }
         
@@ -203,22 +208,28 @@ export class EmployeeAttendanceService {
       }
     }
 
-    // Priority check: Leave and Work From Home have higher priority than Client Visit
-    // Don't overwrite Leave or WFH records with Client Visit
-    const isLeave = attendance.status === AttendanceStatus.LEAVE;
-    const isWorkFromHome = attendance.workLocation === 'WFH' || 
-                          attendance.workLocation === 'Work From Home';
-    const isClientVisit = updateDto.workLocation === 'Client Visit';
-    
-    // If existing record is Leave or WFH, and incoming is Client Visit, preserve the existing record
-    if ((isLeave || isWorkFromHome) && isClientVisit) {
-      // Return existing record without modification
+    // Priority Hierarchy: Leave (3) > Client Visit (2) > Work From Home (1)
+    const getPriority = (status: string | null, location: string | null) => {
+      if (status === AttendanceStatus.LEAVE || String(status).toLowerCase() === 'leave') return 3;
+      if (location === 'Client Visit' || String(location).toLowerCase() === 'client visit') return 2;
+      if (location === 'WFH' || location === 'Work From Home' || String(location).toLowerCase().includes('wfh')) return 1;
+      return 0;
+    };
+
+    const existingPriority = getPriority(attendance.status, attendance.workLocation);
+    const incomingPriority = getPriority(updateDto.status || null, updateDto.workLocation || null);
+
+    // Rule: Only overwrite if incoming priority is GREATER THAN OR EQUAL to existing priority
+    // Exception: Always allow updates if the incoming update is from an Admin or is explicitly clearing the status
+    if (incomingPriority < existingPriority && !isAdmin && updateDto.status !== null && updateDto.workLocation !== null) {
+      // If trying to downgrade priority (e.g., WFH trying to overwrite CV), ignore the change
       return attendance;
     }
 
     // Preserve workLocation if it exists and updateDto doesn't explicitly change it
     const existingWorkLocation = attendance.workLocation;
     const existingStatus = attendance.status;
+    const isLeave = existingStatus === AttendanceStatus.LEAVE;
     Object.assign(attendance, updateDto);
     
     // If workLocation was set (WFH, Client Visit) and updateDto doesn't explicitly clear it (undefined), preserve it.

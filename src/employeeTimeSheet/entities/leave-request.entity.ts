@@ -1,4 +1,9 @@
-import { Entity, Column, PrimaryGeneratedColumn, CreateDateColumn } from 'typeorm';
+import {
+  Entity,
+  Column,
+  PrimaryGeneratedColumn,
+  CreateDateColumn,
+} from 'typeorm';
 import { BaseEntity } from '../../common/core/models/base.entity';
 
 @Entity('leave_requests')
@@ -41,4 +46,7 @@ export class LeaveRequest extends BaseEntity {
 
   @Column({ name: 'request_modified_from', nullable: true })
   requestModifiedFrom: string;
+
+  @Column({ name: 'reviewed_by', nullable: true })
+  reviewedBy: string;
 }

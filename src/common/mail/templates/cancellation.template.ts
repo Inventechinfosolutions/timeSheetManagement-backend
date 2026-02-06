@@ -20,14 +20,10 @@ export const getCancellationTemplate = (data: CancellationData) => {
   let statusText = 'Pending';
   let statusColor = '#f97316'; // Orange
 
-  if (isRevert) {
-    actionText = 'has REVERTED their cancellation request for';
+  if (isRevert || isRevertBack) {
+    actionText = isRevert ? 'has REVERTED their cancellation request for' : 'has REVERTED BACK their pending request for';
     statusText = 'REVERTED';
     statusColor = '#8b5cf6'; // Purple
-  } else if (isRevertBack) {
-    actionText = 'has REVERTED BACK their pending request for';
-    statusText = 'Cancelled';
-    statusColor = '#6b7280'; // Gray
   }
 
   const content = `
@@ -62,7 +58,7 @@ export const getCancellationTemplate = (data: CancellationData) => {
     </div>
   `;
 
-  const headerLabel = isRevert ? 'CANCELLATION REVERTED' : isRevertBack ? 'REQUEST REVERTED BACK' : `${data.requestType} CANCELLATION`;
+  const headerLabel = isRevert ? 'CANCELLATION REVERTED' : isRevertBack ? `${data.requestType} REVERTED` : `${data.requestType} CANCELLATION`;
 
   return baseLayout(content, `${data.requestType} Update`, headerLabel, 'white');
 };

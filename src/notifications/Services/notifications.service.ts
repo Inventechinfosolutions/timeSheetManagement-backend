@@ -117,4 +117,12 @@ export class NotificationsService {
       { isRead: true },
     );
   }
+
+  async createNotification(data: { employeeId: string; title: string; message: string; type?: string }) {
+    return await this.notificationRepo.save({
+      ...data,
+      type: data.type || 'general',
+      isRead: false,
+    });
+  }
 }
