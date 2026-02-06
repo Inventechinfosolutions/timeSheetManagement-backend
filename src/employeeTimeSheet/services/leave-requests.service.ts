@@ -1121,6 +1121,7 @@ export class LeaveRequestsService {
                          workingDate: startOfDay,
                          totalHours: 5,
                          status: halfDayStatus,
+                         sourceRequestId: request.id,
                          // workLocation: 'Half Day' <-- REMOVED
                      });
                      await this.employeeAttendanceRepository.save(attendance);
@@ -1133,6 +1134,7 @@ export class LeaveRequestsService {
                         .set({ 
                             totalHours: 5, 
                             status: halfDayStatus,
+                            sourceRequestId: request.id,
                             // Only set workLocation if it is null/empty
                             // workLocation: () => "COALESCE(workLocation, 'Half Day')" <-- REMOVED
                         })
@@ -1143,6 +1145,22 @@ export class LeaveRequestsService {
             }
         } catch (err) {
             this.logger.error(`Failed to auto-update attendance for Half Day request ${id}`, err);
+        }
+    }
+
+    // --- CLEANUP: If Half Day Request is REJECTED/CANCELLED, clear sourceRequestId to unlock attendance ---
+    if ((status === 'Rejected' || status === 'Cancelled' || status === 'Cancellation Approved') && reqType.includes('half')) {
+        try {
+            this.logger.log(`Clearing sourceRequestId for rejected/cancelled Half Day request ID: ${id}`);
+            await this.employeeAttendanceRepository
+                .createQueryBuilder()
+                .update(EmployeeAttendance)
+                .set({ sourceRequestId: () => 'NULL' })
+                .where("sourceRequestId = :requestId", { requestId: request.id })
+                .execute();
+            this.logger.log(`Unlocked attendance records for Half Day request ${id}`);
+        } catch (err) {
+            this.logger.error(`Failed to unlock attendance for Half Day request ${id}`, err);
         }
     }
 

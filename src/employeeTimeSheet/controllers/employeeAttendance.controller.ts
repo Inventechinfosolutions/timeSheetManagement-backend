@@ -234,11 +234,18 @@ export class EmployeeAttendanceController {
     @Body() updateEmployeeAttendanceDto: Partial<EmployeeAttendanceDto>,
     @Req() req: any
   ) {
-    const isAdmin = req.user?.userType === UserType.ADMIN;
+    const user = req.user;
+    const isAdmin = user?.userType === UserType.ADMIN;
+    
+    // Check for Manager Role
+    const roleUpper = (user?.role || '').toUpperCase();
+    const isManager = user && (user.userType === 'MANAGER' || roleUpper.includes('MNG') || roleUpper.includes('MANAGER'));
+
     return this.employeeAttendanceService.update(
       id,
       updateEmployeeAttendanceDto,
-      isAdmin
+      isAdmin,
+      isManager
     );
   }
 
@@ -255,8 +262,14 @@ export class EmployeeAttendanceController {
   @ApiOperation({ summary: 'Bulk create/update attendance records' })
   @ApiBody({ type: [EmployeeAttendanceDto] })
   async createBulk(@Body() createDtos: EmployeeAttendanceDto[], @Req() req: any) {
-    const isAdmin = req.user?.userType === UserType.ADMIN;
-    return this.employeeAttendanceService.createBulk(createDtos, isAdmin);
+    const user = req.user;
+    const isAdmin = user?.userType === UserType.ADMIN;
+    
+    // Check for Manager Role  
+    const roleUpper = (user?.role || '').toUpperCase();
+    const isManager = user && (user.userType === 'MANAGER' || roleUpper.includes('MNG') || roleUpper.includes('MANAGER'));
+    
+    return this.employeeAttendanceService.createBulk(createDtos, isAdmin, isManager);
   }
 
   @Get('monthly-details-all/:month/:year')
