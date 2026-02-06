@@ -127,8 +127,11 @@ export class LeaveRequestsController {
   }
 
   @Get('notifications/unread')
-  findUnread() {
-    return this.leaveRequestsService.findUnread();
+  @UseGuards(JwtAuthGuard)
+  findUnread(@Req() req: any) {
+    const user = req.user;
+    const isManager = user?.userType === 'MANAGER';
+    return this.leaveRequestsService.findUnread(isManager ? user.aliasLoginName : undefined);
   }
 
   @Get('employee/:employeeId/updates')
@@ -147,8 +150,11 @@ export class LeaveRequestsController {
   }
 
   @Post('notifications/mark-all-read')
-  markAllAsRead() {
-    return this.leaveRequestsService.markAllAsRead();
+  @UseGuards(JwtAuthGuard)
+  markAllAsRead(@Req() req: any) {
+    const user = req.user;
+    const isManager = user?.userType === 'MANAGER';
+    return this.leaveRequestsService.markAllAsRead(isManager ? user.aliasLoginName : undefined);
   }
 
   @Post('employee/:employeeId/notifications/mark-all-read')
@@ -162,11 +168,15 @@ export class LeaveRequestsController {
   }
 
   @Post(':id/update-status')
+  @UseGuards(JwtAuthGuard)
   updateStatus(
     @Param('id') id: string,
     @Body('status') status: 'Approved' | 'Rejected' | 'Cancelled' | 'Cancellation Approved',
+    @Req() req: any
   ) {
-    return this.leaveRequestsService.updateStatus(+id, status);
+    const user = req.user;
+    const reviewerName = user?.aliasLoginName || user?.fullName || 'Admin';
+    return this.leaveRequestsService.updateStatus(+id, status, undefined, reviewerName);
   }
 
   @Post(':id/request-modified')
@@ -183,8 +193,15 @@ export class LeaveRequestsController {
   }
 
   @Patch(':id/reject-cancellation')
-  async rejectCancellation(@Param('id') id: string, @Body('employeeId') employeeId: string) {
-    return this.leaveRequestsService.rejectCancellation(+id, employeeId);
+  @UseGuards(JwtAuthGuard)
+  async rejectCancellation(
+    @Param('id') id: string, 
+    @Body('employeeId') employeeId: string,
+    @Req() req: any
+  ) {
+    const user = req.user;
+    const reviewerName = user?.aliasLoginName || user?.fullName || 'Admin';
+    return this.leaveRequestsService.rejectCancellation(+id, employeeId, reviewerName);
   }
 
   @Get(':id/cancellable-dates')

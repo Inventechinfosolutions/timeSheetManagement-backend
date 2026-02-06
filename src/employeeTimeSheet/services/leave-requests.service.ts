@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, LessThanOrEqual, MoreThanOrEqual, In, Brackets, Between } from 'typeorm';
 import { LeaveRequest } from '../entities/leave-request.entity';
 import { EmployeeAttendance } from '../entities/employeeAttendance.entity';
+import { AttendanceStatus } from '../enums/attendance-status.enum';
 import { EmployeeDetails } from '../entities/employeeDetails.entity';
 import { EmailService } from '../../email/email.service';
 import { DocumentUploaderService } from '../../common/document-uploader/services/document-uploader.service';
@@ -11,8 +12,12 @@ import dayjs from 'dayjs';
 import { 
   getRequestNotificationTemplate, 
   getStatusUpdateTemplate, 
-  getCancellationTemplate 
+  getCancellationTemplate,
+  getEmployeeReceiptTemplate
 } from '../../common/mail/templates';
+import { ManagerMapping } from '../../managerMapping/entities/managerMapping.entity';
+import { User } from '../../users/entities/user.entity';
+import { NotificationsService } from '../../notifications/Services/notifications.service';
 
 @Injectable()
 export class LeaveRequestsService {
@@ -27,8 +32,13 @@ export class LeaveRequestsService {
     private employeeAttendanceRepository: Repository<EmployeeAttendance>,
     @InjectRepository(DocumentMetaInfo)
     private readonly documentRepo: Repository<DocumentMetaInfo>,
+    @InjectRepository(ManagerMapping)
+    private managerMappingRepository: Repository<ManagerMapping>,
+    @InjectRepository(User)
+    private userRepository: Repository<User>,
     private emailService: EmailService,
     private documentUploaderService: DocumentUploaderService,
+    private notificationsService: NotificationsService,
   ) {}
 
   async create(data: Partial<LeaveRequest>) {
@@ -51,6 +61,10 @@ export class LeaveRequestsService {
       } else if (requestType === 'Client Visit') {
         // Client Visit conflicts with Leave (which blocks it) and existing Client Visit
         conflictingTypes = ['Apply Leave', 'Leave', 'Client Visit'];
+      } else if (requestType === 'Half Day') {
+        // Half Day conflicts with Leave and existing Half Day
+        // It is allowed to overlap with WFH and Client Visit
+        conflictingTypes = ['Apply Leave', 'Leave', 'Half Day'];
       } else {
         conflictingTypes = [requestType];
       }
@@ -165,6 +179,12 @@ export class LeaveRequestsService {
     } catch (error) {
       this.logger.error(`Failed to link orphaned documents for request ${savedRequest.id}: ${error.message}`);
     }
+
+    // NEW: Notify Mapped Manager
+    await this.notifyManagerOfRequest(savedRequest);
+
+    // NEW: Notify Employee (Submission Receipt)
+    await this.notifyEmployeeOfSubmission(savedRequest);
 
     return savedRequest;
   }
@@ -336,11 +356,10 @@ export class LeaveRequestsService {
     return result;
   }
 
-  async findUnread() {
-    return this.leaveRequestRepository.createQueryBuilder('lr')
+  async findUnread(managerName?: string) {
+    const qb = this.leaveRequestRepository.createQueryBuilder('lr')
       .leftJoin(EmployeeDetails, 'ed', 'ed.employeeId = lr.employeeId')
       .where('lr.isRead = :isRead', { isRead: false })
-      // .andWhere('lr.status = :status', { status: 'Pending' }) // REMOVED: Allow Cancelled/ApprovedRequestCancellation if unread
       .select([
         'lr.id AS id',
         'lr.employeeId AS employeeId',
@@ -362,8 +381,14 @@ export class LeaveRequestsService {
         WHEN lr.status = 'Rejected' THEN 5
         WHEN lr.status = 'Cancelled' THEN 6
         ELSE 7 
-      END`, 'priority')
-      .orderBy('priority', 'ASC')
+      END`, 'priority');
+
+    if (managerName) {
+      qb.innerJoin(ManagerMapping, 'mm', 'mm.employeeId = lr.employeeId AND mm.status = :mStatus', { mStatus: 'ACTIVE' })
+        .andWhere('mm.managerName = :managerName', { managerName });
+    }
+
+    return qb.orderBy('priority', 'ASC')
       .addOrderBy('lr.id', 'DESC')
       .getRawMany();
   }
@@ -502,6 +527,9 @@ export class LeaveRequestsService {
       // Notify Admin
       await this.notifyAdminOfCancellationRequest(saved, employeeId);
       
+      // Notify Manager
+      await this.notifyManagerOfRequest(saved);
+      
       return saved;
     } else {
       // PARTIAL CANCEL - Handle Non-Contiguous Dates by grouping them into ranges
@@ -515,9 +543,25 @@ export class LeaveRequestsService {
       for (let i = 1; i < sortedDates.length; i++) {
         const date = sortedDates[i];
         const prevDate = sortedDates[i - 1];
+        const diff = dayjs(date).diff(dayjs(prevDate), 'day');
+        let isConsecutive = diff === 1;
 
-        // Check if date is consecutive (PrevDate + 1 day)
-        const isConsecutive = dayjs(date).diff(dayjs(prevDate), 'day') === 1;
+        // Bridging weekends: If diff > 1, check if there are any working days in between
+        if (!isConsecutive && diff > 1) {
+          let temp = dayjs(prevDate).add(1, 'day');
+          let hasWorkDayGap = false;
+          while (temp.isBefore(dayjs(date))) {
+            const day = temp.day();
+            if (day !== 0 && day !== 6) { // Not Sat (6) or Sun (0)
+              hasWorkDayGap = true;
+              break;
+            }
+            temp = temp.add(1, 'day');
+          }
+          if (!hasWorkDayGap) {
+            isConsecutive = true;
+          }
+        }
 
         if (isConsecutive) {
           currentEnd = date;
@@ -556,26 +600,23 @@ export class LeaveRequestsService {
         await this.copyRequestDocuments(request.id, savedNew.id);
         
         createdRequests.push(savedNew);
+
+        // Notify Admin of this specific segment
+        await this.notifyAdminOfCancellationRequest(savedNew, employeeId, range.count);
+        
+        // Notify Manager of this specific segment
+        await this.notifyManagerOfRequest(savedNew);
+        
+        // Notify Employee (Submission Receipt) of this specific segment
+        await this.notifyEmployeeOfSubmission(savedNew);
       }
 
-      // Update Original Request Duration - REMOVED per requirements.
+      // Updated Original Request Duration - REMOVED per requirements.
       // Duration should only update when Admin APPROVES the cancellation.
       // if (request.duration) {
       //   request.duration = Math.max(0, request.duration - datesToCancel.length);
       //   await this.leaveRequestRepository.save(request);
       // }
-
-      // Return the list of created requests (or just the first one if frontend expects single obj, but strictly it's an array now)
-      // Frontend likely expects an object or can handle whatever.
-      // Returning the last one or wrapping in array might change contract.
-      // Let's return the last created request to satisfy strict typing if return type is single entity,
-      // OR modify to return array. Controller usually returns whatever this returns.
-      // The frontend uses the response mainly for success or notification.
-      // Notify Admin of the cancellation request(s)
-      // Since it's one action, we can notify about the first one or a summary
-      if (createdRequests.length > 0) {
-        await this.notifyAdminOfCancellationRequest(createdRequests[0], employeeId, datesToCancel.length);
-      }
 
       return createdRequests.length === 1
         ? createdRequests[0]
@@ -705,7 +746,9 @@ export class LeaveRequestsService {
     request.status = 'Cancelled';
     const saved = await this.leaveRequestRepository.save(request);
 
-    // --- NEW: Email Notifications ---
+    // NOTE: Manager notification is sent in the custom email block below (not using generic notifyManagerOfRequest)
+
+      // --- NEW: Email Notifications ---
     try {
       const employee = await this.employeeDetailsRepository.findOne({
         where: { employeeId: request.employeeId },
@@ -734,7 +777,57 @@ export class LeaveRequestsService {
           );
         }
 
-        // 2. Employee Email ("Reverted")
+        // 2. Manager Email (NEW)
+         const mapping = await this.managerMappingRepository.findOne({
+          where: { employeeId: request.employeeId, status: 'ACTIVE' as any }
+        });
+        this.logger.log(`[REVERT-DEBUG] Manager mapping found: ${!!mapping}, EmployeeID: ${request.employeeId}`);
+
+        if (mapping) {
+           const manager = await this.userRepository.findOne({
+            where: { aliasLoginName: mapping.managerName }
+          });
+          this.logger.log(`[REVERT-DEBUG] Manager user found: ${!!manager}, ManagerName: ${mapping.managerName}`);
+          
+          const managerDetails = await this.employeeDetailsRepository.findOne({
+             where: { email: manager?.loginId }
+          }) || await this.employeeDetailsRepository.findOne({
+             where: { fullName: mapping.managerName }
+          });
+          const managerEmail = managerDetails?.email || manager?.loginId;
+          this.logger.log(`[REVERT-DEBUG] Manager email resolved: ${managerEmail}`);
+
+           if (managerEmail && managerEmail.includes('@')) {
+               const managerSubject = `Cancellation Reverted: ${request.requestType} - ${employee.fullName}`;
+               
+               // Use the SAME template as Admin (getCancellationTemplate)
+               const managerHtml = getCancellationTemplate({
+                employeeName: employee.fullName,
+                employeeId: employee.employeeId,
+                requestType: request.requestType,
+                title: request.title,
+                fromDate: request.fromDate.toString(),
+                toDate: request.toDate.toString(),
+                duration: request.duration,
+                actionType: 'revert', // Same as admin
+              });
+              this.logger.log(`[REVERT-DEBUG] Sending manager email to: ${managerEmail}`);
+               await this.emailService.sendEmail(
+                managerEmail,
+                managerSubject,
+                'Cancellation Reverted',
+                managerHtml,
+              );
+              this.logger.log(`[REVERT-DEBUG] Manager email sent successfully to: ${managerEmail}`);
+           } else {
+              this.logger.warn(`[REVERT-DEBUG] Manager email not valid: ${managerEmail}`);
+           }
+        } else {
+           this.logger.warn(`[REVERT-DEBUG] No active manager mapping found for employee: ${request.employeeId}`);
+        }
+
+
+        // 3. Employee Email ("Reverted")
         if (employee.email) {
           const empSubject = `Cancellation Reverted: ${request.requestType} - ${request.title}`;
           const empHtml = getStatusUpdateTemplate({
@@ -746,6 +839,7 @@ export class LeaveRequestsService {
             duration: request.duration,
             status: 'Reverted',
             isCancellation: true,
+            reviewedBy: '' // Explicitly undefined to remove "reviewed by [Name]"
           });
           await this.emailService.sendEmail(
             employee.email,
@@ -762,7 +856,22 @@ export class LeaveRequestsService {
     return saved;
   }
 
-  async markAllAsRead() {
+  async markAllAsRead(managerName?: string) {
+    if (managerName) {
+      // For managers, we only mark as read their subordinates' requests
+      const subquery = this.managerMappingRepository.createQueryBuilder('mm')
+        .select('mm.employeeId')
+        .where('mm.managerName = :managerName', { managerName })
+        .andWhere('mm.status = :mStatus', { mStatus: 'ACTIVE' });
+
+      return this.leaveRequestRepository.createQueryBuilder()
+        .update()
+        .set({ isRead: true })
+        .where('isRead = :isRead', { isRead: false })
+        .andWhere('employeeId IN (' + subquery.getQuery() + ')')
+        .setParameters(subquery.getParameters())
+        .execute();
+    }
     return this.leaveRequestRepository.update({ isRead: false }, { isRead: true });
   }
 
@@ -853,6 +962,7 @@ export class LeaveRequestsService {
       leave: { applied: 0, approved: 0, rejected: 0, cancelled: 0 },
       wfh: { applied: 0, approved: 0, rejected: 0, cancelled: 0 },
       clientVisit: { applied: 0, approved: 0, rejected: 0, cancelled: 0 },
+      halfDay: { applied: 0, approved: 0, rejected: 0, cancelled: 0 },
     };
 
     filteredRequests.forEach((req) => {
@@ -873,7 +983,9 @@ export class LeaveRequestsService {
             ? stats.wfh
             : req.requestType === 'Client Visit'
               ? stats.clientVisit
-              : null;
+              : req.requestType === 'Half Day'
+                ? stats.halfDay
+                : null;
 
       if (!target) return;
 
@@ -895,7 +1007,7 @@ export class LeaveRequestsService {
     return stats;
   }
 
-  async updateStatus(id: number, status: 'Approved' | 'Rejected' | 'Cancelled' | 'Cancellation Approved', employeeId?: string) {
+  async updateStatus(id: number, status: 'Approved' | 'Rejected' | 'Cancelled' | 'Cancellation Approved', employeeId?: string, reviewedBy?: string) {
     const request = await this.leaveRequestRepository.findOne({ where: { id } });
     if (!request) {
       throw new NotFoundException('Leave request not found');
@@ -904,12 +1016,75 @@ export class LeaveRequestsService {
     // Status Logic
     const previousStatus = request.status;
     request.status = status;
+    if (reviewedBy) {
+      request.reviewedBy = reviewedBy;
+    }
     // When an admin updates the status, we mark it as read for Admin
     request.isRead = true;
     // AND we mark it as "unread" (new update) for the Employee: false means unread
     request.isReadEmployee = false; 
     
     const savedRequest = await this.leaveRequestRepository.save(request);
+
+    // --- AUTOMATION: If Half Day Request is APPROVED, update Attendance to 5 hours + Status 'Half Day' ---
+    // --- AUTOMATION: If Half Day Request is APPROVED, update Attendance to 5 hours + Status 'Half Day' ---
+    const reqType = request.requestType ? request.requestType.trim().toLowerCase() : '';
+    // Check if request type contains "half" to catch "Half Day", "Half-Day", "WFH (Half Day)", etc.
+    if (status === 'Approved' && reqType.includes('half')) {
+        try {
+            this.logger.log(`Processing Half Day Approval Automation for Request ID: ${id}`);
+            const startDate = dayjs(request.fromDate);
+            const endDate = dayjs(request.toDate);
+            const diff = endDate.diff(startDate, 'day');
+
+            for (let i = 0; i <= diff; i++) {
+                 const targetDate = startDate.add(i, 'day');
+                 const dayOfWeek = targetDate.day();
+                 if (dayOfWeek === 0 || dayOfWeek === 6) continue; // Skip Weekends
+
+                 const startOfDay = targetDate.startOf('day').toDate();
+                 const endOfDay = targetDate.endOf('day').toDate();
+                 
+                 let attendance = await this.employeeAttendanceRepository.findOne({
+                     where: {
+                        employeeId: request.employeeId,
+                        workingDate: Between(startOfDay, endOfDay)
+                     }
+                 });
+
+                 const halfDayStatus = typeof AttendanceStatus !== 'undefined' ? (AttendanceStatus as any).HALF_DAY : 'Half Day';
+
+                 if (!attendance) {
+                     this.logger.log(`Creating new attendance record for ${request.employeeId} on ${targetDate.format('YYYY-MM-DD')}`);
+                     attendance = this.employeeAttendanceRepository.create({
+                         employeeId: request.employeeId,
+                         workingDate: startOfDay,
+                         totalHours: 5,
+                         status: halfDayStatus,
+                         // workLocation: 'Half Day' <-- REMOVED
+                     });
+                     await this.employeeAttendanceRepository.save(attendance);
+                 } else {
+                     this.logger.log(`Updating existing attendance record ${attendance.id} for ${request.employeeId}`);
+                     // Force explicit update via QueryBuilder to ensure it sticks
+                     await this.employeeAttendanceRepository
+                        .createQueryBuilder()
+                        .update(EmployeeAttendance)
+                        .set({ 
+                            totalHours: 5, 
+                            status: halfDayStatus,
+                            // Only set workLocation if it is null/empty
+                            // workLocation: () => "COALESCE(workLocation, 'Half Day')" <-- REMOVED
+                        })
+                        .where("id = :id", { id: attendance.id })
+                        .execute();
+                 }
+                 this.logger.log(`Auto-updated attendance for ${request.employeeId} on ${targetDate.format('YYYY-MM-DD')} to 5hrs (Half Day)`);
+            }
+        } catch (err) {
+            this.logger.error(`Failed to auto-update attendance for Half Day request ${id}`, err);
+        }
+    }
 
 
 
@@ -922,13 +1097,16 @@ export class LeaveRequestsService {
       });
 
       if (employee) {
-      // CASE 1: Employee Cancelled (or Admin marked as Cancelled manually) -> Notify Admin
+      // CASE 1: Employee Cancelled (or Admin marked as Cancelled manually) -> Notify Admin & Manager
       if (status === 'Cancelled' && previousStatus === 'Pending') {
+        this.logger.log(`[CANCEL-PENDING-DEBUG] Status: ${status}, PreviousStatus: ${previousStatus}, RequestID: ${id}`);
         const adminEmail = process.env.ADMIN_EMAIL || process.env.SMTP_USERNAME;
+        // 1a. Notify Admin
         if (adminEmail) {
           const requestTypeLabel =
             request.requestType === 'Apply Leave' ? 'Leave' : request.requestType;
-          const adminSubject = `Request Reverted Back: ${requestTypeLabel} Request - ${employee.fullName}`;
+          // Clarify subject: It is "Cancelled", not "Reverted Back" in this context
+          const adminSubject = `Request Cancelled: ${requestTypeLabel} Request - ${employee.fullName}`;
 
           const adminHtml = getCancellationTemplate({
             employeeName: employee.fullName,
@@ -939,27 +1117,69 @@ export class LeaveRequestsService {
             toDate: request.toDate.toString(),
             duration: request.duration || 0,
             reason: request.description,
-            actionType: 'revert_back',
+            actionType: 'revert_back', // Keep template internal actionType or change if template logic needs update. 'revert_back' usually shows "Reverted".
           });
 
           await this.emailService.sendEmail(
             adminEmail,
             adminSubject,
-            `Request Reverted Back by ${employee.fullName}`,
+            `Request Cancelled by ${employee.fullName}`,
             adminHtml,
           );
           this.logger.log(`Admin notification sent for pending-to-cancelled: ${id}`);
         }
+
+        // 1b. Notify Manager (NEW)
+         const mapping = await this.managerMappingRepository.findOne({
+          where: { employeeId: request.employeeId, status: 'ACTIVE' as any }
+        });
+
+        if (mapping) {
+           const manager = await this.userRepository.findOne({
+            where: { aliasLoginName: mapping.managerName }
+          });
+          
+          const managerDetails = await this.employeeDetailsRepository.findOne({
+             where: { email: manager?.loginId }
+          }) || await this.employeeDetailsRepository.findOne({
+             where: { fullName: mapping.managerName }
+          });
+          const managerEmail = managerDetails?.email || manager?.loginId;
+
+           if (managerEmail && managerEmail.includes('@')) {
+               const managerSubject = `Request Cancelled: ${request.requestType} - ${employee.fullName}`;
+               
+               // Use the SAME template as Admin (getCancellationTemplate)
+               const managerHtml = getCancellationTemplate({
+                employeeName: employee.fullName,
+                employeeId: employee.employeeId,
+                requestType: request.requestType,
+                title: request.title || 'No Title',
+                fromDate: request.fromDate.toString(),
+                toDate: request.toDate.toString(),
+                duration: request.duration || 0,
+                reason: request.description,
+                actionType: 'revert_back', // Same as admin
+              });
+              this.logger.log(`[CANCEL-PENDING-DEBUG] Manager email sent to: ${managerEmail}`);
+               await this.emailService.sendEmail(
+                managerEmail,
+                managerSubject,
+                'Request Cancelled',
+                managerHtml,
+              );
+           }
+        }
       }
 
-      // CASE 2: Approved/Rejected/Cancellation Approved -> Notify Employee
+      // CASE 2: Approved/Rejected/Cancellation Approved/Cancelled -> Notify Employee
       if (employee.email) {
         const isCancellation = status === 'Cancellation Approved';
         const requestTypePretty = request.requestType;
         
         let mailSubject = `${requestTypePretty} Request Update`;
         let headerTitle = `${requestTypePretty} Update`;
-        let mainMessage = `Your request for <strong>${requestTypePretty}</strong> titled \"<strong>${request.title}</strong>\" has been processed.`;
+        let mainMessage = `Your request for <strong>${requestTypePretty}</strong> titled "<strong>${request.title}</strong>" has been processed.`;
         let displayStatus: string = status;
           
           if (status === 'Approved') {
@@ -976,9 +1196,15 @@ export class LeaveRequestsService {
                mainMessage = `Your request for cancel <strong>${requestTypePretty}</strong> titled "<strong>${request.title}</strong>" has been reviewed.`;
                displayStatus = 'Cancellation Approved';
           } else if (status === 'Cancelled') {
+             // For "Pending -> Cancelled" flow, use "Cancelled" terminology instead of "Reverted" if preferred, 
+             // BUT user asked for "Reverted" style subject for Manager. 
+             // We'll stick to 'Request Cancelled' for clarity here to distinguish from Cancellation Revert.
+             // If previousStatus was Pending, it's a fresh cancel.
+             
              mailSubject = `${requestTypePretty} Request Cancelled`;
-             headerTitle = `${requestTypePretty} CANCELLED`;
-             mainMessage = `Your request for <strong>${requestTypePretty}</strong> titled \"<strong>${request.title}</strong>\" has been Cancelled.`;
+             headerTitle = `${requestTypePretty} Request CANCELLED`;
+             mainMessage = `Your request for <strong>${requestTypePretty}</strong> titled "<strong>${request.title}</strong>" has been Cancelled.`;
+             displayStatus = 'CANCELLED';
         }
 
           const statusColor =
@@ -989,6 +1215,14 @@ export class LeaveRequestsService {
           const fromDate = dayjs(request.fromDate).format('YYYY-MM-DD');
           const toDate = dayjs(request.toDate).format('YYYY-MM-DD');
           const duration = request.duration || 0;
+          
+          // Determine reviewedBy: If Employee initiated it (Cancel/Revert), clear reviewedBy
+          // If Status is Cancelled and previous was Pending, it was Employee action.
+          let notificationReviewedBy = request.reviewedBy;
+          if (status === 'Cancelled' && previousStatus === 'Pending') {
+              this.logger.log(`[CANCEL-PENDING-DEBUG] Clearing reviewedBy. Original: ${request.reviewedBy}`);
+              notificationReviewedBy = ''; // Empty string instead of undefined
+          }
   
           const htmlContent = getStatusUpdateTemplate({
             employeeName: employee.fullName || 'Employee',
@@ -998,7 +1232,8 @@ export class LeaveRequestsService {
             toDate: toDate,
             duration: duration,
             status: status as any,
-            isCancellation: isCancellation
+            isCancellation: isCancellation,
+            reviewedBy: notificationReviewedBy
           });
   
           await this.emailService.sendEmail(
@@ -1025,14 +1260,15 @@ export class LeaveRequestsService {
     modification.requestType = parent.requestType;
     modification.fromDate = data.fromDate;
     modification.toDate = data.toDate;
-    modification.status = 'Request Modified';
+    modification.status = data.overrideStatus || 'Request Modified';
     modification.title = parent.title;
-    modification.description = `${parent.description || ''} (Request Modified due to new request on same date ${data.sourceRequestType} ID: ${data.sourceRequestId})`;
+    const descPrefix = data.overrideStatus === 'Approved' ? 'Split Segment' : 'Request Modified';
+    modification.description = `${descPrefix}: ${parent.description || ''} (Modification due to ${data.sourceRequestType} conflict)`;
     modification.submittedDate = dayjs().format('YYYY-MM-DD');
     modification.isRead = true;
     modification.isReadEmployee = false;
-    modification.duration = dayjs(data.toDate).diff(dayjs(data.fromDate), 'day') + 1;
-    modification.requestModifiedFrom = data.sourceRequestType;
+    modification.duration = data.duration || (dayjs(data.toDate).diff(dayjs(data.fromDate), 'day') + 1);
+    modification.requestModifiedFrom = data.overrideStatus === 'Approved' ? parent.requestModifiedFrom : data.sourceRequestType;
 
     const savedModification = await this.leaveRequestRepository.save(modification);
     
@@ -1043,7 +1279,7 @@ export class LeaveRequestsService {
   }
 
   // NEW: Dedicated API for Rejecting Cancellation
-  async rejectCancellation(id: number, employeeId: string) {
+  async rejectCancellation(id: number, employeeId: string, reviewedBy?: string) {
     const request = await this.leaveRequestRepository.findOne({
       where: { id },
     });
@@ -1098,6 +1334,9 @@ export class LeaveRequestsService {
 
     // Mark as Unread for Employee so they get a notification
     request.isReadEmployee = false;
+    if (reviewedBy) {
+      request.reviewedBy = reviewedBy;
+    }
     await this.leaveRequestRepository.save(request);
 
     // Send Notification
@@ -1120,7 +1359,8 @@ export class LeaveRequestsService {
         toDate: checkEnd,
         duration: request.duration || 0,
         status: 'Cancellation Rejected',
-        isCancellation: true
+        isCancellation: true,
+        reviewedBy: request.reviewedBy
       });
       // Override status label if needed or just use Rejected
       
@@ -1294,6 +1534,12 @@ export class LeaveRequestsService {
       this.logger.error('Failed to send status update email:', error);
     }
 
+    // 4. Notify Manager
+    await this.notifyManagerOfRequest(request);
+
+    // 5. Notify Employee (Submission Receipt)
+    await this.notifyEmployeeOfSubmission(request);
+
     return request;
   }
 
@@ -1351,6 +1597,98 @@ export class LeaveRequestsService {
     return await this.documentUploaderService.getAllDocs(entityType, entityId, referenceType, refId);
   }
 
+  private async notifyManagerOfRequest(request: LeaveRequest) {
+    try {
+      const mapping = await this.managerMappingRepository.findOne({
+        where: { employeeId: request.employeeId, status: 'ACTIVE' as any }
+      });
+
+      if (mapping) {
+        const manager = await this.userRepository.findOne({
+          where: { aliasLoginName: mapping.managerName }
+        });
+
+        if (manager) {
+          const actionText = request.status === 'Requesting for Cancellation' ? 'Cancellation' : request.status === 'Cancelled' ? 'Reverted' : 'New';
+          
+          // 1. Bell Icon Notification
+          await this.notificationsService.createNotification({
+            employeeId: manager.loginId,
+            title: `${actionText} ${request.requestType} Request`,
+            message: `${mapping.employeeName} has submitted ${actionText === 'New' ? 'a new' : 'a'} ${request.requestType} titled "${request.title}".`,
+            type: 'alert'
+          });
+
+          // 2. Email Notification to Manager
+          const managerDetails = await this.employeeDetailsRepository.findOne({
+            where: { email: manager.loginId }
+          }) || await this.employeeDetailsRepository.findOne({
+            where: { fullName: mapping.managerName }
+          });
+
+          const managerEmail = managerDetails?.email || manager.loginId;
+
+          if (managerEmail && managerEmail.includes('@')) {
+            const requester = await this.employeeDetailsRepository.findOne({
+              where: { employeeId: request.employeeId }
+            });
+
+            const htmlContent = getRequestNotificationTemplate({
+              employeeName: requester?.fullName || mapping.employeeName,
+              employeeId: request.employeeId,
+              requestType: request.requestType,
+              title: request.title,
+              fromDate: request.fromDate.toString(),
+              toDate: request.toDate.toString(),
+              duration: request.duration,
+              status: request.status,
+              recipientName: mapping.managerName
+            });
+
+            await this.emailService.sendEmail(
+              managerEmail,
+              `${actionText} Request: ${request.requestType} - ${mapping.employeeName}`,
+              `${actionText} request submitted by ${mapping.employeeName}`,
+              htmlContent
+            );
+          }
+          
+          this.logger.log(`Notification & Email sent to manager ${mapping.managerName} for request ${request.id}`);
+        }
+      }
+    } catch (error) {
+      this.logger.error('Failed to send manager notification', error);
+    }
+  }
+
+  private async notifyEmployeeOfSubmission(request: LeaveRequest) {
+    try {
+      const employee = await this.employeeDetailsRepository.findOne({
+        where: { employeeId: request.employeeId }
+      });
+      if (employee && employee.email) {
+        const htmlContent = getEmployeeReceiptTemplate({
+          employeeName: employee.fullName,
+          requestType: request.requestType,
+          title: request.title,
+          fromDate: request.fromDate.toString(),
+          toDate: request.toDate.toString(),
+          duration: request.duration,
+          status: request.status,
+          description: request.description
+        });
+        await this.emailService.sendEmail(
+          employee.email,
+          `Submission Received: ${request.requestType} - ${request.title}`,
+          `Your ${request.requestType} has been submitted.`,
+          htmlContent
+        );
+      }
+    } catch (error) {
+      this.logger.error(`Failed to send submission receipt to employee ${request.employeeId}`, error);
+    }
+  }
+
   async deleteDocument(entityType: EntityType, entityId: number, refId: number, key: string) {
     try {
       this.logger.log(`Deleting document with key ${key} for entity ${entityId}`);
@@ -1389,5 +1727,3 @@ export class LeaveRequestsService {
     return this.findUnifiedRequests({ month, year, employeeId, status, page, limit });
   }
 }
-
-

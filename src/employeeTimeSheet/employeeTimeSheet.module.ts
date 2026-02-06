@@ -9,6 +9,7 @@ import { EmployeeDetailsService } from './services/employeeDetails.service';
 import { EmployeeLinkService } from './services/employeeLink.service';
 import { EmployeeDetails } from './entities/employeeDetails.entity';
 import { User } from '../users/entities/user.entity';
+import { ManagerMapping } from '../managerMapping/entities/managerMapping.entity';
 import { UsersModule } from '../users/users.module';
 import { AuthModule } from '../auth/auth.module';
 import { MasterModule } from '../master/master.module';
@@ -33,6 +34,7 @@ import { FileService } from '../common/core/utils/fileType.utils';
       TimesheetBlocker,
       LeaveRequest,
       DocumentMetaInfo,
+      ManagerMapping,
     ]),
     UsersModule,
     AuthModule,
