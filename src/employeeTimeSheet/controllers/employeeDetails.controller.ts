@@ -213,6 +213,7 @@ export class EmployeeDetailsController {
     @Query('department') department: string,
     @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
     @Query('limit', new DefaultValuePipe(10), ParseIntPipe) limit: number,
+    @Query('includeSelf') includeSelf: string,
     @Req() req: any,
   ) {
     const user = req.user;
@@ -239,7 +240,8 @@ export class EmployeeDetailsController {
       page,
       limit,
       managerName,
-      managerId
+      managerId,
+      includeSelf === 'true'
     );
   }
 
