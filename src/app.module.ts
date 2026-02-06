@@ -17,6 +17,8 @@ import { EmployeeAttendance } from './employeeTimeSheet/entities/employeeAttenda
 import { EmployeeDetails } from './employeeTimeSheet/entities/employeeDetails.entity';
 import { MailModule } from './common/mail/mail.module';
 import { NotificationsModule } from './notifications/notifications.module';
+import { ProjectDocumentsModule } from './projectDocuments/projectDocuments.module';
+import { ProjectsModule } from './projects/projects.module';
 
 function getEnvFiles(): string[] {
   const envPath = path.join(process.cwd(), '.env');
@@ -51,6 +53,8 @@ function getEnvFiles(): string[] {
     MailModule,
     NotificationsModule,
     ManagerMappingModule,
+    ProjectDocumentsModule,
+    ProjectsModule,
   ],
   controllers: [AppController],
   providers: [AppService, AttendanceCronService],
