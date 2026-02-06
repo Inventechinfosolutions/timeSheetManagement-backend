@@ -9,6 +9,7 @@ import {
 } from 'class-validator';
 import { Transform } from 'class-transformer';
 import { Department } from '../enums/department.enum';
+import { EmploymentType } from '../enums/employment-type.enum';
 import { UserType } from '../../users/enums/user-type.enum';
 
 export class EmployeeDetailsDto {
@@ -37,6 +38,11 @@ export class EmployeeDetailsDto {
   @MaxLength(200)
   @Transform(({ value }) => value?.trim())
   designation: string;
+
+  /** FULL_TIMER = 18 leaves/year, INTERN = 12 leaves/year. If not set, inferred from designation (contains "intern"). */
+  @IsEnum(EmploymentType)
+  @IsOptional()
+  employmentType?: EmploymentType;
 
   @IsEmail()
   @IsNotEmpty()

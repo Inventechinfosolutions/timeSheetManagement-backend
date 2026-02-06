@@ -5,6 +5,7 @@ import { LeaveRequest } from '../entities/leave-request.entity';
 import { EmployeeAttendance } from '../entities/employeeAttendance.entity';
 import { AttendanceStatus } from '../enums/attendance-status.enum';
 import { EmployeeDetails } from '../entities/employeeDetails.entity';
+import { EmploymentType } from '../enums/employment-type.enum';
 import { EmailService } from '../../email/email.service';
 import { DocumentUploaderService } from '../../common/document-uploader/services/document-uploader.service';
 import { DocumentMetaInfo, EntityType, ReferenceType } from '../../common/document-uploader/models/documentmetainfo.model';
@@ -233,15 +234,19 @@ export class LeaveRequestsService {
     // 2. Manager Filter (from Upstream)
     if (managerName || managerId) {
       const { ManagerMapping } = require('../../managerMapping/entities/managerMapping.entity');
-      query.innerJoin(ManagerMapping, 'mm', 'mm.employeeId = lr.employeeId');
+      query.leftJoin(ManagerMapping, 'mm', 'mm.employeeId = lr.employeeId');
       query.andWhere(
-          '(mm.managerName LIKE :managerNameQuery OR mm.managerName LIKE :managerIdQuery)', 
+          '(lr.employeeId = :exactManagerId OR (mm.managerName LIKE :managerNameQuery OR mm.managerName LIKE :managerIdQuery))', 
           { 
+              exactManagerId: managerId,
               managerNameQuery: `%${managerName}%`, 
               managerIdQuery: `%${managerId}%` 
           }
       );
-      query.andWhere('mm.status = :mmStatus', { mmStatus: 'ACTIVE' });
+      query.andWhere('(mm.status = :mmStatus OR lr.employeeId = :exactManagerId)', { 
+          mmStatus: 'ACTIVE',
+          exactManagerId: managerId 
+      });
     }
 
     // 3. Department Filter
@@ -929,6 +934,61 @@ export class LeaveRequestsService {
     request.status = 'Cancelled';
     request.isRead = false; // Ensure Admin sees this in unread notifications
     return this.leaveRequestRepository.save(request);
+  }
+
+  /** Leave balance: entitlement (18 full timer / 12 intern), used (approved leave in year), pending, balance */
+  async getLeaveBalance(employeeId: string, year: string) {
+    const yearNum = parseInt(year, 10);
+    if (isNaN(yearNum) || yearNum < 2000 || yearNum > 2100) {
+      throw new BadRequestException('Valid year is required');
+    }
+    const yearStart = `${year}-01-01`;
+    const yearEnd = `${year}-12-31`;
+
+    const employee = await this.employeeDetailsRepository.findOne({
+      where: { employeeId },
+      select: ['id', 'employeeId', 'designation', 'employmentType'],
+    });
+    if (!employee) {
+      throw new NotFoundException(`Employee ${employeeId} not found`);
+    }
+
+    // Explicit employment type: FULL_TIMER = 18, INTERN = 12. Else infer from designation (contains "intern").
+    const isIntern =
+      employee.employmentType === EmploymentType.INTERN ||
+      (employee.designation || '').toLowerCase().includes('intern');
+    const entitlement = isIntern ? 12 : 18;
+
+    const leaveTypes = ['Apply Leave', 'Leave'];
+
+    const used = await this.leaveRequestRepository
+      .createQueryBuilder('lr')
+      .where('lr.employeeId = :employeeId', { employeeId })
+      .andWhere('lr.requestType IN (:...leaveTypes)', { leaveTypes })
+      .andWhere('lr.status = :status', { status: 'Approved' })
+      .andWhere('lr.fromDate <= :yearEnd', { yearEnd })
+      .andWhere('lr.toDate >= :yearStart', { yearStart })
+      .getCount();
+
+    const pending = await this.leaveRequestRepository
+      .createQueryBuilder('lr')
+      .where('lr.employeeId = :employeeId', { employeeId })
+      .andWhere('lr.requestType IN (:...leaveTypes)', { leaveTypes })
+      .andWhere('lr.status = :status', { status: 'Pending' })
+      .andWhere('lr.fromDate <= :yearEnd', { yearEnd })
+      .andWhere('lr.toDate >= :yearStart', { yearStart })
+      .getCount();
+
+    const balance = Math.max(0, entitlement - used);
+
+    return {
+      employeeId,
+      year: yearNum,
+      entitlement,
+      used,
+      pending,
+      balance,
+    };
   }
 
   async getStats(employeeId: string, month: string = 'All', year: string = 'All') {

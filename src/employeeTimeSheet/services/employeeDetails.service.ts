@@ -118,6 +118,7 @@ export class EmployeeDetailsService {
           email: result.email,
           department: result.department,
           designation: result.designation,
+          employmentType: result.employmentType ?? undefined,
           loginId: activationInfo.loginId,
           password: activationInfo.password,
           activationLink: activationInfo.activationLink,
@@ -147,6 +148,7 @@ export class EmployeeDetailsService {
     limit: number = 10,
     managerName?: string,
     managerId?: string,
+    includeSelf: boolean = false,
   ): Promise<{ data: EmployeeDetails[]; totalItems: number }> {
     try {
       this.logger.log('Fetching employees with filter:', {
@@ -198,21 +200,36 @@ export class EmployeeDetailsService {
         // For managers, only show ACTIVE employees
         query.andWhere('user_filter.status = :activeStatus', { activeStatus: UserStatus.ACTIVE });
 
-        // Exclude the manager themselves from their own list
-        if (managerId) {
+        query.leftJoin(ManagerMapping, 'mm', 'mm.employeeId = employee.employeeId');
+        
+        if (includeSelf) {
+            // Include the manager themselves OR those mapped to them
+            query.andWhere(
+                '(employee.employeeId = :exactManagerId OR (mm.managerName LIKE :managerNameQuery OR mm.managerName LIKE :managerIdQuery))', 
+                { 
+                    exactManagerId: managerId,
+                    managerNameQuery: `%${managerName}%`, 
+                    managerIdQuery: `%${managerId}%`
+                }
+            );
+            
+            // Ensure only active mappings are considered OR it's the manager themselves
+            query.andWhere('(mm.status = :mappingStatus OR employee.employeeId = :exactManagerId)', { 
+                mappingStatus: 'ACTIVE',
+                exactManagerId: managerId 
+            });
+        } else {
+            // Standard behavior: ONLY those mapped to them (exclude self)
+            query.andWhere(
+                '(mm.managerName LIKE :managerNameQuery OR mm.managerName LIKE :managerIdQuery)', 
+                { 
+                    managerNameQuery: `%${managerName}%`, 
+                    managerIdQuery: `%${managerId}%`
+                }
+            );
+            query.andWhere('mm.status = :status', { status: 'ACTIVE' });
             query.andWhere('employee.employeeId != :excludeManagerId', { excludeManagerId: managerId });
         }
-
-        query.leftJoin(ManagerMapping, 'mm', 'mm.employeeId = employee.employeeId');
-        query.andWhere(
-            '(mm.managerName LIKE :managerNameQuery OR mm.managerName LIKE :managerIdQuery)', 
-            { 
-                managerNameQuery: `%${managerName}%`, 
-                managerIdQuery: `%${managerId}%`
-            }
-        );
-        // Ensure only active mappings are considered for MAPPED employees
-        query.andWhere('mm.status = :status', { status: 'ACTIVE' });
       }
 
       const [data, totalItems] = await query
@@ -369,7 +386,7 @@ export class EmployeeDetailsService {
         // For managers, only show ACTIVE employees
         query.andWhere('user_filter.status = :activeStatus', { activeStatus: UserStatus.ACTIVE });
         
-        // Exclude the manager themselves from their own list
+        // Exclude the manager themselves from their own list (Standard for timesheets)
         if (managerId) {
             query.andWhere('employee.employeeId != :excludeManagerId', { excludeManagerId: managerId });
         }
