@@ -10,16 +10,33 @@ export interface RequestNotificationData {
   duration: string | number;
   status: string;
   description?: string;
+  recipientName?: string;
 }
 
 export const getRequestNotificationTemplate = (data: RequestNotificationData) => {
   const statusLower = data.status.toLowerCase();
-  const statusColor = statusLower === 'pending' ? '#f97316' : '#6b7280';
+  const statusColor = statusLower === 'pending' ? '#f97316' : (statusLower === 'cancelled' || statusLower === 'reverted' || statusLower === 'restored') ? '#8b5cf6' : '#6b7280';
+
+  let actionWord = 'has submitted a new';
+  let headerLabel = `NEW ${data.requestType} REQUEST`;
+  let mailSubject = `New ${data.requestType} Request`;
+
+  if (statusLower === 'cancelled' || statusLower === 'reverted') {
+    actionWord = 'has REVERTED their';
+    headerLabel = `${data.requestType} REVERTED`;
+    mailSubject = `${data.requestType} Reverted`;
+  } else if (statusLower.includes('cancellation')) {
+    actionWord = 'has submitted a cancellation request for';
+    headerLabel = `${data.requestType} CANCELLATION`;
+    mailSubject = `${data.requestType} Cancellation Request`;
+  }
+
+  const displayStatus = (statusLower === 'cancelled' || statusLower === 'reverted') ? 'REVERTED' : data.status;
 
   const content = `
-    <p style="font-size: 16px; color: #1f2937;">Hello Admin,</p>
+    <p style="font-size: 16px; color: #1f2937;">Hello ${data.recipientName || 'Admin'},</p>
     <p style="font-size: 14px; color: #4b5563; line-height: 1.6;">
-      <strong>${data.employeeName}</strong> (EMP-${data.employeeId}) has submitted a new <strong>${data.requestType}</strong> request.
+      <strong>${data.employeeName}</strong> (EMP-${data.employeeId}) ${actionWord} <strong>${data.requestType}</strong> request.
     </p>
 
     <div class="details-box">
@@ -39,7 +56,7 @@ export const getRequestNotificationTemplate = (data: RequestNotificationData) =>
     </div>
 
     <p style="font-size: 16px; font-weight: 700; margin-top: 20px;">
-      Status: <span style="color: ${statusColor}; text-transform: uppercase;">${data.status}</span>
+      Status: <span style="color: ${statusColor}; text-transform: uppercase;">${displayStatus}</span>
     </p>
 
     <div style="text-align: left; margin-top: 40px;">
@@ -47,5 +64,5 @@ export const getRequestNotificationTemplate = (data: RequestNotificationData) =>
     </div>
   `;
 
-  return baseLayout(content, `New ${data.requestType} Request`, `NEW ${data.requestType} REQUEST`, 'white');
+  return baseLayout(content, mailSubject, headerLabel, 'white');
 };
