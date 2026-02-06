@@ -208,6 +208,15 @@ export class LeaveRequestsController {
     return this.leaveRequestsService.undoCancellationRequest(+id, employeeId);
   }
 
+  @Get('balance/:employeeId')
+  getLeaveBalance(
+    @Param('employeeId') employeeId: string,
+    @Query('year') year: string,
+  ) {
+    const y = year || String(new Date().getFullYear());
+    return this.leaveRequestsService.getLeaveBalance(employeeId, y);
+  }
+
   @Get('stats/:employeeId')
   getStats(
     @Param('employeeId') employeeId: string,
