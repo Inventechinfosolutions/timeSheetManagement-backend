@@ -3,6 +3,7 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  ForbiddenException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Between, Repository, LessThanOrEqual, MoreThanOrEqual, In } from 'typeorm';
@@ -137,14 +138,14 @@ export class EmployeeAttendanceService {
   }
 
 
-  async createBulk(attendanceDtos: EmployeeAttendanceDto[], isAdmin: boolean = false): Promise<EmployeeAttendance[]> {
+  async createBulk(attendanceDtos: EmployeeAttendanceDto[], isAdmin: boolean = false, isManager: boolean = false): Promise<EmployeeAttendance[]> {
     const results: EmployeeAttendance[] = [];
     for (const dto of attendanceDtos) {
         try {
             let record;
             if (dto.id) {
                 // Update existing
-                record = await this.update(dto.id, dto, isAdmin);
+                record = await this.update(dto.id, dto, isAdmin, isManager);
             } else {
                 // Create new
                 record = await this.create(dto, isAdmin);
@@ -171,9 +172,17 @@ export class EmployeeAttendanceService {
     return await this.applyStatusBusinessRules(attendance);
   }
 
-  async update(id: number, updateDto: Partial<EmployeeAttendanceDto>, isAdmin: boolean = false): Promise<EmployeeAttendance | null> {
+  async update(id: number, updateDto: Partial<EmployeeAttendanceDto>, isAdmin: boolean = false, isManager: boolean = false): Promise<EmployeeAttendance | null> {
     const attendance = await this.findOne(id);
     
+    // BLOCKING LOGIC: If record is auto-generated from an approved Half Day request
+    // Only Admin and Manager can override this block.
+    if (attendance.sourceRequestId && !isAdmin && !isManager) {
+      throw new ForbiddenException(
+          'This attendance record was auto-generated from an approved Half Day request and cannot be edited by the employee.'
+      );
+    }
+
     if (!isAdmin && !this.isEditableMonth(new Date(attendance.workingDate))) {
       throw new BadRequestException('Attendance for this month is locked.');
     }
@@ -449,72 +458,65 @@ export class EmployeeAttendanceService {
     if (startDateStr) {
         start = new Date(startDateStr);
     } else {
-        // Default: Start 4 months prior to the input month (total 5 months window)
-        start = new Date(endInput.getFullYear(), endInput.getMonth() - 4, 1);
+        // Default: Start of the month for endInput
+        start = new Date(endInput.getFullYear(), endInput.getMonth(), 1);
     }
     
-    // Ensure start is the beginning of that month
-    start.setDate(1);
     start.setHours(0, 0, 0, 0);
+    const end = new Date(endInput.getFullYear(), endInput.getMonth(), endInput.getDate(), 23, 59, 59);
 
-    const end = new Date(endInput.getFullYear(), endInput.getMonth() + 1, 0, 23, 59, 59);
+    // Fetch all attendance records for this period from employee_attendance table
+    const attendances = await this.employeeAttendanceRepository.find({
+        where: {
+            employeeId,
+            workingDate: Between(start, end),
+        },
+        order: { workingDate: 'ASC' }
+    });
 
-    // Fetch confirmed requests from LeaveRequest table as it is the source of truth for approvals
-    const requests = await this.leaveRequestRepository.createQueryBuilder('req')
-        .where('req.employeeId = :employeeId', { employeeId })
-        .andWhere('req.status = :status', { status: 'Approved' })
-        .andWhere('req.fromDate <= :end', { end: end.toISOString().split('T')[0] })
-        .andWhere('req.toDate >= :start', { start: start.toISOString().split('T')[0] })
-        .getMany();
-
-    const monthsData: any[] = [];
     const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    const monthlyStatsMap = new Map<string, any>();
 
-    // Calculate number of months to iterate
-    const totalMonths = (end.getFullYear() - start.getFullYear()) * 12 + (end.getMonth() - start.getMonth()) + 1;
+    attendances.forEach(record => {
+        const date = typeof record.workingDate === 'string' ? new Date(record.workingDate) : record.workingDate;
+        const key = `${monthNames[date.getMonth()]} ${date.getFullYear()}`;
+        
+        if (!monthlyStatsMap.has(key)) {
+            monthlyStatsMap.set(key, {
+                month: monthNames[date.getMonth()],
+                year: date.getFullYear(),
+                totalLeaves: 0,
+                halfDays: 0,
+                workFromHome: 0,
+                clientVisits: 0
+            });
+        }
 
-    for (let i = 0; i < totalMonths; i++) {
-        const currentRef = new Date(start.getFullYear(), start.getMonth() + i, 1);
-        const monthIdx = currentRef.getMonth();
-        const year = currentRef.getFullYear();
-        const monthName = monthNames[monthIdx];
+        const stats = monthlyStatsMap.get(key);
+        const status = (record.status || '').toLowerCase();
+        const location = (record.workLocation || '').toLowerCase();
 
-        const stats = {
-            month: monthName,
-            year: year,
-            totalLeaves: 0,
-            workFromHome: 0,
-            clientVisits: 0
-        };
+        // Check for Full Leaves
+        if (status === 'leave') {
+            stats.totalLeaves++;
+        }
+        // Check for Half Days
+        else if (status === 'half day') {
+            stats.halfDays++;
+        }
 
-        // Aggregation logic using Approved Requests
-        requests.forEach(req => {
-            let loopDate = new Date(req.fromDate);
-            const reqEnd = new Date(req.toDate);
-            
-            // Iterate each day of the request
-            while (loopDate <= reqEnd) {
-                // If the day falls in the current month loop
-                if (loopDate.getMonth() === monthIdx && loopDate.getFullYear() === year) {
-                     const type = req.requestType; 
-                     
-                     if (type === 'Work From Home') {
-                         stats.workFromHome++;
-                     } else if (type === 'Client Visit') {
-                         stats.clientVisits++;
-                     } else {
-                         // Leaves (Sick, Casual, Leave, etc.)
-                         stats.totalLeaves++;
-                     }
-                }
-                // Next day
-                loopDate.setDate(loopDate.getDate() + 1);
-            }
-        });
+        // Check for WFH
+        if (location.includes('home') || location.includes('wfh')) {
+            stats.workFromHome++;
+        } 
+        // Check for Client Visit
+        else if (location.includes('client') || location.includes('visit') || location.includes('cv')) {
+            stats.clientVisits++;
+        }
+    });
 
-        monthsData.push(stats);
-    }
-    return monthsData;
+    // Convert map to sorted array
+    return Array.from(monthlyStatsMap.values());
   }
 
   async findAllMonthlyDetails(month: string, year: string, managerName?: string, managerId?: string): Promise<EmployeeAttendance[]> {
