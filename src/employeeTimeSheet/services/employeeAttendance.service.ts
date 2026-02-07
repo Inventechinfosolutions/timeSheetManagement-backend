@@ -523,7 +523,13 @@ export class EmployeeAttendanceService {
 
     const query = this.employeeAttendanceRepository
       .createQueryBuilder('attendance')
-      .where('attendance.workingDate BETWEEN :start AND :end', { start, end });
+      .innerJoin(
+        EmployeeDetails,
+        'ed',
+        'ed.employeeId = attendance.employeeId',
+      )
+      .where('attendance.workingDate BETWEEN :start AND :end', { start, end })
+      .andWhere('ed.userStatus = :userStatus', { userStatus: 'ACTIVE' });
 
     if (managerName || managerId) {
       query.innerJoin(
@@ -724,6 +730,8 @@ export class EmployeeAttendanceService {
       .createQueryBuilder('employee')
       .select(['employee.employeeId', 'employee.fullName']);
 
+    query.andWhere('employee.userStatus = :userStatus', { userStatus: 'ACTIVE' });
+
     if (managerName || managerId) {
       query.innerJoin(ManagerMapping, 'mm', 'mm.employeeId = employee.employeeId');
       query.andWhere(
@@ -850,12 +858,33 @@ export class EmployeeAttendanceService {
     }
     return results;
   }
-  async generateMonthlyReport(month: number, year: number): Promise<Buffer> {
-    // 1. Fetch all active employees, sorted by Name
-    const employees = await this.employeeDetailsRepository.find({
-      where: { userStatus: 'ACTIVE' },
-      order: { fullName: 'ASC' },
-    });
+  async generateMonthlyReport(month: number, year: number, managerName?: string, managerId?: string): Promise<Buffer> {
+    // 1. Fetch employees (filtered by manager if provided)
+    // We want all active employees for Admin, but only mapped employees (and themselves) for Manager
+    const query = this.employeeDetailsRepository
+      .createQueryBuilder('employee')
+      .where('employee.userStatus = :userStatus', { userStatus: 'ACTIVE' });
+
+    if (managerName || managerId) {
+      query.leftJoin(
+        ManagerMapping,
+        'mm',
+        'mm.employeeId = employee.employeeId',
+      );
+      query.andWhere(
+        '( (mm.status = :mappingStatus AND (mm.managerName LIKE :managerNameQuery OR mm.managerName LIKE :managerIdQuery)) OR (employee.employeeId = :exactManagerId OR employee.fullName = :exactManagerName) )',
+        {
+          managerNameQuery: `%${managerName}%`,
+          managerIdQuery: `%${managerId}%`,
+          exactManagerId: managerId,
+          exactManagerName: managerName,
+          mappingStatus: 'ACTIVE',
+        },
+      );
+    }
+
+    query.orderBy('employee.fullName', 'ASC');
+    const employees = await query.getMany();
 
     // 2. Fetch all holidays and weekends (metadata)
     const startDate = new Date(year, month - 1, 1);
@@ -874,15 +903,30 @@ export class EmployeeAttendanceService {
         holidayMap.set(key, (h as any).name || 'Holiday');
     });
 
-    // 3. Fetch all attendance for the month
+    // 3. Fetch all attendance for the month for the selected employees
     const startStr = startDate.toISOString().split('T')[0];
     const endStr = endDate.toISOString().split('T')[0];
     
-    const allAttendance = await this.employeeAttendanceRepository.find({
-      where: {
-        workingDate: Between(new Date(startStr + 'T00:00:00'), new Date(endStr + 'T23:59:59'))
-      }
-    });
+    const employeeIds = employees.map(e => e.employeeId);
+    
+    if (employeeIds.length === 0) {
+      // Return empty report with headers only if no employees
+    }
+
+    const attendanceQuery = this.employeeAttendanceRepository.createQueryBuilder('attendance')
+      .where('attendance.workingDate BETWEEN :start AND :end', { 
+        start: new Date(startStr + 'T00:00:00'), 
+        end: new Date(endStr + 'T23:59:59') 
+      });
+
+    if (employeeIds.length > 0) {
+      attendanceQuery.andWhere('attendance.employeeId IN (:...employeeIds)', { employeeIds });
+    } else {
+      // If no employees found for this manager, we should probably still show the manager themselves if they are active?
+      // But query above should have found them. 
+    }
+
+    const allAttendance = await attendanceQuery.getMany();
 
     // Helper function to normalize dates to YYYY-MM-DD format
     const normalizeDate = (date: Date | string): string => {
@@ -1117,14 +1161,6 @@ export class EmployeeAttendanceService {
                 cell.alignment = { horizontal: 'center' };
                 continue; // Done for this cell
             }
-
-            // PRIORITY 5: Weekend (Sunday handled top, Saturday handled top. This catches remaining? No, strictly handled above)
-            // But good to keep as safety or for clarity logic if we had strictly checked isWeekend at start.
-            // Since we handled Sun and Sat specifically above, we don't need a generic "if (isWeekend)" block here anymore.
-            // But let's keep the logic flow clean.
-
-
-
 
             // PRIORITY 4: Future / Past Logic - for weekdays with no record
             const today = new Date().toISOString().split('T')[0];
