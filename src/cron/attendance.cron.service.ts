@@ -183,16 +183,16 @@ export class AttendanceCronService {
           ]
       });
 
-      this.logger.log(`Found ${recordsToUpdate.length} records to mark as LEAVE for month ${month + 1}-${year}`);
+      this.logger.log(`Found ${recordsToUpdate.length} records to mark as ABSENT for month ${month + 1}-${year}`);
 
       if (recordsToUpdate.length === 0) return;
 
-      // Update status to LEAVE
+      // Update status to ABSENT (instead of LEAVE per user request)
       for (const record of recordsToUpdate) {
-          record.status = AttendanceStatus.LEAVE;
+          record.status = AttendanceStatus.ABSENT;
       }
 
       await this.attendanceRepo.save(recordsToUpdate);
-      this.logger.log(`Successfully updated ${recordsToUpdate.length} records to LEAVE.`);
+      this.logger.log(`Successfully updated ${recordsToUpdate.length} records to ABSENT.`);
   }
 }

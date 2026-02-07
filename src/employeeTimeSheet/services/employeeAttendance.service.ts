@@ -36,9 +36,9 @@ export class EmployeeAttendanceService {
     private readonly blockerService: TimesheetBlockerService,
   ) {}
 
-  async create(createEmployeeAttendanceDto: EmployeeAttendanceDto, isAdmin: boolean = false): Promise<EmployeeAttendance | null> {
+  async create(createEmployeeAttendanceDto: EmployeeAttendanceDto, isAdmin: boolean = false, isManager: boolean = false): Promise<EmployeeAttendance | null> {
     try {
-      if (!isAdmin && createEmployeeAttendanceDto.workingDate && 
+      if (!isAdmin && !isManager && createEmployeeAttendanceDto.workingDate && 
           !this.isEditableMonth(new Date(createEmployeeAttendanceDto.workingDate))) {
           throw new BadRequestException('Attendance for this month is locked.');
       }
@@ -51,12 +51,13 @@ export class EmployeeAttendanceService {
       // (Moved future check down)
 
       if (!isAdmin && createEmployeeAttendanceDto.employeeId && createEmployeeAttendanceDto.workingDate) {
-        const isBlocked = await this.blockerService.isBlocked(
+        const blocker = await this.blockerService.isBlocked(
           createEmployeeAttendanceDto.employeeId, 
           createEmployeeAttendanceDto.workingDate
         );
-        if (isBlocked) {
-          throw new BadRequestException('Timesheet is locked for this date by admin.');
+        if (blocker) {
+          const blockedByName = blocker.blockedBy || 'Administrator';
+          throw new BadRequestException(`Timesheet is locked for this date by ${blockedByName}. Please contact them to unlock.`);
         }
       }
 
@@ -148,7 +149,7 @@ export class EmployeeAttendanceService {
                 record = await this.update(dto.id, dto, isAdmin, isManager);
             } else {
                 // Create new
-                record = await this.create(dto, isAdmin);
+                record = await this.create(dto, isAdmin, isManager);
             }
             
             if (record) {
@@ -159,6 +160,180 @@ export class EmployeeAttendanceService {
         }
     }
     return results;
+  }
+
+  async autoUpdateTimesheet(employeeId: string, month: string, year: string): Promise<any> {
+    const monthNum = parseInt(month, 10);
+    const yearNum = parseInt(year, 10);
+    const today = new Date();
+    
+    // Ensure we only auto-update for current month
+    if (today.getMonth() + 1 !== monthNum || today.getFullYear() !== yearNum) {
+      throw new BadRequestException('Auto-update is only available for the current month.');
+    }
+
+    const startDate = new Date(yearNum, monthNum - 1, 1, 12, 0, 0); // Noon to avoid timezone boundary issues
+    
+    // Set endDate to "today" to avoid future updates
+    const endDate = new Date(); 
+    endDate.setHours(23, 59, 59, 999);
+    
+    // 1. Fetch holidays (using existing findAll helper which seems to return entities with date/holidayDate)
+    const holidays = await this.masterHolidayService.findAll();
+    const holidayDates = new Set(holidays.map(h => {
+        // Handle various date formats from dirty data if needed, but usually it's Date or string
+        const d = new Date(h.holidayDate || (h as any).date);
+        // Normalize to YYYY-MM-DD
+        const year = d.getFullYear();
+        const month = String(d.getMonth() + 1).padStart(2, '0');
+        const day = String(d.getDate()).padStart(2, '0');
+        return `${year}-${month}-${day}`;
+    }));
+
+    // 2. Fetch existing attendance for the month
+    const existingRecords = await this.employeeAttendanceRepository.find({
+        where: {
+            employeeId,
+            workingDate: Between(startDate, endDate)
+        }
+    });
+
+    const existingDates = new Set<string>();
+    const existingZeroHourRecords = new Map<string, EmployeeAttendance>();
+
+    existingRecords.forEach(r => {
+        const d = new Date(r.workingDate);
+        const y = d.getFullYear();
+        const m = String(d.getMonth() + 1).padStart(2, '0');
+        const day = String(d.getDate()).padStart(2, '0');
+        const dateStr = `${y}-${m}-${day}`;
+
+        // Skip if totalHours > 0 (already filled)
+        if (r.totalHours && r.totalHours > 0) {
+             existingDates.add(dateStr);
+             return;
+        }
+        
+        // Skip if Leave or Half Day
+        if (r.status === AttendanceStatus.LEAVE || r.status === AttendanceStatus.HALF_DAY) {
+             existingDates.add(dateStr);
+             return;
+        }
+
+        // If here, it is a 0-hour record (likely WFH, Client Visit, or Pending)
+        // We want to UPDATE these.
+        // We do NOT add to existingDates, so the loop processes this date.
+        // But we store it in map to retrieve ID and Location later.
+        existingZeroHourRecords.set(dateStr, r);
+    });
+
+    // 3. Fetch approved leaves (Full & Half)
+    const approvedLeaves = await this.leaveRequestRepository.find({
+        where: {
+            employeeId,
+            status: 'Approved',
+            fromDate: LessThanOrEqual(endDate.toISOString().split('T')[0]),
+            toDate: MoreThanOrEqual(startDate.toISOString().split('T')[0])
+        }
+    });
+
+    const leaveDates = new Set<string>();
+    approvedLeaves.forEach(leave => {
+        let current = new Date(leave.fromDate);
+        // Start from Noon to avoid timezone shifts
+        current.setHours(12, 0, 0, 0); 
+        
+        const end = new Date(leave.toDate);
+        end.setHours(23, 59, 59, 999);
+
+        // Safety break
+        let safety = 0;
+        while (current <= end && safety < 366) {
+            const y = current.getFullYear();
+            const m = String(current.getMonth() + 1).padStart(2, '0');
+            const d = String(current.getDate()).padStart(2, '0');
+            leaveDates.add(`${y}-${m}-${d}`);
+            
+            current.setDate(current.getDate() + 1);
+            safety++;
+        }
+    });
+
+    // 4. Generate records for eligible days
+    const recordsToCreate: EmployeeAttendanceDto[] = [];
+    const updatedDateStrings: string[] = [];
+    let currentDate = new Date(startDate);
+    
+    // Iterate from 1st of month up to today (inclusive)
+    while (currentDate <= endDate) {
+        // Stop if we go past "today"
+        if (currentDate > today) break;
+
+        // Force local string format for comparison (YYYY-MM-DD)
+        const year = currentDate.getFullYear();
+        const month = String(currentDate.getMonth() + 1).padStart(2, '0');
+        const day = String(currentDate.getDate()).padStart(2, '0');
+        const dateStr = `${year}-${month}-${day}`;
+        
+        // Skip Weekends (Explicit Inline Check)
+        // 0 = Sunday, 6 = Saturday
+        const dayOfWeek = currentDate.getDay();
+        const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+        
+        // Skip Holidays
+        const isHoliday = holidayDates.has(dateStr);
+
+        // Skip COMPLETE Existing Attendance (Hours > 0 or Leave/HalfDay)
+        const hasAttendance = existingDates.has(dateStr);
+
+        // Skip Approved Leaves (Full & Half)
+        const hasLeave = leaveDates.has(dateStr);
+
+        if (!isWeekend && !isHoliday && !hasAttendance && !hasLeave) {
+            const dto = new EmployeeAttendanceDto();
+            dto.employeeId = employeeId;
+            dto.workingDate = new Date(currentDate); 
+            dto.workingDate.setHours(0,0,0,0);
+            
+            // CHECK FOR EXISTING 0-HOUR RECORD TO UPDATE
+            const existingZeroHour = existingZeroHourRecords.get(dateStr);
+            if (existingZeroHour) {
+                dto.id = existingZeroHour.id; // Crucial: Triggers UPDATE
+                dto.status = AttendanceStatus.FULL_DAY; 
+                // Restore Work Location to pass priority check (WFH -> WFH)
+                // If it was "WFH", we send "WFH". 
+                // incomingPriority (1) >= existingPriority (1) -> Update Allowed.
+                if (existingZeroHour.workLocation) {
+                    dto.workLocation = existingZeroHour.workLocation;
+                }
+            } else {
+                 dto.status = AttendanceStatus.FULL_DAY;
+            }
+            
+            
+            dto.totalHours = 9;
+            recordsToCreate.push(dto);
+            updatedDateStrings.push(dateStr);
+        }
+
+        // Increment day
+        currentDate.setDate(currentDate.getDate() + 1);
+    }
+
+    if (recordsToCreate.length === 0) {
+        return { message: 'No eligible days found to update.', count: 0, updatedDates: [] };
+    }
+
+    // 5. Bulk Create
+    // We update logic to use createBulk 
+    // We rely on the fact we set IDs for existing records to trigger updates
+    await this.createBulk(recordsToCreate, false, false);
+
+    return { 
+        message: 'Timesheet updated successfully',
+        count: recordsToCreate.length,
+        updatedDates: updatedDateStrings
+    };
   }
 
   async findAll(): Promise<EmployeeAttendance[]> {
@@ -183,7 +358,7 @@ export class EmployeeAttendanceService {
       );
     }
 
-    if (!isAdmin && !this.isEditableMonth(new Date(attendance.workingDate))) {
+    if (!isAdmin && !isManager && !this.isEditableMonth(new Date(attendance.workingDate))) {
       throw new BadRequestException('Attendance for this month is locked.');
     }
 
@@ -208,12 +383,17 @@ export class EmployeeAttendanceService {
     }
 
     if (!isAdmin) {
-      const isBlocked = await this.blockerService.isBlocked(
+      const blocker = await this.blockerService.isBlocked(
         attendance.employeeId, 
         attendance.workingDate
       );
-      if (isBlocked) {
-        throw new BadRequestException('Timesheet is locked for this date by admin.');
+      if (blocker) {
+        // If the current user is a Manager AND they are the one who blocked it, or they are a manager 
+        // we might want to allow override here, but the user said "manger can also unblock that" 
+        // suggesting they should unblock first. However, many systems allow the blocker to edit.
+        // For now, let's just make the error message dynamic as requested.
+        const blockedByName = blocker.blockedBy || 'Administrator';
+        throw new BadRequestException(`Timesheet is locked for this date by ${blockedByName}. Please contact them to unlock.`);
       }
     }
 
@@ -229,8 +409,8 @@ export class EmployeeAttendanceService {
     const incomingPriority = getPriority(updateDto.status || null, updateDto.workLocation || null);
 
     // Rule: Only overwrite if incoming priority is GREATER THAN OR EQUAL to existing priority
-    // Exception: Always allow updates if the incoming update is from an Admin or is explicitly clearing the status
-    if (incomingPriority < existingPriority && !isAdmin && updateDto.status !== null && updateDto.workLocation !== null) {
+    // Exception: Always allow updates if the incoming update is from an Admin or Manager, or is explicitly clearing the status
+    if (incomingPriority < existingPriority && !isAdmin && !isManager && updateDto.status !== null && updateDto.workLocation !== null) {
       // If trying to downgrade priority (e.g., WFH trying to overwrite CV), ignore the change
       return attendance;
     }
@@ -367,9 +547,9 @@ export class EmployeeAttendanceService {
     return results;
   }
 
-  async remove(id: number): Promise<void> {
+  async remove(id: number, isAdmin: boolean = false, isManager: boolean = false): Promise<void> {
     const attendance = await this.employeeAttendanceRepository.findOne({ where: { id } });
-    if (attendance && !this.isEditableMonth(new Date(attendance.workingDate))) {
+    if (attendance && !isAdmin && !isManager && !this.isEditableMonth(new Date(attendance.workingDate))) {
          throw new BadRequestException('Cannot delete locked attendance records.');
     }
     const result = await this.employeeAttendanceRepository.delete(id);
@@ -416,7 +596,11 @@ export class EmployeeAttendanceService {
         }
 
         // Priority 4: Default to Absent for past weekdays with missing status (0 hours)
-        attendance.status = AttendanceStatus.ABSENT;
+        // attendance.status = AttendanceStatus.ABSENT;
+        // User Request: Keep as NOT_UPDATED instead of ABSENT
+        if (!attendance.status) {
+             attendance.status = AttendanceStatus.NOT_UPDATED;
+        }
       }
     }
     return attendance;
@@ -486,7 +670,6 @@ export class EmployeeAttendanceService {
                 month: monthNames[date.getMonth()],
                 year: date.getFullYear(),
                 totalLeaves: 0,
-                halfDays: 0,
                 workFromHome: 0,
                 clientVisits: 0
             });
@@ -496,13 +679,12 @@ export class EmployeeAttendanceService {
         const status = (record.status || '').toLowerCase();
         const location = (record.workLocation || '').toLowerCase();
 
-        // Check for Full Leaves
+        // Check for Full Leaves (1.0) and Half Days (0.5)
         if (status === 'leave') {
-            stats.totalLeaves++;
+            stats.totalLeaves += 1;
         }
-        // Check for Half Days
         else if (status === 'half day') {
-            stats.halfDays++;
+            stats.totalLeaves += 0.5;
         }
 
         // Check for WFH
