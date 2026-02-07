@@ -6,6 +6,7 @@ import {
   IsString,
   MaxLength,
   IsEnum,
+  IsDateString,
 } from 'class-validator';
 import { Transform } from 'class-transformer';
 import { Department } from '../enums/department.enum';
@@ -48,6 +49,11 @@ export class EmployeeDetailsDto {
   @IsNotEmpty()
   @MaxLength(255)
   email: string;
+
+  @IsNotEmpty()
+  @IsDateString()
+  joiningDate: Date;
+  
   @IsString()
   @IsNotEmpty()
   @MaxLength(255)
