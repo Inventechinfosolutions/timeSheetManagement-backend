@@ -38,6 +38,9 @@ export class EmployeeDetails extends BaseEntity {
   @Column({ name: 'email', unique: true, length: 255 })
   email: string;
 
+  @Column({ name: 'joining_date', type: 'date', nullable: true })
+  joiningDate: Date;
+
   @Column({ name: 'password', length: 255, nullable: true })
   password: string;
 

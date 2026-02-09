@@ -37,17 +37,31 @@ export class EmployeeAttendanceController {
     private readonly employeeAttendanceService: EmployeeAttendanceService,
   ) {}
 
+  @UseGuards(JwtAuthGuard)
   @Get('download-report')
   @ApiOperation({ summary: 'Download monthly attendance Excel report' })
   @ApiQuery({ name: 'month', type: Number })
   @ApiQuery({ name: 'year', type: Number })
   async downloadReport(
     @Query() query: DownloadAttendanceDto,
+    @Req() req: any,
     @Res() res: Response,
   ) {
+    const user = req.user;
+    let managerName: string | undefined;
+    let managerId: string | undefined;
+
+    const roleUpper = (user?.role || '').toUpperCase();
+    if (user && user.userType !== UserType.ADMIN && (user.userType === 'MANAGER' || roleUpper.includes('MNG') || roleUpper.includes('MANAGER'))) {
+        managerName = user.aliasLoginName;
+        managerId = user.loginId;
+    }
+
     const buffer = await this.employeeAttendanceService.generateMonthlyReport(
       query.month,
       query.year,
+      managerName,
+      managerId
     );
     
     res.set({
