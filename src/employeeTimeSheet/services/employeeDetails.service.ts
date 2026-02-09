@@ -149,6 +149,7 @@ export class EmployeeDetailsService {
     managerName?: string,
     managerId?: string,
     includeSelf: boolean = false,
+    userStatus?: string,
   ): Promise<{ data: EmployeeDetails[]; totalItems: number }> {
     try {
       this.logger.log('Fetching employees with filter:', {
@@ -193,6 +194,10 @@ export class EmployeeDetailsService {
 
       if (department && department !== 'All') {
         query.andWhere('employee.department = :department', { department });
+      }
+
+      if (userStatus) {
+        query.andWhere('employee.userStatus = :userStatus', { userStatus });
       }
 
       // Filter by Manager if provided
