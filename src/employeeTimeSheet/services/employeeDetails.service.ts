@@ -263,6 +263,7 @@ export class EmployeeDetailsService {
   async getListSelect(
     department?: string,
     role?: string,
+    search?: string,
   ): Promise<any[]> {
     try {
       const query = this.employeeDetailsRepository
@@ -283,6 +284,14 @@ export class EmployeeDetailsService {
 
       // Filter to only include ACTIVE users
       query.andWhere('user.status = :activeStatus', { activeStatus: UserStatus.ACTIVE });
+
+      // Add search filter
+      if (search) {
+        query.andWhere(
+          '(employee.fullName LIKE :search OR employee.employeeId LIKE :search)',
+          { search: `%${search}%` }
+        );
+      }
 
       if (role) {
         const roles = role.split(',');
