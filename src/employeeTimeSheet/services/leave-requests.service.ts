@@ -43,151 +43,145 @@ export class LeaveRequestsService {
   ) {}
 
   async create(data: Partial<LeaveRequest>) {
-    // Check for overlapping dates based on request type
-    if (data.fromDate && data.toDate && data.requestType) {
-      const requestType = data.requestType;
-      
-      // Define which request types can overlap with each other
-      // Client Visit can overlap with Leave and WFH
-      // Leave and WFH cannot overlap with each other or with themselves
-      
-      let conflictingTypes: string[] = [];
-      
-      if (requestType === 'Apply Leave' || requestType === 'Leave') {
-        // Leave only conflicts with other Leave requests
-        conflictingTypes = ['Apply Leave', 'Leave'];
-      } else if (requestType === 'Work From Home') {
-        // WFH conflicts with Leave (which blocks it) and existing WFH
-        conflictingTypes = ['Apply Leave', 'Leave', 'Work From Home'];
-      } else if (requestType === 'Client Visit') {
-        // Client Visit conflicts with Leave (which blocks it) and existing Client Visit
-        conflictingTypes = ['Apply Leave', 'Leave', 'Client Visit'];
-      } else if (requestType === 'Half Day') {
-        // Half Day conflicts with Leave and existing Half Day
-        // It is allowed to overlap with WFH and Client Visit
-        conflictingTypes = ['Apply Leave', 'Leave', 'Half Day'];
-      } else {
-        conflictingTypes = [requestType];
-      }
-      
-      // Only check for conflicts if there are conflicting types
-      if (conflictingTypes.length > 0) {
-        const existingLeave = await this.leaveRequestRepository.findOne({
-          where: {
-            employeeId: data.employeeId,
-            fromDate: LessThanOrEqual(data.toDate),
-            toDate: MoreThanOrEqual(data.fromDate),
-            status: In(['Pending', 'Approved', 'Cancellation Rejected']),
-            requestType: In(conflictingTypes),
-          },
-        });
+    const METHOD = 'create';
+    this.logger.log(`[${METHOD}] Started creating request for employee: ${data.employeeId} (${data.requestType})`);
 
-        if (existingLeave) {
-          throw new ConflictException(
-            `Leave request already exists for the selected date range (${existingLeave.fromDate} to ${existingLeave.toDate})`,
-          );
-        }
-      }
-    }
-
-    if (!data.submittedDate) {
-      const now = new Date();
-      data.submittedDate = now.toISOString().split('T')[0]; // Format: YYYY-MM-DD
-    }
-
-    // Only calculate duration if not already provided
-    if (data.fromDate && data.toDate && (data.duration === undefined || data.duration === null || data.duration === 0)) {
-      const start = new Date(data.fromDate);
-      const end = new Date(data.toDate);
-      const diffTime = Math.abs(end.getTime() - start.getTime());
-      const days = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1;
-      data.duration = days;
-    }
-
-    const savedRequest = await this.leaveRequestRepository.save(data);
-
-    // --- NEW NOTIFICATION LOGIC ---
     try {
-      // 1. Get Employee Details
-      const employee = await this.employeeDetailsRepository.findOne({
-        where: { employeeId: data.employeeId },
-      });
-
-      if (employee) {
-        // 2. Prepare Admin Email (Receiver)
-        // Using the SMTP username as the admin receiver, or fallback to a specific admin email if env var exists
-        const adminEmail = process.env.ADMIN_EMAIL || process.env.SMTP_USERNAME;
-
-        // 3. Construct HTML Content
-        const requestTypeLabel =
-          (data.requestType === 'Apply Leave' ? 'Leave' : data.requestType) || 'Request';
-        const subject = `New ${requestTypeLabel} Request - ${employee.fullName}`;
-
-        const htmlContent = getRequestNotificationTemplate({
-          employeeName: employee.fullName || 'Employee',
-          employeeId: employee.employeeId,
-          requestType: requestTypeLabel,
-          title: data.title || 'No Title',
-          fromDate: data.fromDate || '',
-          toDate: data.toDate || '',
-          duration: data.duration || 0,
-          status: 'Pending',
-          description: data.description || 'N/A'
-        });
-
-        if (adminEmail) {
-          // 4. Send Email
-          // We pass employee.email as 'replyTo' so Admin can reply directly to the employee
-          await this.emailService.sendEmail(
-            adminEmail,
-            subject,
-            `New request from ${employee.fullName}`,
-            htmlContent,
-            employee.email, // <--- Pass employee email here as Reply-To
-          );
-          this.logger.log(
-            `Notification sent to Admin (${adminEmail}) for request from ${employee.fullName}`,
-          );
+      // STEP 1: Conflict Check
+      if (data.fromDate && data.toDate && data.requestType) {
+        this.logger.debug(`[${METHOD}][STEP 1] Checking for overlapping dates for type: ${data.requestType}`);
+        const requestType = data.requestType;
+        
+        // Define which request types can overlap with each other
+        let conflictingTypes: string[] = [];
+        
+        if (requestType === 'Apply Leave' || requestType === 'Leave') {
+          conflictingTypes = ['Apply Leave', 'Leave'];
+        } else if (requestType === 'Work From Home') {
+          conflictingTypes = ['Apply Leave', 'Leave', 'Work From Home'];
+        } else if (requestType === 'Client Visit') {
+          conflictingTypes = ['Apply Leave', 'Leave', 'Client Visit'];
+        } else if (requestType === 'Half Day') {
+          conflictingTypes = ['Apply Leave', 'Leave', 'Half Day'];
         } else {
-          this.logger.warn(
-            'Admin email not configured (ADMIN_EMAIL or SMTP_USERNAME). Cannot send admin notification.',
-          );
+          conflictingTypes = [requestType];
+        }
+        
+        if (conflictingTypes.length > 0) {
+          const existingLeave = await this.leaveRequestRepository.findOne({
+            where: {
+              employeeId: data.employeeId,
+              fromDate: LessThanOrEqual(data.toDate),
+              toDate: MoreThanOrEqual(data.fromDate),
+              status: In(['Pending', 'Approved', 'Cancellation Rejected']),
+              requestType: In(conflictingTypes),
+            },
+          });
+
+          if (existingLeave) {
+            this.logger.warn(`[${METHOD}][STEP 1] Conflict found with request ID: ${existingLeave.id}`);
+            throw new ConflictException(
+              `Leave request already exists for the selected date range (${existingLeave.fromDate} to ${existingLeave.toDate})`,
+            );
+          }
         }
       }
-    } catch (error) {
-      this.logger.error('Failed to send admin notification', error);
-    }
 
-    // Link orphaned documents (refId: 0) to the newly created request
-    try {
-      // Find the numeric ID of the employee to match the entityId used during upload
-      const employee = await this.employeeDetailsRepository.findOne({
-        where: { employeeId: savedRequest.employeeId }
-      });
-
-      if (employee) {
-        await this.documentRepo.update(
-          {
-            entityType: EntityType.LEAVE_REQUEST,
-            entityId: employee.id, // During upload, entityId is set to employee's numeric ID
-            refId: 0
-          },
-          {
-            refId: savedRequest.id
-          }
-        );
+      // STEP 2: Prep Data
+      this.logger.debug(`[${METHOD}][STEP 2] Preparing request data (dates, duration)...`);
+      if (!data.submittedDate) {
+        const now = new Date();
+        data.submittedDate = now.toISOString().split('T')[0];
       }
+
+      if (data.fromDate && data.toDate && (data.duration === undefined || data.duration === null || data.duration === 0)) {
+        const start = new Date(data.fromDate);
+        const end = new Date(data.toDate);
+        const diffTime = Math.abs(end.getTime() - start.getTime());
+        const days = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1;
+        data.duration = days;
+      }
+
+      // STEP 3: Save Request
+      this.logger.debug(`[${METHOD}][STEP 3] Persisting leave request to database...`);
+      const savedRequest = await this.leaveRequestRepository.save(data);
+      this.logger.log(`[${METHOD}] Successfully saved request ID: ${savedRequest.id}`);
+
+      // STEP 4: Admin Notifications
+      this.logger.debug(`[${METHOD}][STEP 4] Processing admin and manager notifications...`);
+      try {
+        const employee = await this.employeeDetailsRepository.findOne({
+          where: { employeeId: data.employeeId },
+        });
+
+        if (employee) {
+          const adminEmail = process.env.ADMIN_EMAIL || process.env.SMTP_USERNAME;
+          const requestTypeLabel = (data.requestType === 'Apply Leave' ? 'Leave' : data.requestType) || 'Request';
+          const subject = `New ${requestTypeLabel} Request - ${employee.fullName}`;
+
+          const htmlContent = getRequestNotificationTemplate({
+            employeeName: employee.fullName || 'Employee',
+            employeeId: employee.employeeId,
+            requestType: requestTypeLabel,
+            title: data.title || 'No Title',
+            fromDate: data.fromDate || '',
+            toDate: data.toDate || '',
+            duration: data.duration || 0,
+            status: 'Pending',
+            description: data.description || 'N/A'
+          });
+
+          if (adminEmail) {
+            await this.emailService.sendEmail(
+              adminEmail,
+              subject,
+              `New request from ${employee.fullName}`,
+              htmlContent,
+              employee.email,
+            );
+            this.logger.log(`[${METHOD}][STEP 4] Admin notification sent to ${adminEmail}`);
+          }
+        }
+      } catch (error) {
+        this.logger.error(`[${METHOD}][STEP 4] Failed to send admin notification: ${error.message}`);
+      }
+
+      // STEP 5: Link Documents
+      this.logger.debug(`[${METHOD}][STEP 5] Linking uploaded documents...`);
+      try {
+        const employee = await this.employeeDetailsRepository.findOne({
+          where: { employeeId: savedRequest.employeeId }
+        });
+
+        if (employee) {
+          const updateResult = await this.documentRepo.update(
+            {
+              entityType: EntityType.LEAVE_REQUEST,
+              entityId: employee.id,
+              refId: 0
+            },
+            {
+              refId: savedRequest.id
+            }
+          );
+          this.logger.log(`[${METHOD}][STEP 5] Linked ${updateResult.affected} orphaned documents`);
+        }
+      } catch (error) {
+        this.logger.error(`[${METHOD}][STEP 5] Failed to link documents: ${error.message}`);
+      }
+
+      // STEP 6: Other Notifications
+      this.logger.debug(`[${METHOD}][STEP 6] Sending manager notification and submission receipt...`);
+      await this.notifyManagerOfRequest(savedRequest);
+      await this.notifyEmployeeOfSubmission(savedRequest);
+
+      this.logger.log(`[${METHOD}] Creation completed for request ID: ${savedRequest.id}`);
+      return savedRequest;
     } catch (error) {
-      this.logger.error(`Failed to link orphaned documents for request ${savedRequest.id}: ${error.message}`);
+      this.logger.error(`[${METHOD}] Failed to create request: ${error.message}`, error.stack);
+      if (error instanceof HttpException || error instanceof ConflictException) throw error;
+      throw new HttpException('Failed to create leave request', HttpStatus.INTERNAL_SERVER_ERROR);
     }
-
-    // NEW: Notify Mapped Manager
-    await this.notifyManagerOfRequest(savedRequest);
-
-    // NEW: Notify Employee (Submission Receipt)
-    await this.notifyEmployeeOfSubmission(savedRequest);
-
-    return savedRequest;
   }
 
   async findUnifiedRequests(
@@ -204,123 +198,139 @@ export class LeaveRequestsService {
       managerId?: string;
     }
   ) {
+    const METHOD = 'findUnifiedRequests';
     const { employeeId, department, status, search, month = 'All', year = 'All', page = 1, limit = 10, managerName, managerId } = filters;
+    this.logger.log(`[${METHOD}] Fetching requests (Search: "${search}", Page: ${page})`);
 
-    const query = this.leaveRequestRepository.createQueryBuilder('lr')
-      .leftJoin(EmployeeDetails, 'ed', 'ed.employeeId = lr.employeeId')
-      .select([
-        'lr.id AS id',
-        'lr.employeeId AS employeeId',
-        'lr.requestType AS requestType',
-        'lr.fromDate AS fromDate',
-        'lr.toDate AS toDate',
-        'lr.title AS title',
-        'lr.description AS description',
-        'lr.status AS status',
-        'lr.isRead AS isRead',
-        'lr.submittedDate AS submittedDate',
-        'lr.duration AS duration',
-        'lr.createdAt AS createdAt',
-        'lr.request_modified_from AS requestModifiedFrom',
-        'ed.department AS department',
-        'ed.fullName AS fullName'
-      ]);
+    try {
+      // STEP 1: Build Query
+      this.logger.debug(`[${METHOD}][STEP 1] Building query...`);
+      const query = this.leaveRequestRepository.createQueryBuilder('lr')
+        .leftJoin(EmployeeDetails, 'ed', 'ed.employeeId = lr.employeeId')
+        .select([
+          'lr.id AS id',
+          'lr.employeeId AS employeeId',
+          'lr.requestType AS requestType',
+          'lr.fromDate AS fromDate',
+          'lr.toDate AS toDate',
+          'lr.title AS title',
+          'lr.description AS description',
+          'lr.status AS status',
+          'lr.isRead AS isRead',
+          'lr.submittedDate AS submittedDate',
+          'lr.duration AS duration',
+          'lr.createdAt AS createdAt',
+          'lr.request_modified_from AS requestModifiedFrom',
+          'ed.department AS department',
+          'ed.fullName AS fullName'
+        ]);
 
-    // 1. Employee Filter
-    if (employeeId) {
-      query.andWhere('lr.employeeId = :employeeId', { employeeId });
-    }
+      // STEP 2: Apply Filters
+      this.logger.debug(`[${METHOD}][STEP 2] Applying filters...`);
+      
+      // 1. Employee Filter
+      if (employeeId) {
+        query.andWhere('lr.employeeId = :employeeId', { employeeId });
+      }
 
-    // 2. Manager Filter (from Upstream)
-    if (managerName || managerId) {
-      const { ManagerMapping } = require('../../managerMapping/entities/managerMapping.entity');
-      query.leftJoin(ManagerMapping, 'mm', 'mm.employeeId = lr.employeeId');
-      query.andWhere(
-          '(lr.employeeId = :exactManagerId OR (mm.managerName LIKE :managerNameQuery OR mm.managerName LIKE :managerIdQuery))', 
-          { 
-              exactManagerId: managerId,
-              managerNameQuery: `%${managerName}%`, 
-              managerIdQuery: `%${managerId}%` 
-          }
-      );
-      query.andWhere('(mm.status = :mmStatus OR lr.employeeId = :exactManagerId)', { 
-          mmStatus: 'ACTIVE',
-          exactManagerId: managerId 
-      });
-    }
+      // 2. Manager Filter
+      if (managerName || managerId) {
+        const { ManagerMapping } = require('../../managerMapping/entities/managerMapping.entity');
+        query.leftJoin(ManagerMapping, 'mm', 'mm.employeeId = lr.employeeId');
+        query.andWhere(
+            '(lr.employeeId = :exactManagerId OR (mm.managerName LIKE :managerNameQuery OR mm.managerName LIKE :managerIdQuery))', 
+            { 
+                exactManagerId: managerId,
+                managerNameQuery: `%${managerName}%`, 
+                managerIdQuery: `%${managerId}%` 
+            }
+        );
+        query.andWhere('(mm.status = :mmStatus OR lr.employeeId = :exactManagerId)', { 
+            mmStatus: 'ACTIVE',
+            exactManagerId: managerId 
+        });
+      }
 
-    // 3. Department Filter
-    if (department && department !== 'All') {
-      query.andWhere('ed.department = :department', { department });
-    }
+      // 3. Department Filter
+      if (department && department !== 'All') {
+        query.andWhere('ed.department = :department', { department });
+      }
 
-    // 4. Status Filter
-    if (status && status !== 'All') {
-      query.andWhere('lr.status = :status', { status });
-    }
+      // 4. Status Filter
+      if (status && status !== 'All') {
+        query.andWhere('lr.status = :status', { status });
+      }
 
-    // 5. Search Filter
-    if (search && search.trim() !== '') {
-      query.andWhere(new Brackets(qb => {
-        const searchPattern = `%${search.toLowerCase()}%`;
-        qb.where('LOWER(ed.fullName) LIKE :searchPattern', { searchPattern })
-          .orWhere('LOWER(lr.employeeId) LIKE :searchPattern', { searchPattern })
-          .orWhere('LOWER(lr.title) LIKE :searchPattern', { searchPattern });
-      }));
-    }
-
-    // 6. Date Boundaries Filter
-    if (year !== 'All' || month !== 'All') {
-      if (year !== 'All' && month !== 'All') {
-        const monthInt = parseInt(month);
-        const yearInt = parseInt(year);
-        const monthStart = `${year}-${month.padStart(2, '0')}-01`;
-        const lastDay = new Date(yearInt, monthInt, 0).getDate();
-        const monthEnd = `${year}-${month.padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
-        
-        query.andWhere('lr.fromDate <= :monthEnd', { monthEnd })
-             .andWhere('lr.toDate >= :monthStart', { monthStart });
-      } else if (year !== 'All' && month === 'All') {
-        const yearStart = `${year}-01-01`;
-        const yearEnd = `${year}-12-31`;
-        query.andWhere('lr.fromDate <= :yearEnd', { yearEnd })
-             .andWhere('lr.toDate >= :yearStart', { yearStart });
-      } else if (year === 'All' && month !== 'All') {
-        const m = parseInt(month);
+      // 5. Search Filter
+      if (search && search.trim() !== '') {
         query.andWhere(new Brackets(qb => {
-           qb.where('MONTH(lr.fromDate) = :m', { m })
-             .orWhere('MONTH(lr.toDate) = :m', { m });
+          const searchPattern = `%${search.toLowerCase()}%`;
+          qb.where('LOWER(ed.fullName) LIKE :searchPattern', { searchPattern })
+            .orWhere('LOWER(lr.employeeId) LIKE :searchPattern', { searchPattern })
+            .orWhere('LOWER(lr.title) LIKE :searchPattern', { searchPattern });
         }));
       }
+
+      // 6. Date Boundaries
+      if (year !== 'All' || month !== 'All') {
+        if (year !== 'All' && month !== 'All') {
+          const monthInt = parseInt(month);
+          const yearInt = parseInt(year);
+          const monthStart = `${year}-${month.padStart(2, '0')}-01`;
+          const lastDay = new Date(yearInt, monthInt, 0).getDate();
+          const monthEnd = `${year}-${month.padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+          
+          query.andWhere('lr.fromDate <= :monthEnd', { monthEnd })
+               .andWhere('lr.toDate >= :monthStart', { monthStart });
+        } else if (year !== 'All' && month === 'All') {
+          const yearStart = `${year}-01-01`;
+          const yearEnd = `${year}-12-31`;
+          query.andWhere('lr.fromDate <= :yearEnd', { yearEnd })
+               .andWhere('lr.toDate >= :yearStart', { yearStart });
+        } else if (year === 'All' && month !== 'All') {
+          const m = parseInt(month);
+          query.andWhere(new Brackets(qb => {
+             qb.where('MONTH(lr.fromDate) = :m', { m })
+               .orWhere('MONTH(lr.toDate) = :m', { m });
+          }));
+        }
+      }
+
+      // STEP 3: Execute & Paginate
+      this.logger.debug(`[${METHOD}][STEP 3] Executing query and counting total...`);
+      const total = await query.getCount();
+
+      const data = await query
+        .addSelect(`CASE 
+          WHEN lr.status = 'Pending' THEN 1 
+          WHEN lr.status = 'Requesting for Cancellation' THEN 2
+          WHEN lr.status = 'Approved' THEN 3
+          WHEN lr.status = 'Cancellation Approved' THEN 4
+          WHEN lr.status = 'Cancellation Rejected' THEN 5
+          WHEN lr.status = 'Request Modified' THEN 6
+          WHEN lr.status = 'Rejected' THEN 6
+          WHEN lr.status = 'Cancelled' THEN 7
+          ELSE 8 
+        END`, 'priority')
+        .orderBy('priority', 'ASC')
+        .addOrderBy('lr.id', 'DESC')
+        .offset((page - 1) * limit)
+        .limit(limit)
+        .getRawMany();
+
+      this.logger.log(`[${METHOD}] Successfully found ${data.length} requests (out of ${total} total)`);
+      return {
+        data,
+        total,
+        page: Number(page),
+        limit: Number(limit),
+        totalPages: Math.ceil(total / limit),
+      };
+    } catch (error) {
+       this.logger.error(`[${METHOD}] Failed to fetch requests: ${error.message}`, error.stack);
+       if (error instanceof HttpException) throw error;
+       throw new HttpException('Failed to fetch leave requests', HttpStatus.INTERNAL_SERVER_ERROR);
     }
-
-    const total = await query.getCount();
-
-    const data = await query
-      .addSelect(`CASE 
-        WHEN lr.status = 'Pending' THEN 1 
-        WHEN lr.status = 'Requesting for Cancellation' THEN 2
-        WHEN lr.status = 'Approved' THEN 3
-        WHEN lr.status = 'Cancellation Approved' THEN 4
-        WHEN lr.status = 'Cancellation Rejected' THEN 5
-        WHEN lr.status = 'Request Modified' THEN 6
-        WHEN lr.status = 'Rejected' THEN 6
-        WHEN lr.status = 'Cancelled' THEN 7
-        ELSE 8 
-      END`, 'priority')
-      .orderBy('priority', 'ASC')
-      .addOrderBy('lr.id', 'DESC')
-      .offset((page - 1) * limit)
-      .limit(limit)
-      .getRawMany();
-
-    return {
-      data,
-      total,
-      page: Number(page),
-      limit: Number(limit),
-      totalPages: Math.ceil(total / limit),
-    };
   }
 
   async findAll(department?: string, status?: string, search?: string, page: number = 1, limit: number = 10, managerName?: string, managerId?: string) {
@@ -332,33 +342,45 @@ export class LeaveRequestsService {
   }
 
   async findOne(id: number) {
-    const result = await this.leaveRequestRepository.createQueryBuilder('lr')
-      .leftJoin(EmployeeDetails, 'ed', 'ed.employeeId = lr.employeeId')
-      .where('lr.id = :id', { id })
-      .select([
-        'lr.id AS id',
-        'lr.employeeId AS employeeId',
-        'lr.requestType AS requestType',
-        'lr.fromDate AS fromDate',
-        'lr.toDate AS toDate',
-        'lr.title AS title',
-        'lr.description AS description',
-        'lr.status AS status',
-        'lr.isRead AS isRead',
-        'lr.submittedDate AS submittedDate',
-        'lr.duration AS duration',
-        'lr.createdAt AS createdAt',
-        'lr.request_modified_from AS requestModifiedFrom',
-        'ed.department AS department',
-        'ed.fullName AS fullName'
-      ])
-      .getRawOne();
+    const METHOD = 'findOne';
+    this.logger.log(`[${METHOD}] Fetching leave request ID: ${id}`);
+    
+    try {
+      this.logger.debug(`[${METHOD}] Querying database with employee details join...`);
+      const result = await this.leaveRequestRepository.createQueryBuilder('lr')
+        .leftJoin(EmployeeDetails, 'ed', 'ed.employeeId = lr.employeeId')
+        .where('lr.id = :id', { id })
+        .select([
+          'lr.id AS id',
+          'lr.employeeId AS employeeId',
+          'lr.requestType AS requestType',
+          'lr.fromDate AS fromDate',
+          'lr.toDate AS toDate',
+          'lr.title AS title',
+          'lr.description AS description',
+          'lr.status AS status',
+          'lr.isRead AS isRead',
+          'lr.submittedDate AS submittedDate',
+          'lr.duration AS duration',
+          'lr.createdAt AS createdAt',
+          'lr.request_modified_from AS requestModifiedFrom',
+          'ed.department AS department',
+          'ed.fullName AS fullName'
+        ])
+        .getRawOne();
 
-    if (!result) {
-      throw new NotFoundException(`Leave request with ID ${id} not found`);
+      if (!result) {
+        this.logger.warn(`[${METHOD}] Leave request with ID ${id} not found`);
+        throw new NotFoundException(`Leave request with ID ${id} not found`);
+      }
+
+      this.logger.log(`[${METHOD}] Found request ID: ${result.id} for employee: ${result.fullName}`);
+      return result;
+    } catch (error) {
+      this.logger.error(`[${METHOD}] Error fetching request: ${error.message}`, error.stack);
+      if (error instanceof HttpException) throw error;
+      throw new HttpException('Failed to fetch request details', HttpStatus.INTERNAL_SERVER_ERROR);
     }
-
-    return result;
   }
 
   async findUnread(managerName?: string) {
@@ -492,140 +514,134 @@ export class LeaveRequestsService {
     employeeId: string,
     datesToCancel: string[],
   ) {
-    const request = await this.leaveRequestRepository.findOne({
-      where: { id, employeeId },
-    });
-    if (!request) throw new NotFoundException('Request not found');
-    if (request.status !== 'Approved')
-      throw new ForbiddenException('Request must be approved');
+    const METHOD = 'cancelApprovedDates';
+    this.logger.log(`[${METHOD}] Request to cancel dates for request ${id} (Employee: ${employeeId})`);
 
-    if (!datesToCancel || datesToCancel.length === 0)
-      throw new BadRequestException('No dates provided');
+    try {
+      // STEP 1: Fetch and Validate Request
+      this.logger.debug(`[${METHOD}][STEP 1] Fetching request...`);
+      const request = await this.leaveRequestRepository.findOne({
+        where: { id, employeeId },
+      });
+      if (!request) throw new NotFoundException('Request not found');
+      if (request.status !== 'Approved')
+        throw new ForbiddenException('Request must be approved');
 
-    // 1. Validate Timings Again
-    const now = dayjs();
-    for (const dateStr of datesToCancel) {
-      const targetDate = dayjs(dateStr);
-      const deadline = targetDate
-        .hour(12)
-        .minute(0)
-        .second(0);
-      if (now.isAfter(deadline)) {
-        throw new ForbiddenException(
-          `Cancellation deadline passed for ${dateStr}. Cutoff was ${deadline.format('YYYY-MM-DD HH:mm')}`,
-        );
+      if (!datesToCancel || datesToCancel.length === 0) {
+        this.logger.warn(`[${METHOD}] No dates provided for cancellation`);
+        throw new BadRequestException('No dates provided');
       }
-    }
 
-    // 2. Check if Full Cancellation
-    const startDate = dayjs(request.fromDate);
-    const endDate = dayjs(request.toDate);
-    const totalDays = endDate.diff(startDate, 'day') + 1;
+      // STEP 2: Validate Timing Deadlines
+      this.logger.debug(`[${METHOD}][STEP 2] Validating cancellation deadlines...`);
+      const now = dayjs();
+      for (const dateStr of datesToCancel) {
+        const targetDate = dayjs(dateStr);
+        const deadline = targetDate.hour(12).minute(0).second(0);
+        if (now.isAfter(deadline)) {
+          this.logger.warn(`[${METHOD}][STEP 2] Deadline passed for date: ${dateStr}`);
+          throw new ForbiddenException(
+            `Cancellation deadline passed for ${dateStr}. Cutoff was ${deadline.format('YYYY-MM-DD HH:mm')}`,
+          );
+        }
+      }
 
-    if (datesToCancel.length === totalDays) {
-      // FULL CANCEL
-      request.status = 'Requesting for Cancellation';
-      request.isRead = false;
-      request.isReadEmployee = true;
-      const saved = await this.leaveRequestRepository.save(request);
-      
-      // Notify Admin
-      await this.notifyAdminOfCancellationRequest(saved, employeeId);
-      
-      // Notify Manager
-      await this.notifyManagerOfRequest(saved);
-      
-      return saved;
-    } else {
-      // PARTIAL CANCEL - Handle Non-Contiguous Dates by grouping them into ranges
-      const sortedDates = datesToCancel.sort();
-      const ranges: { start: string; end: string; count: number }[] = [];
+      // STEP 3: Determine Full or Partial Cancellation
+      const startDate = dayjs(request.fromDate);
+      const endDate = dayjs(request.toDate);
+      const totalDays = endDate.diff(startDate, 'day') + 1;
 
-      let currentStart = sortedDates[0];
-      let currentEnd = sortedDates[0];
-      let count = 1;
+      if (datesToCancel.length === totalDays) {
+        // FULL CANCEL
+        this.logger.log(`[${METHOD}] Processing FULL cancellation for request ${id}`);
+        request.status = 'Requesting for Cancellation';
+        request.isRead = false;
+        request.isReadEmployee = true;
+        const saved = await this.leaveRequestRepository.save(request);
+        
+        this.logger.debug(`[${METHOD}] Sending notifications...`);
+        await this.notifyAdminOfCancellationRequest(saved, employeeId);
+        await this.notifyManagerOfRequest(saved);
+        
+        return saved;
+      } else {
+        // PARTIAL CANCEL
+        this.logger.log(`[${METHOD}] Processing PARTIAL cancellation for request ${id} (${datesToCancel.length} dates)`);
+        
+        // Group non-contiguous dates into ranges
+        const sortedDates = datesToCancel.sort();
+        const ranges: { start: string; end: string; count: number }[] = [];
 
-      for (let i = 1; i < sortedDates.length; i++) {
-        const date = sortedDates[i];
-        const prevDate = sortedDates[i - 1];
-        const diff = dayjs(date).diff(dayjs(prevDate), 'day');
-        let isConsecutive = diff === 1;
+        let currentStart = sortedDates[0];
+        let currentEnd = sortedDates[0];
+        let count = 1;
 
-        // Bridging weekends: If diff > 1, check if there are any working days in between
-        if (!isConsecutive && diff > 1) {
-          let temp = dayjs(prevDate).add(1, 'day');
-          let hasWorkDayGap = false;
-          while (temp.isBefore(dayjs(date))) {
-            const day = temp.day();
-            if (day !== 0 && day !== 6) { // Not Sat (6) or Sun (0)
-              hasWorkDayGap = true;
-              break;
+        for (let i = 1; i < sortedDates.length; i++) {
+          const date = sortedDates[i];
+          const prevDate = sortedDates[i - 1];
+          const diff = dayjs(date).diff(dayjs(prevDate), 'day');
+          let isConsecutive = diff === 1;
+
+          if (!isConsecutive && diff > 1) {
+            let temp = dayjs(prevDate).add(1, 'day');
+            let hasWorkDayGap = false;
+            while (temp.isBefore(dayjs(date))) {
+              const day = temp.day();
+              if (day !== 0 && day !== 6) { 
+                hasWorkDayGap = true;
+                break;
+              }
+              temp = temp.add(1, 'day');
             }
-            temp = temp.add(1, 'day');
+            if (!hasWorkDayGap) isConsecutive = true;
           }
-          if (!hasWorkDayGap) {
-            isConsecutive = true;
+
+          if (isConsecutive) {
+            currentEnd = date;
+            count++;
+          } else {
+            ranges.push({ start: currentStart, end: currentEnd, count });
+            currentStart = date;
+            currentEnd = date;
+            count = 1;
           }
         }
+        ranges.push({ start: currentStart, end: currentEnd, count });
+        this.logger.debug(`[${METHOD}] Grouped dates into ${ranges.length} ranges`);
 
-        if (isConsecutive) {
-          currentEnd = date;
-          count++;
-        } else {
-          // Gap found, push current range and start new
-          ranges.push({ start: currentStart, end: currentEnd, count });
-          currentStart = date;
-          currentEnd = date;
-          count = 1;
+        const createdRequests: LeaveRequest[] = [];
+
+        for (const range of ranges) {
+          this.logger.debug(`[${METHOD}] Creating cancellation record for range: ${range.start} to ${range.end}`);
+          const newRequest = this.leaveRequestRepository.create({
+            ...request,
+            id: undefined, 
+            fromDate: range.start,
+            toDate: range.end,
+            status: 'Requesting for Cancellation',
+            isRead: false,
+            isReadEmployee: true,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+            duration: range.count,
+          });
+          
+          const savedNew = await this.leaveRequestRepository.save(newRequest);
+          await this.copyRequestDocuments(request.id, savedNew.id);
+          createdRequests.push(savedNew);
+
+          await this.notifyAdminOfCancellationRequest(savedNew, employeeId, range.count);
+          await this.notifyManagerOfRequest(savedNew);
+          await this.notifyEmployeeOfSubmission(savedNew);
         }
+
+        this.logger.log(`[${METHOD}] Partial cancellation completed. Created ${createdRequests.length} sub-requests.`);
+        return createdRequests.length === 1 ? createdRequests[0] : createdRequests;
       }
-      // Push the final range
-      ranges.push({ start: currentStart, end: currentEnd, count });
-
-      const createdRequests: LeaveRequest[] = [];
-
-      // Create a request for each range
-      for (const range of ranges) {
-        const newRequest = this.leaveRequestRepository.create({
-          ...request,
-          id: undefined, // New ID
-          fromDate: range.start,
-          toDate: range.end,
-          status: 'Requesting for Cancellation',
-          isRead: false,
-          isReadEmployee: true,
-          createdAt: new Date(),
-          updatedAt: new Date(),
-          duration: range.count,
-        });
-        
-        const savedNew = await this.leaveRequestRepository.save(newRequest);
-        
-        // Copy documents from the original request to this new cancellation record
-        await this.copyRequestDocuments(request.id, savedNew.id);
-        
-        createdRequests.push(savedNew);
-
-        // Notify Admin of this specific segment
-        await this.notifyAdminOfCancellationRequest(savedNew, employeeId, range.count);
-        
-        // Notify Manager of this specific segment
-        await this.notifyManagerOfRequest(savedNew);
-        
-        // Notify Employee (Submission Receipt) of this specific segment
-        await this.notifyEmployeeOfSubmission(savedNew);
-      }
-
-      // Updated Original Request Duration - REMOVED per requirements.
-      // Duration should only update when Admin APPROVES the cancellation.
-      // if (request.duration) {
-      //   request.duration = Math.max(0, request.duration - datesToCancel.length);
-      //   await this.leaveRequestRepository.save(request);
-      // }
-
-      return createdRequests.length === 1
-        ? createdRequests[0]
-        : createdRequests;
+    } catch (error) {
+      this.logger.error(`[${METHOD}] Error cancelling dates: ${error.message}`, error.stack);
+      if (error instanceof HttpException) throw error;
+      throw new HttpException('Error processing cancellation', HttpStatus.INTERNAL_SERVER_ERROR);
     }
   }
 
@@ -881,452 +897,359 @@ export class LeaveRequestsService {
   }
 
   async remove(id: number) {
-    const request = await this.leaveRequestRepository.findOne({ where: { id } });
-    if (!request) {
-      throw new NotFoundException('Leave request not found');
-    }
-    if (request.status !== 'Pending') {
-      throw new ForbiddenException('Only pending leave requests can be deleted');
-    }
+    const METHOD = 'remove';
+    this.logger.log(`[${METHOD}] Request to remove/revert request ID: ${id}`);
 
-    // --- NEW: Admin Notification Logic (Before Deletion) ---
     try {
-      const employee = await this.employeeDetailsRepository.findOne({
-        where: { employeeId: request.employeeId },
-      });
-
-      if (employee) {
-        const adminEmail = process.env.ADMIN_EMAIL || process.env.SMTP_USERNAME;
-
-        if (adminEmail) {
-          const requestTypeLabel =
-            request.requestType === 'Apply Leave' ? 'Leave' : request.requestType;
-          const subject = `Request Reverted Back: ${requestTypeLabel} Request - ${employee.fullName}`;
-
-          const htmlContent = getCancellationTemplate({
-            employeeName: employee.fullName,
-            employeeId: employee.employeeId,
-            requestType: requestTypeLabel,
-            title: request.title || 'No Title',
-            fromDate: request.fromDate,
-            toDate: request.toDate,
-            duration: request.duration || 0,
-            reason: request.description,
-            actionType: 'revert_back'
-          });
-
-          await this.emailService.sendEmail(
-            adminEmail,
-            subject,
-            `Request Reverted Back by ${employee.fullName}`,
-            htmlContent,
-          );
-        }
+      this.logger.debug(`[${METHOD}] Fetching request...`);
+      const request = await this.leaveRequestRepository.findOne({ where: { id } });
+      if (!request) {
+        this.logger.warn(`[${METHOD}] Request ${id} not found`);
+        throw new NotFoundException('Leave request not found');
       }
-    } catch (error) {
-      this.logger.error(
-        `Failed to send cancellation email for request ${id}`,
-        error,
-      );
-    }
+      if (request.status !== 'Pending') {
+        this.logger.warn(`[${METHOD}] Request ${id} is not pending (status: ${request.status})`);
+        throw new ForbiddenException('Only pending leave requests can be deleted');
+      }
 
-    // CHANGED: Instead of deleting, mark as Cancelled so Admin gets a notification
-    request.status = 'Cancelled';
-    request.isRead = false; // Ensure Admin sees this in unread notifications
-    return this.leaveRequestRepository.save(request);
+      // STEP 1: Notify Admin
+      this.logger.debug(`[${METHOD}][STEP 1] Notifying admin of revert...`);
+      try {
+        const employee = await this.employeeDetailsRepository.findOne({
+          where: { employeeId: request.employeeId },
+        });
+
+        if (employee) {
+          const adminEmail = process.env.ADMIN_EMAIL || process.env.SMTP_USERNAME;
+          if (adminEmail) {
+            const requestTypeLabel = request.requestType === 'Apply Leave' ? 'Leave' : request.requestType;
+            const htmlContent = getCancellationTemplate({
+              employeeName: employee.fullName,
+              employeeId: employee.employeeId,
+              requestType: requestTypeLabel,
+              title: request.title || 'No Title',
+              fromDate: request.fromDate,
+              toDate: request.toDate,
+              duration: request.duration || 0,
+              reason: request.description,
+              actionType: 'revert_back'
+            });
+
+            await this.emailService.sendEmail(adminEmail, `Request Reverted Back: ${requestTypeLabel} - ${employee.fullName}`, `Request Reverted Back`, htmlContent);
+          }
+        }
+      } catch (error) {
+        this.logger.error(`[${METHOD}][STEP 1] Failed to send notification: ${error.message}`);
+      }
+
+      // STEP 2: Mark as Cancelled
+      this.logger.debug(`[${METHOD}][STEP 2] Updating status to Cancelled...`);
+      request.status = 'Cancelled';
+      request.isRead = false; 
+      const saved = await this.leaveRequestRepository.save(request);
+
+      this.logger.log(`[${METHOD}] Request ${id} marked as Cancelled successfully`);
+      return saved;
+    } catch (error) {
+      this.logger.error(`[${METHOD}] Error removing request: ${error.message}`, error.stack);
+      if (error instanceof HttpException) throw error;
+      throw new HttpException('Error removing leave request', HttpStatus.INTERNAL_SERVER_ERROR);
+    }
   }
 
   /** Leave balance: entitlement (18 full timer / 12 intern), used (approved leave in year), pending, balance */
   async getLeaveBalance(employeeId: string, year: string) {
-    const yearNum = parseInt(year, 10);
-    if (isNaN(yearNum) || yearNum < 2000 || yearNum > 2100) {
-      throw new BadRequestException('Valid year is required');
+    const METHOD = 'getLeaveBalance';
+    this.logger.log(`[${METHOD}] Fetching leave balance for ${employeeId} (Year: ${year})`);
+
+    try {
+      const yearNum = parseInt(year, 10);
+      if (isNaN(yearNum) || yearNum < 2000 || yearNum > 2100) {
+        throw new BadRequestException('Valid year is required');
+      }
+      const yearStart = `${year}-01-01`;
+      const yearEnd = `${year}-12-31`;
+
+      this.logger.debug(`[${METHOD}] Fetching employee details...`);
+      const employee = await this.employeeDetailsRepository.findOne({
+        where: { employeeId },
+        select: ['id', 'employeeId', 'designation', 'employmentType'],
+      });
+      if (!employee) {
+        this.logger.warn(`[${METHOD}] Employee ${employeeId} not found`);
+        throw new NotFoundException(`Employee ${employeeId} not found`);
+      }
+
+      const isIntern =
+        employee.employmentType === EmploymentType.INTERN ||
+        (employee.designation || '').toLowerCase().includes('intern');
+      const entitlement = isIntern ? 12 : 18;
+
+      const leaveTypes = ['Apply Leave', 'Leave'];
+
+      this.logger.debug(`[${METHOD}] Calculating used and pending days...`);
+      const used = await this.leaveRequestRepository
+        .createQueryBuilder('lr')
+        .where('lr.employeeId = :employeeId', { employeeId })
+        .andWhere('lr.requestType IN (:...leaveTypes)', { leaveTypes })
+        .andWhere('lr.status = :status', { status: 'Approved' })
+        .andWhere('lr.fromDate <= :yearEnd', { yearEnd })
+        .andWhere('lr.toDate >= :yearStart', { yearStart })
+        .getCount();
+
+      const pending = await this.leaveRequestRepository
+        .createQueryBuilder('lr')
+        .where('lr.employeeId = :employeeId', { employeeId })
+        .andWhere('lr.requestType IN (:...leaveTypes)', { leaveTypes })
+        .andWhere('lr.status = :status', { status: 'Pending' })
+        .andWhere('lr.fromDate <= :yearEnd', { yearEnd })
+        .andWhere('lr.toDate >= :yearStart', { yearStart })
+        .getCount();
+
+      const balance = Math.max(0, entitlement - used);
+
+      this.logger.log(`[${METHOD}] Successfully calculated balance: ${balance} for ${employeeId}`);
+      return {
+        employeeId,
+        year: yearNum,
+        entitlement,
+        used,
+        pending,
+        balance,
+      };
+    } catch (error) {
+      this.logger.error(`[${METHOD}] Error fetching leave balance: ${error.message}`, error.stack);
+      if (error instanceof HttpException) throw error;
+      throw new HttpException('Error fetching leave balance', HttpStatus.INTERNAL_SERVER_ERROR);
     }
-    const yearStart = `${year}-01-01`;
-    const yearEnd = `${year}-12-31`;
-
-    const employee = await this.employeeDetailsRepository.findOne({
-      where: { employeeId },
-      select: ['id', 'employeeId', 'designation', 'employmentType'],
-    });
-    if (!employee) {
-      throw new NotFoundException(`Employee ${employeeId} not found`);
-    }
-
-    // Explicit employment type: FULL_TIMER = 18, INTERN = 12. Else infer from designation (contains "intern").
-    const isIntern =
-      employee.employmentType === EmploymentType.INTERN ||
-      (employee.designation || '').toLowerCase().includes('intern');
-    const entitlement = isIntern ? 12 : 18;
-
-    const leaveTypes = ['Apply Leave', 'Leave'];
-
-    const used = await this.leaveRequestRepository
-      .createQueryBuilder('lr')
-      .where('lr.employeeId = :employeeId', { employeeId })
-      .andWhere('lr.requestType IN (:...leaveTypes)', { leaveTypes })
-      .andWhere('lr.status = :status', { status: 'Approved' })
-      .andWhere('lr.fromDate <= :yearEnd', { yearEnd })
-      .andWhere('lr.toDate >= :yearStart', { yearStart })
-      .getCount();
-
-    const pending = await this.leaveRequestRepository
-      .createQueryBuilder('lr')
-      .where('lr.employeeId = :employeeId', { employeeId })
-      .andWhere('lr.requestType IN (:...leaveTypes)', { leaveTypes })
-      .andWhere('lr.status = :status', { status: 'Pending' })
-      .andWhere('lr.fromDate <= :yearEnd', { yearEnd })
-      .andWhere('lr.toDate >= :yearStart', { yearStart })
-      .getCount();
-
-    const balance = Math.max(0, entitlement - used);
-
-    return {
-      employeeId,
-      year: yearNum,
-      entitlement,
-      used,
-      pending,
-      balance,
-    };
   }
 
   async getStats(employeeId: string, month: string = 'All', year: string = 'All') {
-    const requests = await this.leaveRequestRepository.find({
-      where: { employeeId },
-    });
+    const METHOD = 'getStats';
+    this.logger.log(`[${METHOD}] Fetching stats for ${employeeId} (${month}/${year})`);
 
-    // Filter requests based on selected period
-    const filteredRequests = requests.filter((req: any) => {
-      const dateToUse = req.submittedDate;
-      if (!dateToUse) return false;
-      
-      let reqDateStr = '';
-      if (dateToUse instanceof Date) {
-        const y = dateToUse.getFullYear();
-        const m = dateToUse.getMonth() + 1;
-        reqDateStr = `${y}-${m < 10 ? '0' + m : m}`;
-      } else {
-        reqDateStr = String(dateToUse).substring(0, 10); // YYYY-MM-DD
-      }
+    try {
+      this.logger.debug(`[${METHOD}] Fetching all requests for employee...`);
+      const requests = await this.leaveRequestRepository.find({
+        where: { employeeId },
+      });
 
-      const [reqYear, reqMonth] = reqDateStr.split('-');
+      this.logger.debug(`[${METHOD}] Filtering ${requests.length} requests for period...`);
+      const filteredRequests = requests.filter((req: any) => {
+        const dateToUse = req.submittedDate;
+        if (!dateToUse) return false;
+        
+        let reqDateStr = '';
+        if (dateToUse instanceof Date) {
+          const y = dateToUse.getFullYear();
+          const m = dateToUse.getMonth() + 1;
+          reqDateStr = `${y}-${m < 10 ? '0' + m : m}`;
+        } else {
+          reqDateStr = String(dateToUse).substring(0, 10); // YYYY-MM-DD
+        }
 
-      if (year !== 'All' && reqYear !== year) return false;
-      if (month !== 'All' && parseInt(reqMonth) !== parseInt(month)) return false;
+        const [reqYear, reqMonth] = reqDateStr.split('-');
 
-      return true;
-    });
+        if (year !== 'All' && reqYear !== year) return false;
+        if (month !== 'All' && parseInt(reqMonth) !== parseInt(month)) return false;
 
-    const stats = {
-      leave: { applied: 0, approved: 0, rejected: 0, cancelled: 0 },
-      wfh: { applied: 0, approved: 0, rejected: 0, cancelled: 0 },
-      clientVisit: { applied: 0, approved: 0, rejected: 0, cancelled: 0 },
-      halfDay: { applied: 0, approved: 0, rejected: 0, cancelled: 0 },
-    };
+        return true;
+      });
 
-    filteredRequests.forEach((req) => {
-      const status = req.status;
+      const stats = {
+        leave: { applied: 0, approved: 0, rejected: 0, cancelled: 0 },
+        wfh: { applied: 0, approved: 0, rejected: 0, cancelled: 0 },
+        clientVisit: { applied: 0, approved: 0, rejected: 0, cancelled: 0 },
+        halfDay: { applied: 0, approved: 0, rejected: 0, cancelled: 0 },
+      };
 
-      // Skip internal modification records, cancelled requests, and pending cancellation requests entirely from stats
-      if (
-        status === 'Request Modified' ||
-        status === 'Cancelled'
-      ) {
-        return;
-      }
+      filteredRequests.forEach((req) => {
+        const status = req.status;
 
-      const target =
-        req.requestType === 'Apply Leave'
-          ? stats.leave
-          : req.requestType === 'Work From Home'
-            ? stats.wfh
-            : req.requestType === 'Client Visit'
-              ? stats.clientVisit
-              : req.requestType === 'Half Day'
-                ? stats.halfDay
-                : null;
+        if (status === 'Request Modified' || status === 'Cancelled') return;
 
-      if (!target) return;
+        const target =
+          req.requestType === 'Apply Leave' ? stats.leave
+          : req.requestType === 'Work From Home' ? stats.wfh
+          : req.requestType === 'Client Visit' ? stats.clientVisit
+          : req.requestType === 'Half Day' ? stats.halfDay
+          : null;
 
-      // Logic: Increment 'applied' for all valid non-cancelled/non-modified sessions
-      // This keeps the big number at top-right representing active/valid applications
-      if (status !== 'Cancellation Approved' && status !== 'Requesting for Cancellation') {
-        target.applied++;
-      }
+        if (!target) return;
 
-      if (status === 'Approved' || status === 'Requesting for Cancellation') {
-        target.approved++;
-      } else if (status === 'Rejected') {
-        target.rejected++;
-      } else if (status === 'Cancellation Approved') {
-        target.cancelled++;
-      }
-    });
+        if (status !== 'Cancellation Approved' && status !== 'Requesting for Cancellation') {
+          target.applied++;
+        }
 
-    return stats;
+        if (status === 'Approved' || status === 'Requesting for Cancellation') {
+          target.approved++;
+        } else if (status === 'Rejected') {
+          target.rejected++;
+        } else if (status === 'Cancellation Approved') {
+          target.cancelled++;
+        }
+      });
+
+      this.logger.log(`[${METHOD}] Successfully compiled stats for ${employeeId}`);
+      return stats;
+    } catch (error) {
+      this.logger.error(`[${METHOD}] Error fetching stats: ${error.message}`, error.stack);
+      if (error instanceof HttpException) throw error;
+      throw new HttpException('Error fetching leave stats', HttpStatus.INTERNAL_SERVER_ERROR);
+    }
   }
 
   async updateStatus(id: number, status: 'Approved' | 'Rejected' | 'Cancelled' | 'Cancellation Approved', employeeId?: string, reviewedBy?: string) {
-    const request = await this.leaveRequestRepository.findOne({ where: { id } });
-    if (!request) {
-      throw new NotFoundException('Leave request not found');
-    }
+    const METHOD = 'updateStatus';
+    this.logger.log(`[${METHOD}] Updating status for request ${id} to ${status} (Reviewed by: ${reviewedBy})`);
 
-    // Status Logic
-    const previousStatus = request.status;
-    request.status = status;
-    if (reviewedBy) {
-      request.reviewedBy = reviewedBy;
-    }
-    // When an admin updates the status, we mark it as read for Admin
-    request.isRead = true;
-    // AND we mark it as "unread" (new update) for the Employee: false means unread
-    request.isReadEmployee = false; 
-    
-    const savedRequest = await this.leaveRequestRepository.save(request);
-
-    // --- AUTOMATION: If Half Day Request is APPROVED, update Attendance to 5 hours + Status 'Half Day' ---
-    // --- AUTOMATION: If Half Day Request is APPROVED, update Attendance to 5 hours + Status 'Half Day' ---
-    const reqType = request.requestType ? request.requestType.trim().toLowerCase() : '';
-    // Check if request type contains "half" to catch "Half Day", "Half-Day", "WFH (Half Day)", etc.
-    if (status === 'Approved' && reqType.includes('half')) {
-        try {
-            this.logger.log(`Processing Half Day Approval Automation for Request ID: ${id}`);
-            const startDate = dayjs(request.fromDate);
-            const endDate = dayjs(request.toDate);
-            const diff = endDate.diff(startDate, 'day');
-
-            for (let i = 0; i <= diff; i++) {
-                 const targetDate = startDate.add(i, 'day');
-                 const dayOfWeek = targetDate.day();
-                 if (dayOfWeek === 0 || dayOfWeek === 6) continue; // Skip Weekends
-
-                 const startOfDay = targetDate.startOf('day').toDate();
-                 const endOfDay = targetDate.endOf('day').toDate();
-                 
-                 let attendance = await this.employeeAttendanceRepository.findOne({
-                     where: {
-                        employeeId: request.employeeId,
-                        workingDate: Between(startOfDay, endOfDay)
-                     }
-                 });
-
-                 const halfDayStatus = typeof AttendanceStatus !== 'undefined' ? (AttendanceStatus as any).HALF_DAY : 'Half Day';
-
-                 if (!attendance) {
-                     this.logger.log(`Creating new attendance record for ${request.employeeId} on ${targetDate.format('YYYY-MM-DD')}`);
-                     attendance = this.employeeAttendanceRepository.create({
-                         employeeId: request.employeeId,
-                         workingDate: startOfDay,
-                         totalHours: 5,
-                         status: halfDayStatus,
-                         sourceRequestId: request.id,
-                         // workLocation: 'Half Day' <-- REMOVED
-                     });
-                     await this.employeeAttendanceRepository.save(attendance);
-                 } else {
-                     this.logger.log(`Updating existing attendance record ${attendance.id} for ${request.employeeId}`);
-                     // Force explicit update via QueryBuilder to ensure it sticks
-                     await this.employeeAttendanceRepository
-                        .createQueryBuilder()
-                        .update(EmployeeAttendance)
-                        .set({ 
-                            totalHours: 5, 
-                            status: halfDayStatus,
-                            sourceRequestId: request.id,
-                            // Only set workLocation if it is null/empty
-                            // workLocation: () => "COALESCE(workLocation, 'Half Day')" <-- REMOVED
-                        })
-                        .where("id = :id", { id: attendance.id })
-                        .execute();
-                 }
-                 this.logger.log(`Auto-updated attendance for ${request.employeeId} on ${targetDate.format('YYYY-MM-DD')} to 5hrs (Half Day)`);
-            }
-        } catch (err) {
-            this.logger.error(`Failed to auto-update attendance for Half Day request ${id}`, err);
-        }
-    }
-
-    // --- CLEANUP: If Half Day Request is REJECTED/CANCELLED, clear sourceRequestId to unlock attendance ---
-    if ((status === 'Rejected' || status === 'Cancelled' || status === 'Cancellation Approved') && reqType.includes('half')) {
-        try {
-            this.logger.log(`Clearing sourceRequestId for rejected/cancelled Half Day request ID: ${id}`);
-            await this.employeeAttendanceRepository
-                .createQueryBuilder()
-                .update(EmployeeAttendance)
-                .set({ sourceRequestId: () => 'NULL' })
-                .where("sourceRequestId = :requestId", { requestId: request.id })
-                .execute();
-            this.logger.log(`Unlocked attendance records for Half Day request ${id}`);
-        } catch (err) {
-            this.logger.error(`Failed to unlock attendance for Half Day request ${id}`, err);
-        }
-    }
-
-
-
-    // --- Email Notification Logic ---
     try {
-      this.logger.log(`Attempting to send status email. Request ID: ${id}, Status: ${status}, EmployeeID: ${request.employeeId}`);
+      // STEP 1: Fetch Request
+      this.logger.debug(`[${METHOD}][STEP 1] Fetching request...`);
+      const request = await this.leaveRequestRepository.findOne({ where: { id } });
+      if (!request) {
+        this.logger.warn(`[${METHOD}] Request ${id} not found`);
+        throw new NotFoundException('Leave request not found');
+      }
 
-      const employee = await this.employeeDetailsRepository.findOne({ 
-        where: { employeeId: request.employeeId } 
-      });
+      // STEP 2: Update Status
+      this.logger.debug(`[${METHOD}][STEP 2] Applying status update...`);
+      const previousStatus = request.status;
+      request.status = status;
+      if (reviewedBy) request.reviewedBy = reviewedBy;
+      
+      request.isRead = true;
+      request.isReadEmployee = false; 
+      
+      const savedRequest = await this.leaveRequestRepository.save(request);
+      this.logger.log(`[${METHOD}] Status updated to ${status} for request ${id}`);
 
-      if (employee) {
-      // CASE 1: Employee Cancelled (or Admin marked as Cancelled manually) -> Notify Admin & Manager
-      if (status === 'Cancelled' && previousStatus === 'Pending') {
-        this.logger.log(`[CANCEL-PENDING-DEBUG] Status: ${status}, PreviousStatus: ${previousStatus}, RequestID: ${id}`);
-        const adminEmail = process.env.ADMIN_EMAIL || process.env.SMTP_USERNAME;
-        // 1a. Notify Admin
-        if (adminEmail) {
-          const requestTypeLabel =
-            request.requestType === 'Apply Leave' ? 'Leave' : request.requestType;
-          // Clarify subject: It is "Cancelled", not "Reverted Back" in this context
-          const adminSubject = `Request Cancelled: ${requestTypeLabel} Request - ${employee.fullName}`;
+      const reqType = request.requestType ? request.requestType.trim().toLowerCase() : '';
 
-          const adminHtml = getCancellationTemplate({
-            employeeName: employee.fullName,
-            employeeId: employee.employeeId,
-            requestType: requestTypeLabel,
-            title: request.title || 'No Title',
-            fromDate: request.fromDate.toString(),
-            toDate: request.toDate.toString(),
-            duration: request.duration || 0,
-            reason: request.description,
-            actionType: 'revert_back', // Keep template internal actionType or change if template logic needs update. 'revert_back' usually shows "Reverted".
-          });
+      // STEP 3: Automation Logic (Half Day)
+      if (status === 'Approved' && reqType.includes('half')) {
+          try {
+              this.logger.debug(`[${METHOD}][STEP 3] Processing Half Day Approval Automation...`);
+              const startDate = dayjs(request.fromDate);
+              const endDate = dayjs(request.toDate);
+              const diff = endDate.diff(startDate, 'day');
 
-          await this.emailService.sendEmail(
-            adminEmail,
-            adminSubject,
-            `Request Cancelled by ${employee.fullName}`,
-            adminHtml,
-          );
-          this.logger.log(`Admin notification sent for pending-to-cancelled: ${id}`);
-        }
+              for (let i = 0; i <= diff; i++) {
+                   const targetDate = startDate.add(i, 'day');
+                   if (targetDate.day() === 0 || targetDate.day() === 6) continue;
 
-        // 1b. Notify Manager (NEW)
-         const mapping = await this.managerMappingRepository.findOne({
-          where: { employeeId: request.employeeId, status: 'ACTIVE' as any }
+                   const startOfDay = targetDate.startOf('day').toDate();
+                   const endOfDay = targetDate.endOf('day').toDate();
+                   
+                   let attendance = await this.employeeAttendanceRepository.findOne({
+                       where: {
+                          employeeId: request.employeeId,
+                          workingDate: Between(startOfDay, endOfDay)
+                       }
+                   });
+
+                   const halfDayStatus = typeof AttendanceStatus !== 'undefined' ? (AttendanceStatus as any).HALF_DAY : 'Half Day';
+
+                   if (!attendance) {
+                       attendance = this.employeeAttendanceRepository.create({
+                           employeeId: request.employeeId,
+                           workingDate: startOfDay,
+                           totalHours: 5,
+                           status: halfDayStatus,
+                           sourceRequestId: request.id,
+                       });
+                       await this.employeeAttendanceRepository.save(attendance);
+                   } else {
+                       await this.employeeAttendanceRepository
+                          .createQueryBuilder()
+                          .update(EmployeeAttendance)
+                          .set({ 
+                              totalHours: 5, 
+                              status: halfDayStatus,
+                              sourceRequestId: request.id,
+                          })
+                          .where("id = :id", { id: attendance.id })
+                          .execute();
+                   }
+              }
+              this.logger.log(`[${METHOD}] Automation: Updated attendance to Half Day for request ${id}`);
+          } catch (err) {
+              this.logger.error(`[${METHOD}][STEP 3] Failed to auto-update attendance: ${err.message}`);
+          }
+      }
+
+      // STEP 4: Cleanup Logic (Reject/Cancel Half Day)
+      if ((status === 'Rejected' || status === 'Cancelled' || status === 'Cancellation Approved') && reqType.includes('half')) {
+          try {
+              this.logger.debug(`[${METHOD}][STEP 4] Unlocking attendance for rejected/cancelled half day...`);
+              await this.employeeAttendanceRepository
+                  .createQueryBuilder()
+                  .update(EmployeeAttendance)
+                  .set({ sourceRequestId: () => 'NULL' })
+                  .where("sourceRequestId = :requestId", { requestId: request.id })
+                  .execute();
+          } catch (err) {
+              this.logger.error(`[${METHOD}][STEP 4] Failed to unlock attendance: ${err.message}`);
+          }
+      }
+
+      // STEP 5: Emails
+      this.logger.debug(`[${METHOD}][STEP 5] Sending email notifications...`);
+      try {
+        const employee = await this.employeeDetailsRepository.findOne({ 
+          where: { employeeId: request.employeeId } 
         });
 
-        if (mapping) {
-           const manager = await this.userRepository.findOne({
-            where: { aliasLoginName: mapping.managerName }
-          });
-          
-          const managerDetails = await this.employeeDetailsRepository.findOne({
-             where: { email: manager?.loginId }
-          }) || await this.employeeDetailsRepository.findOne({
-             where: { fullName: mapping.managerName }
-          });
-          const managerEmail = managerDetails?.email || manager?.loginId;
-
-           if (managerEmail && managerEmail.includes('@')) {
-               const managerSubject = `Request Cancelled: ${request.requestType} - ${employee.fullName}`;
-               
-               // Use the SAME template as Admin (getCancellationTemplate)
-               const managerHtml = getCancellationTemplate({
-                employeeName: employee.fullName,
-                employeeId: employee.employeeId,
-                requestType: request.requestType,
-                title: request.title || 'No Title',
-                fromDate: request.fromDate.toString(),
-                toDate: request.toDate.toString(),
-                duration: request.duration || 0,
-                reason: request.description,
-                actionType: 'revert_back', // Same as admin
-              });
-              this.logger.log(`[CANCEL-PENDING-DEBUG] Manager email sent to: ${managerEmail}`);
-               await this.emailService.sendEmail(
-                managerEmail,
-                managerSubject,
-                'Request Cancelled',
-                managerHtml,
-              );
-           }
-        }
-      }
-
-      // CASE 2: Approved/Rejected/Cancellation Approved/Cancelled -> Notify Employee
-      if (employee.email) {
-        const isCancellation = status === 'Cancellation Approved';
-        const requestTypePretty = request.requestType;
-        
-        let mailSubject = `${requestTypePretty} Request Update`;
-        let headerTitle = `${requestTypePretty} Update`;
-        let mainMessage = `Your request for <strong>${requestTypePretty}</strong> titled "<strong>${request.title}</strong>" has been processed.`;
-        let displayStatus: string = status;
-          
-          if (status === 'Approved') {
-               mailSubject = `${requestTypePretty} Request Approved`;
-               headerTitle = `${requestTypePretty} Request Approved`;
-               mainMessage = `Your request for <strong>${requestTypePretty}</strong> titled "<strong>${request.title}</strong>" has been reviewed.`;
-          } else if (status === 'Rejected') {
-               mailSubject = `${requestTypePretty} Request Rejected`;
-               headerTitle = `${requestTypePretty} Request Rejected`;
-               mainMessage = `Your request for <strong>${requestTypePretty}</strong> titled "<strong>${request.title}</strong>" has been reviewed.`;
-          } else if (status === 'Cancellation Approved') {
-               mailSubject = `${requestTypePretty} Request Cancellation Approved`;
-               headerTitle = `${requestTypePretty} Request Cancellation`;
-               mainMessage = `Your request for cancel <strong>${requestTypePretty}</strong> titled "<strong>${request.title}</strong>" has been reviewed.`;
-               displayStatus = 'Cancellation Approved';
-          } else if (status === 'Cancelled') {
-             // For "Pending -> Cancelled" flow, use "Cancelled" terminology instead of "Reverted" if preferred, 
-             // BUT user asked for "Reverted" style subject for Manager. 
-             // We'll stick to 'Request Cancelled' for clarity here to distinguish from Cancellation Revert.
-             // If previousStatus was Pending, it's a fresh cancel.
-             
-             mailSubject = `${requestTypePretty} Request Cancelled`;
-             headerTitle = `${requestTypePretty} Request CANCELLED`;
-             mainMessage = `Your request for <strong>${requestTypePretty}</strong> titled "<strong>${request.title}</strong>" has been Cancelled.`;
-             displayStatus = 'CANCELLED';
-        }
-
-          const statusColor =
-            status === 'Approved' || status === 'Cancellation Approved'
-              ? '#28a745' // Green
-              : '#dc3545'; // Red
-  
-          const fromDate = dayjs(request.fromDate).format('YYYY-MM-DD');
-          const toDate = dayjs(request.toDate).format('YYYY-MM-DD');
-          const duration = request.duration || 0;
-          
-          // Determine reviewedBy: If Employee initiated it (Cancel/Revert), clear reviewedBy
-          // If Status is Cancelled and previous was Pending, it was Employee action.
-          let notificationReviewedBy = request.reviewedBy;
+        if (employee) {
+          // A. Notify Admin/Manager if Employee Cancelled
           if (status === 'Cancelled' && previousStatus === 'Pending') {
-              this.logger.log(`[CANCEL-PENDING-DEBUG] Clearing reviewedBy. Original: ${request.reviewedBy}`);
-              notificationReviewedBy = ''; // Empty string instead of undefined
-          }
-  
-          const htmlContent = getStatusUpdateTemplate({
-            employeeName: employee.fullName || 'Employee',
-            requestType: requestTypePretty,
-            title: request.title,
-            fromDate: fromDate,
-            toDate: toDate,
-            duration: duration,
-            status: status as any,
-            isCancellation: isCancellation,
-            reviewedBy: notificationReviewedBy
-          });
-  
-          await this.emailService.sendEmail(
-            employee.email,
-            mailSubject,
-            `Your request status: ${displayStatus}`,
-            htmlContent,
-          );
-        }
-      }
-    } catch (error) {
-      this.logger.error('Failed to send status update email:', error);
-    }
+            const adminEmail = process.env.ADMIN_EMAIL || process.env.SMTP_USERNAME;
+            if (adminEmail) {
+                const requestTypeLabel = request.requestType === 'Apply Leave' ? 'Leave' : request.requestType;
+                const adminHtml = getCancellationTemplate({
+                  employeeName: employee.fullName,
+                  employeeId: employee.employeeId,
+                  requestType: requestTypeLabel,
+                  title: request.title || 'No Title',
+                  fromDate: request.fromDate.toString(),
+                  toDate: request.toDate.toString(),
+                  duration: request.duration || 0,
+                  reason: request.description,
+                  actionType: 'revert_back',
+                });
 
-    return savedRequest;
+                await this.emailService.sendEmail(adminEmail, `Request Cancelled: ${requestTypeLabel} - ${employee.fullName}`, `Request Cancelled`, adminHtml);
+            }
+          }
+
+          // B. Notify Employee
+          if (employee.email) {
+            const htmlContent = getStatusUpdateTemplate({
+              employeeName: employee.fullName || 'Employee',
+              requestType: request.requestType,
+              title: request.title,
+              fromDate: dayjs(request.fromDate).format('YYYY-MM-DD'),
+              toDate: dayjs(request.toDate).format('YYYY-MM-DD'),
+              duration: request.duration || 0,
+              status: status as any,
+              isCancellation: status === 'Cancellation Approved',
+              reviewedBy: (status === 'Cancelled' && previousStatus === 'Pending') ? '' : request.reviewedBy
+            });
+    
+            await this.emailService.sendEmail(employee.email, `${request.requestType} Request Update`, `Your request status: ${status}`, htmlContent);
+          }
+        }
+      } catch (error) {
+        this.logger.error(`[${METHOD}][STEP 5] Failed to send status update email: ${error.message}`);
+      }
+
+      this.logger.log(`[${METHOD}] Update completed for request ID: ${id}`);
+      return savedRequest;
+    } catch (error) {
+      this.logger.error(`[${METHOD}] Error updating status: ${error.message}`, error.stack);
+      if (error instanceof HttpException) throw error;
+      throw new HttpException('Error updating request status', HttpStatus.INTERNAL_SERVER_ERROR);
+    }
   }
 
   async createModification(id: number, data: any) {
@@ -1358,101 +1281,84 @@ export class LeaveRequestsService {
 
   // NEW: Dedicated API for Rejecting Cancellation
   async rejectCancellation(id: number, employeeId: string, reviewedBy?: string) {
-    const request = await this.leaveRequestRepository.findOne({
-      where: { id },
-    });
-    if (!request) {
-      throw new NotFoundException(`Leave request with ID ${id} not found`);
-    }
+    const METHOD = 'rejectCancellation';
+    this.logger.log(`[${METHOD}] Rejecting cancellation for request ${id}`);
 
-    // Format dates strictly to YYYY-MM-DD
-    const checkStart = dayjs(request.fromDate).format('YYYY-MM-DD');
-    const checkEnd = dayjs(request.toDate).format('YYYY-MM-DD');
+    try {
+      // STEP 1: Fetch and Validate
+      this.logger.debug(`[${METHOD}][STEP 1] Fetching request...`);
+      const request = await this.leaveRequestRepository.findOne({ where: { id } });
+      if (!request) throw new NotFoundException(`Leave request ID ${id} not found`);
 
-    // Use QueryBuilder for definitive DB-level overlap check
-    const overlapCount = await this.leaveRequestRepository
-      .createQueryBuilder('lr')
-      .where('lr.employeeId = :employeeId', { employeeId: request.employeeId })
-      .andWhere('lr.id != :id', { id: request.id })
-      .andWhere('lr.status = :status', { status: 'Approved' })
-      .andWhere('DATE(lr.fromDate) <= DATE(:checkEnd)', { checkEnd })
-      .andWhere('DATE(lr.toDate) >= DATE(:checkStart)', { checkStart })
-      .getCount();
+      const checkStart = dayjs(request.fromDate).format('YYYY-MM-DD');
+      const checkEnd = dayjs(request.toDate).format('YYYY-MM-DD');
 
-    if (overlapCount > 0) {
-      // Case A: Partial Cancellation Rejection (Child Result)
-      // Action: Restore duration to Parent AND Mark this child request as REJECTED.
-
-      const masterRequest = await this.leaveRequestRepository
+      // STEP 2: Restore Duration if Partial
+      this.logger.debug(`[${METHOD}][STEP 2] Checking for overlaps to identify partial vs full...`);
+      const overlapCount = await this.leaveRequestRepository
         .createQueryBuilder('lr')
-        .where('lr.employeeId = :employeeId', {
-          employeeId: request.employeeId,
-        })
+        .where('lr.employeeId = :employeeId', { employeeId: request.employeeId })
         .andWhere('lr.id != :id', { id: request.id })
         .andWhere('lr.status = :status', { status: 'Approved' })
-        .andWhere('DATE(lr.fromDate) <= DATE(:checkStart)', { checkStart })
-        .andWhere('DATE(lr.toDate) >= DATE(:checkEnd)', { checkEnd })
-        .getOne();
+        .andWhere('DATE(lr.fromDate) <= DATE(:checkEnd)', { checkEnd })
+        .andWhere('DATE(lr.toDate) >= DATE(:checkStart)', { checkStart })
+        .getCount();
 
-      if (masterRequest) {
-        masterRequest.duration =
-          (masterRequest.duration || 0) + (request.duration || 0);
-        await this.leaveRequestRepository.save(masterRequest);
+      if (overlapCount > 0) {
+        this.logger.log(`[${METHOD}] Partial cancellation detected. Restoring duration to master request...`);
+        const masterRequest = await this.leaveRequestRepository
+          .createQueryBuilder('lr')
+          .where('lr.employeeId = :employeeId', { employeeId: request.employeeId })
+          .andWhere('lr.id != :id', { id: request.id })
+          .andWhere('lr.status = :status', { status: 'Approved' })
+          .andWhere('DATE(lr.fromDate) <= DATE(:checkStart)', { checkStart })
+          .andWhere('DATE(lr.toDate) >= DATE(:checkEnd)', { checkEnd })
+          .getOne();
+
+        if (masterRequest) {
+          masterRequest.duration = (masterRequest.duration || 0) + (request.duration || 0);
+          await this.leaveRequestRepository.save(masterRequest);
+        }
+        request.status = 'Cancellation Rejected';
+      } else {
+        this.logger.log(`[${METHOD}] Full cancellation detected. Reverting status to Approved.`);
+        request.status = 'Approved';
       }
 
-      // Mark as CANCELLATION REJECTED
-      request.status = 'Cancellation Rejected';
-    } else {
-      // Case B: Full Cancellation (Master)
-      // Revert to 'Approved'
-      request.status = 'Approved';
+      // STEP 3: Update and Notify
+      request.isReadEmployee = false;
+      if (reviewedBy) request.reviewedBy = reviewedBy;
+      await this.leaveRequestRepository.save(request);
+
+      this.logger.debug(`[${METHOD}][STEP 3] Sending rejection email...`);
+      try {
+        const employee = await this.employeeDetailsRepository.findOne({ where: { employeeId: request.employeeId } });
+        const toEmail = employee?.email || (request.employeeId + '@inventechinfo.com');
+
+        const emailBody = getStatusUpdateTemplate({
+          employeeName: employee?.fullName || 'Employee',
+          requestType: request.requestType,
+          title: request.title,
+          fromDate: checkStart,
+          toDate: checkEnd,
+          duration: request.duration || 0,
+          status: 'Cancellation Rejected',
+          isCancellation: true,
+          reviewedBy: request.reviewedBy
+        });
+        
+        await this.emailService.sendEmail(toEmail, `${request.requestType} Request Cancellation Rejected`, 'Cancellation Rejected', emailBody);
+      } catch (e) {
+        this.logger.error(`[${METHOD}][STEP 3] Failed to send email: ${e.message}`);
+      }
+
+      this.logger.log(`[${METHOD}] Cancellation rejected successfully for request ${id}`);
+      return request;
+    } catch (error) {
+      this.logger.error(`[${METHOD}] Error rejecting cancellation: ${error.message}`, error.stack);
+      if (error instanceof HttpException) throw error;
+      throw new HttpException('Error rejecting cancellation', HttpStatus.INTERNAL_SERVER_ERROR);
     }
-
-    // We don't overwrite title anymore
-
-    // Mark as Unread for Employee so they get a notification
-    request.isReadEmployee = false;
-    if (reviewedBy) {
-      request.reviewedBy = reviewedBy;
-    }
-    await this.leaveRequestRepository.save(request);
-
-    // Send Notification
-    try {
-      const employee = await this.employeeDetailsRepository.findOne({ where: { employeeId } });
-      const employeeName = employee ? employee.fullName : 'Employee';
-      const toEmail = employee && employee.email ? employee.email : (request.employeeId + '@inventechinfo.com');
-
-      const emailSubject = `${request.requestType} Request Cancellation Rejected`;
-      const headerTitle = `${request.requestType} Request Cancellation`;
-      const mainMessage = `Your request to cancel <strong>${request.requestType}</strong> has been <strong>Rejected</strong>.`;
-      const displayStatus = 'Cancellation Rejected';
-      const statusColor = '#dc3545'; // Red
-
-      const emailBody = getStatusUpdateTemplate({
-        employeeName: employeeName,
-        requestType: request.requestType,
-        title: request.title,
-        fromDate: checkStart,
-        toDate: checkEnd,
-        duration: request.duration || 0,
-        status: 'Cancellation Rejected',
-        isCancellation: true,
-        reviewedBy: request.reviewedBy
-      });
-      // Override status label if needed or just use Rejected
-      
-      await this.emailService.sendEmail(
-        toEmail,
-        emailSubject,
-        'Your cancellation request was rejected.',
-        emailBody,
-      );
-    } catch (e) {
-      console.error('Failed to send rejection email', e);
-    }
-
-    return request;
   }
 
   // Helper to revert attendance for the given range (when cancellation is approved)
