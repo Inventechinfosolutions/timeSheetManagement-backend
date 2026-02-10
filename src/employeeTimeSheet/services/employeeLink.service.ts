@@ -36,29 +36,24 @@ export class EmployeeLinkService {
   ) {}
 
   async resetPasswordWithToken(resetPasswordDto: ResetPasswordDto): Promise<{ message: string; employeeId: string }> {
-    const METHOD = 'resetPasswordWithToken';
-    this.logger.log(`[${METHOD}] Attempting password reset for: ${resetPasswordDto.loginId}`);
-
+    this.logger.log(`Attempting password reset with context: ${JSON.stringify({ loginId: resetPasswordDto.loginId, hasToken: !!resetPasswordDto.token })}`);
     try {
       let employeeId = resetPasswordDto.loginId;
 
-      // STEP 1: Verify Token if provided
       if (resetPasswordDto.token) {
-        this.logger.debug(`[${METHOD}][STEP 1] Verifying activation token...`);
         try {
           const payload = this.jwtService.verify(resetPasswordDto.token, {
             secret: process.env.JWT_SECRET || 'your-secret-key',
           });
           
           if (payload.type !== 'activation') {
-             this.logger.warn(`[${METHOD}][STEP 1] Invalid token type: ${payload.type}`);
              throw new BadRequestException('Invalid token type');
           }
           
           employeeId = payload.sub;
-          this.logger.debug(`[${METHOD}][STEP 1] Token verified for employee: ${employeeId}`);
+          this.logger.log(`Token verified for employee: ${employeeId}`);
         } catch (error) {
-           this.logger.error(`[${METHOD}][STEP 1] Token verification failed: ${error.message}`);
+           this.logger.error(`Token verification failed: ${error.message}`);
            throw new HttpException('Invalid or expired activation link', HttpStatus.UNAUTHORIZED);
         }
       }
@@ -67,27 +62,20 @@ export class EmployeeLinkService {
         throw new BadRequestException('Employee ID or Token is required');
       }
 
-      // STEP 2: Find Employee
-      this.logger.debug(`[${METHOD}][STEP 2] Fetching employee details...`);
       const employee = await this.employeeDetailsRepository.findOne({ 
         where: [{ employeeId: ILike(employeeId) }, { id: !isNaN(Number(employeeId)) ? Number(employeeId) : -1 }] 
       });
 
       if (!employee) {
-        this.logger.warn(`[${METHOD}][STEP 2] Employee ID ${employeeId} not found`);
         throw new NotFoundException(`Employee with ID ${employeeId} not found`);
       }
 
-      // STEP 3: Hash and Save Password
-      this.logger.debug(`[${METHOD}][STEP 3] Hashing new password...`);
       const salt = await bcrypt.genSalt(10);
       const hashedPassword = await bcrypt.hash(resetPasswordDto.password, salt);
 
       employee.password = hashedPassword;
       await this.employeeDetailsRepository.save(employee);
 
-      // STEP 4: Sync User Table
-      this.logger.debug(`[${METHOD}][STEP 4] Synchronizing with User entity...`);
       const user = await this.userRepository.findOne({ where: { loginId: employee.employeeId.toLowerCase() } });
       if (user) {
          user.password = hashedPassword;
@@ -95,42 +83,35 @@ export class EmployeeLinkService {
          user.mobileVerification = true;
          user.status = UserStatus.ACTIVE;
          await this.userRepository.save(user);
-         this.logger.log(`[${METHOD}][STEP 4] User entity activated and password synced for: ${employee.employeeId}`);
+         this.logger.log(`User entity updated for: ${employee.employeeId}`);
       }
 
-      this.logger.log(`[${METHOD}] Password reset completed for: ${employee.employeeId}`);
       return {
         message: 'Password successfully updated.',
         employeeId: employee.employeeId,
       };
 
     } catch (error) {
-       this.logger.error(`[${METHOD}] Error: ${error.message}`, error.stack);
+       this.logger.error(`Error in resetPasswordWithToken: ${error.message}`, error.stack);
        if (error instanceof HttpException) throw error;
        throw new HttpException('Failed to reset password', HttpStatus.INTERNAL_SERVER_ERROR);
     }
   }
 
   async verifyAndActivateEmployee(token: string): Promise<any> {
-    const METHOD = 'verifyAndActivateEmployee';
-    this.logger.log(`[${METHOD}] Verifying activation token...`);
-
     try {
-      // STEP 1: Verify Token
-      this.logger.debug(`[${METHOD}][STEP 1] Parsing payload...`);
+      this.logger.log(`Verifying activation token`);
       const payload = this.jwtService.verify(token, {
         secret: process.env.JWT_SECRET || 'your-secret-key',
       });
 
       if (payload.type !== 'activation') {
-        this.logger.warn(`[${METHOD}][STEP 1] Invalid token type: ${payload.type}`);
         throw new BadRequestException('Invalid token type');
       }
 
       const employeeId = payload.sub;
+      this.logger.log(`Parsed employeeId from token: ${employeeId} (Type: ${typeof employeeId})`);
 
-      // STEP 2: Find Employee
-      this.logger.debug(`[${METHOD}][STEP 2] Fetching employee ${employeeId}...`);
       const employee = await this.employeeDetailsRepository.findOne({ 
         where: [
           { employeeId: ILike(String(employeeId)) },
@@ -139,38 +120,37 @@ export class EmployeeLinkService {
       });
 
       if (!employee) {
-        this.logger.warn(`[${METHOD}][STEP 2] Employee ID ${employeeId} not found`);
         throw new NotFoundException('Employee associated with this token not found');
       }
 
-      // STEP 3: Find and Update User
-      this.logger.debug(`[${METHOD}][STEP 3] Updating User status to ACTIVE...`);
+      // Try to find user by exact employeeId first, then lowercase for compatibility
       let user = await this.userRepository.findOne({ where: { loginId: employee.employeeId } });
       if (!user) {
         user = await this.userRepository.findOne({ where: { loginId: employee.employeeId.toLowerCase() } });
       }
       
       if (user) {
+        // Allow reactivation if status is DRAFT (new activation link was sent)
+        // If already ACTIVE, we still allow it but log a warning (in case of resend activation link)
         if (user.status === UserStatus.ACTIVE) {
-          this.logger.warn(`[${METHOD}][STEP 3] User ${employee.employeeId} is already ACTIVE`);
+          this.logger.warn(`User ${employee.employeeId} is already ACTIVE, but allowing reactivation via new token`);
         }
         
         user.status = UserStatus.ACTIVE;
         user.mobileVerification = true;
+        // Keep resetRequired as true if it was set (user needs to change password)
+        // Only set to false if it was already false (user already changed password before)
         if (user.resetRequired === undefined || user.resetRequired === null) {
           user.resetRequired = true;
         }
         user.lastLoggedIn = new Date();
         await this.userRepository.save(user);
-        this.logger.debug(`[${METHOD}][STEP 3] User activated successfully`);
+        this.logger.log(`User ${employee.employeeId} activated via token`);
       }
 
-      // STEP 4: Post-Activation Login
-      this.logger.debug(`[${METHOD}][STEP 4] Generating post-activation login tokens...`);
       const authPayload = { sub: user?.id || employee.employeeId, loginId: employee.employeeId };
       const loginTokens = await this.authService.generateJWTTokenWithRefresh(authPayload);
 
-      this.logger.log(`[${METHOD}] Activation successful for: ${employee.employeeId}`);
       return {
         userId: user?.id || employee.employeeId,
         fullName: employee.fullName,
@@ -180,30 +160,26 @@ export class EmployeeLinkService {
         refreshToken: loginTokens.refreshToken
       };
     } catch (error) {
-      this.logger.error(`[${METHOD}] Activation failed: ${error.message}`, error.stack);
-      if (error instanceof HttpException) throw error;
-      throw new HttpException(error.message || 'Token verification failed', HttpStatus.BAD_REQUEST);
+      this.logger.error(`Activation verification failed: ${error.message}`);
+      throw new HttpException(error.message || 'Token verification failed', error.status || HttpStatus.BAD_REQUEST);
     }
   }
 
   async generateActivationLink(identifier: string): Promise<{ message: string; employeeId: string; loginId: string; password: string; activationLink: string }> {
-    const METHOD = 'generateActivationLink';
-    this.logger.log(`[${METHOD}] Generating link for identifier: ${identifier}`);
-
+    this.logger.log(`Generating activation link for employee identifier: ${identifier}`);
     try {
-      // STEP 1: Fetch Employee
-      this.logger.debug(`[${METHOD}][STEP 1] Fetching employee...`);
-      const employee = await this.employeeDetailsRepository.findOne({
+      let employee: EmployeeDetails | null = null;
+      
+      // Support finding by numeric ID or string employeeId
+      employee = await this.employeeDetailsRepository.findOne({
         where: [{ employeeId: ILike(identifier) }, { id: !isNaN(Number(identifier)) ? Number(identifier) : -1 }]
       });
 
       if (!employee) {
-        this.logger.warn(`[${METHOD}][STEP 1] Employee not found: ${identifier}`);
+        this.logger.warn(`Employee with identifier ${identifier} not found`);
         throw new NotFoundException(`Employee with ID ${identifier} not found`);
       }
 
-      // STEP 2: Generate Temporary Password
-      this.logger.debug(`[${METHOD}][STEP 2] Generating credentials...`);
       const password = this.generateUniquePassword(12);
       const salt = await bcrypt.genSalt(10);
       const hashedPassword = await bcrypt.hash(password, salt);
@@ -211,54 +187,81 @@ export class EmployeeLinkService {
       employee.password = hashedPassword;
       await this.employeeDetailsRepository.save(employee);
 
-      // STEP 3: Sync User Table
-      this.logger.debug(`[${METHOD}][STEP 3] Synchronizing user record...`);
+      // Sync with User table (try exact match first, then lowercase for compatibility)
       let user = await this.userRepository.findOne({ where: { loginId: employee.employeeId } });
       if (!user) {
         user = await this.userRepository.findOne({ where: { loginId: employee.employeeId.toLowerCase() } });
+        // If found by lowercase, update to exact case
         if (user) {
           user.loginId = employee.employeeId;
           await this.userRepository.save(user);
+          this.logger.log(`User loginId updated to match exact case: ${employee.employeeId}`);
         }
       }
       if (user) {
         user.password = hashedPassword;
-        user.resetRequired = true; 
-        user.status = UserStatus.DRAFT; 
+        user.resetRequired = true; // Set resetRequired to true so user must change password on first login
+        user.status = UserStatus.DRAFT; // Reset status to DRAFT to allow reactivation with new link
         await this.userRepository.save(user);
+        this.logger.log(`User password synchronized, resetRequired set to true, and status reset to DRAFT for: ${employee.employeeId}`);
       }
 
-      // STEP 4: Generate Token and Link
-      this.logger.debug(`[${METHOD}][STEP 4] Signing JWT activation token...`);
-      const payload = { sub: String(employee.employeeId), id: employee.id, email: employee.email, type: 'activation' };
+      const payload = { 
+        sub: String(employee.employeeId),
+        id: employee.id,
+        email: employee.email,
+        type: 'activation' 
+      };
+      
       const token = this.jwtService.sign(payload, { 
         secret: process.env.JWT_SECRET || 'your-secret-key',
         expiresIn: '24h' 
       });
       
       const activationLink = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/timesheet/activate?token=${token}`;
+      // const networkIp = '192.168.1.31';
+      // const activationLink = `http://${networkIp}:5173/timesheet/activate?token=${token}`;
 
-      // STEP 5: Notify
-      this.logger.debug(`[${METHOD}][STEP 5] Sending activation email to ${employee.email}...`);
       const htmlContent = `
-        <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; max-width: 600px; margin: auto; padding: 40px; border: 1px solid #e0e0e0; border-radius: 12px; background-color: #ffffff;">
-          <h2 style="color: #1a73e8; text-align: center;">Welcome to Inventech Info Solutions</h2>
-          <p>Hello <strong>${employee.fullName}</strong>,</p>
-          <p>Your account has been created. Use the credentials below to activate:</p>
-          <div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; border-left: 4px solid #1a73e8; margin: 20px 0;">
-            <p><strong>Employee ID:</strong> ${employee.employeeId}</p>
-            <p><strong>Temporary Password:</strong> ${password}</p>
+        <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; max-width: 600px; margin: auto; padding: 40px; border: 1px solid #e0e0e0; border-radius: 12px; background-color: #ffffff; box-shadow: 0 4px 10px rgba(0,0,0,0.05);">
+          <div style="text-align: center; margin-bottom: 30px;">
+            <h2 style="color: #1a73e8; margin: 0; font-size: 24px;">Welcome to Inventech Info Solutions</h2>
           </div>
-          <div style="text-align: center; margin: 30px 0;">
-            <a href="${activationLink}" style="background-color: #1a73e8; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-weight: 600;">Activate My Account</a>
+          <p style="color: #5f6368; font-size: 16px; line-height: 1.5;">Hello <strong>${employee.fullName}</strong>,</p>
+          <p style="color: #5f6368; font-size: 16px; line-height: 1.5;">Your employee account has been successfully created. Please find your login credentials below:</p>
+          
+          <div style="background-color: #f8f9fa; border-radius: 8px; padding: 20px; margin: 25px 0; border-left: 4px solid #1a73e8;">
+            <p style="margin: 5px 0; color: #3c4043;"><strong>Employee ID:</strong> ${employee.employeeId}</p>
+            <p style="margin: 5px 0; color: #3c4043;"><strong>Temporary Password:</strong> ${password}</p>
           </div>
-          <p style="color: #d93025; font-size: 14px;">Link expires in 24 hours.</p>
+
+          <p style="color: #5f6368; font-size: 16px; line-height: 1.5;">Click the button below to activate your account and login for the first time:</p>
+          
+          <div style="text-align: center; margin: 35px 0;">
+            <a href="${activationLink}" style="background-color: #1a73e8; color: white; padding: 14px 28px; text-decoration: none; border-radius: 6px; font-weight: 600; font-size: 16px; display: inline-block;">Activate My Account</a>
+          </div>
+
+          <p style="color: #d93025; font-size: 14px; font-weight: 500;">Note: This activation link will expire in 24 hours.</p>
+          <p style="color: #5f6368; font-size: 14px; line-height: 1.5;">If you have any issues, please contact the HR department.</p>
+          
+          <hr style="border: 0; border-top: 1px solid #eee; margin: 30px 0;">
+          <p style="font-size: 12px; color: #9aa0a6; text-align: center;">This is an automated message from Inventech Info Solutions. Please do not reply.</p>
         </div>
       `;
 
-      await this.emailService.sendEmail(employee.email, 'Your Employee Account Credentials', 'Account Activation', htmlContent);
+      try {
+        await this.emailService.sendEmail(
+          employee.email,
+          'Your Employee Account Credentials',
+          `Hello ${employee.fullName}, your account has been created. Employee ID: ${employee.employeeId}, Password: ${password}. Activate here: ${activationLink}`,
+          htmlContent
+        );
+      } catch (emailError) {
+        this.logger.error(`Failed to send activation email to ${employee.email}: ${emailError.message}`);
+      }
 
-      this.logger.log(`[${METHOD}] Activation link sent for: ${employee.employeeId}`);
+      this.logger.log(`Activation link generated and sent for employee identifier: ${identifier}`);
+
       return {
         message: 'Activation link and credentials generated and sent successfully',
         employeeId: employee.employeeId,
@@ -266,8 +269,9 @@ export class EmployeeLinkService {
         password: password,
         activationLink: activationLink
       };
+
     } catch (error) {
-       this.logger.error(`[${METHOD}] Error: ${error.message}`, error.stack);
+       this.logger.error(`Error generating activation link: ${error.message}`, error.stack);
        if (error instanceof HttpException) throw error;
        throw new HttpException('Failed to generate activation link', HttpStatus.INTERNAL_SERVER_ERROR);
     }

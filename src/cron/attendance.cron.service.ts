@@ -51,10 +51,7 @@ export class AttendanceCronService {
     
     // 1. Get Today's Date
     const today = new Date();
-    const year = today.getFullYear();
-    const month = String(today.getMonth() + 1).padStart(2, '0');
-    const day = String(today.getDate()).padStart(2, '0');
-    const dateStr = `${year}-${month}-${day}`; // "YYYY-MM-DD"
+    const dateStr = today.toISOString().split('T')[0]; // "YYYY-MM-DD"
 
     // 2. Check if it is a Weekend using Master Service
     const isWeekend = this.masterHolidayService.isWeekend(today);
@@ -104,10 +101,7 @@ export class AttendanceCronService {
     // 1. Get "Yesterday" Date
     const yesterday = new Date();
     yesterday.setDate(yesterday.getDate() - 1);
-    const year = yesterday.getFullYear();
-    const month = String(yesterday.getMonth() + 1).padStart(2, '0');
-    const day = String(yesterday.getDate()).padStart(2, '0');
-    const dateStr = `${year}-${month}-${day}`; // "YYYY-MM-DD"
+    const dateStr = yesterday.toISOString().split('T')[0]; // "YYYY-MM-DD"
 
     // 2. Identify Weekends (Skip Saturday=6, Sunday=0) for "Not Updated" logic
     // We only want to mark "Not Updated" for missing WEEKDAYS.

@@ -19,55 +19,30 @@ export class MasterHolidayService {
   ) {}
 
   async create(createHolidayDto: CreateHolidayDto): Promise<any> {
-    const METHOD = 'create';
-    this.logger.log(`[${METHOD}] Started creating holiday: ${createHolidayDto.name}`);
-    
     try {
-      // STEP 1: Mapping DTO to Entity
-      this.logger.debug(`[${METHOD}][STEP 1] Mapping DTO to entity...`);
-      const holiday = MasterHolidayMapper.toEntity(createHolidayDto);
+      this.logger.log(`Creating new holiday: ${createHolidayDto.name}`);
       
-      // STEP 2: Saving to Database
-      this.logger.debug(`[${METHOD}][STEP 2] Saving to database...`);
+      const holiday = MasterHolidayMapper.toEntity(createHolidayDto);
       const savedHoliday = await this.holidayRepository.save(holiday);
       
-      // STEP 3: Mapping Entity to Response
-      this.logger.debug(`[${METHOD}][STEP 3] Mapping to response DTO...`);
-      const response = MasterHolidayMapper.toResponseDto(savedHoliday);
-      
-      this.logger.log(`[${METHOD}] Successfully created holiday ID: ${savedHoliday.id}`);
-      return response;
+      return MasterHolidayMapper.toResponseDto(savedHoliday);
     } catch (error) {
       if (error.code === 'ER_DUP_ENTRY' || error.errno === 1062) {
-        this.logger.warn(`[${METHOD}] Duplicate entry detected for date: ${createHolidayDto.date}`);
         throw new ConflictException('Holiday already exists for this date');
       }
-      this.logger.error(`[${METHOD}] Failed to create holiday. Error: ${error.message}`, error.stack);
+      this.logger.error(`Error creating holiday: ${error.message}`, error.stack);
       throw new InternalServerErrorException('Error creating holiday');
     }
   }
 
   async createBulk(createHolidayDtos: CreateHolidayDto[]): Promise<any[]> {
-    const METHOD = 'createBulk';
-    this.logger.log(`[${METHOD}] Started creating ${createHolidayDtos.length} holidays`);
-    
     try {
-      // STEP 1: Mapping DTOs to Entities
-      this.logger.debug(`[${METHOD}][STEP 1] Mapping ${createHolidayDtos.length} DTOs to entities...`);
+      this.logger.log(`Creating ${createHolidayDtos.length} holidays`);
       const holidays = createHolidayDtos.map(dto => MasterHolidayMapper.toEntity(dto));
-      
-      // STEP 2: Bulk Saving to Database
-      this.logger.debug(`[${METHOD}][STEP 2] Saving ${holidays.length} holidays to database...`);
       const savedHolidays = await this.holidayRepository.save(holidays);
-      
-      // STEP 3: Mapping to Response DTOs
-      this.logger.debug(`[${METHOD}][STEP 3] Mapping to response DTOs...`);
-      const response = savedHolidays.map(holiday => MasterHolidayMapper.toResponseDto(holiday));
-      
-      this.logger.log(`[${METHOD}] Successfully created ${savedHolidays.length} holidays`);
-      return response;
+      return savedHolidays.map(holiday => MasterHolidayMapper.toResponseDto(holiday));
     } catch (error) {
-       this.logger.error(`[${METHOD}] Failed to create bulk holidays. Error: ${error.message}`, error.stack);
+       this.logger.error(`Error creating bulk holidays: ${error.message}`, error.stack);
        throw new InternalServerErrorException('Error creating bulk holidays');
     }
   }
@@ -259,37 +234,23 @@ export class MasterHolidayService {
   }
 
   async update(id: number, updateHolidayDto: UpdateHolidayDto): Promise<any> {
-    const METHOD = 'update';
-    this.logger.log(`[${METHOD}] Started updating holiday ID: ${id}`);
-    
     try {
-      // STEP 1: Fetching Existing Holiday
-      this.logger.debug(`[${METHOD}][STEP 1] Fetching holiday from database...`);
+      this.logger.log(`Updating holiday with id: ${id}`);
       const holiday = await this.holidayRepository.findOne({ where: { id } });
       
       if (!holiday) {
-        this.logger.warn(`[${METHOD}][STEP 1] Holiday with ID ${id} not found`);
         throw new NotFoundException(`Holiday with ID ${id} not found`);
       }
 
-      // STEP 2: Updating Fields
-      this.logger.debug(`[${METHOD}][STEP 2] Updating holiday fields...`);
       if (updateHolidayDto.date) holiday.date = new Date(updateHolidayDto.date);
       if (updateHolidayDto.name) holiday.name = updateHolidayDto.name;
 
-      // STEP 3: Saving Changes
-      this.logger.debug(`[${METHOD}][STEP 3] Saving updated holiday to database...`);
       const updatedHoliday = await this.holidayRepository.save(holiday);
       
-      // STEP 4: Mapping to Response
-      this.logger.debug(`[${METHOD}][STEP 4] Mapping to response DTO...`);
-      const response = MasterHolidayMapper.toResponseDto(updatedHoliday);
-      
-      this.logger.log(`[${METHOD}] Successfully updated holiday ID: ${id}`);
-      return response;
+      return MasterHolidayMapper.toResponseDto(updatedHoliday);
     } catch (error) {
       if (error instanceof NotFoundException) throw error;
-      this.logger.error(`[${METHOD}] Failed to update holiday ${id}. Error: ${error.message}`, error.stack);
+      this.logger.error(`Error updating holiday ${id}: ${error.message}`, error.stack);
       throw new InternalServerErrorException('Error updating holiday');
     }
   }

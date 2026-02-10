@@ -28,27 +28,28 @@ export class ManagerMappingService {
     status?: ManagerMappingStatus,
     managerName?: string,
   ): Promise<Pagination<ManagerMappingDTO>> {
-    const METHOD = 'findAll';
-    this.logger.log(`[${METHOD}] Fetching ManagerMappings (Manager: ${managerName || 'All'}, Search: "${searchTerm || ''}")`);
-    
+    this.logger.log(`Fetching all ManagerMappings with pagination and search. Filter Manager: ${managerName || 'None'}`);
     try {
-      // STEP 1: Build Query
-      this.logger.debug(`[${METHOD}][STEP 1] Building query...`);
       const queryBuilder = this.managerMappingRepository.createQueryBuilder('managerMapping');
 
+      // Join to users table to get employee status early for filtering
       queryBuilder
-        .leftJoin("users", "e_user", "managerMapping.employeeId = e_user.loginId")
+        .leftJoin(
+          "users",
+          "e_user",
+          "managerMapping.employeeId = e_user.loginId",
+        )
         .addSelect("e_user.status", "userStatus");
 
-      // STEP 2: Apply Filters
-      this.logger.debug(`[${METHOD}][STEP 2] Applying filters...`);
+      // Apply filters
       if (status) {
+        // Filter by the ACTUAL user status of the employee
         queryBuilder.andWhere('e_user.status = :status', { status });
       }
 
       if (managerName) {
         queryBuilder
-          .leftJoin('employee_details', 'manager', 'managerMapping.managerName = manager.full_name') 
+          .leftJoin('employee_details', 'manager', 'managerMapping.managerName = manager.full_name') // Using leftJoin instead of join to avoid issues with missing details for some mappings
           .leftJoin('users', 'user', 'manager.employee_id = user.loginId')
           .andWhere(
             '(managerMapping.managerName = :managerName OR user.loginId = :managerName OR manager.employee_id = :managerName)',
@@ -57,6 +58,7 @@ export class ManagerMappingService {
           .andWhere('user.status = :activeStatus', { activeStatus: 'ACTIVE' });
       }
 
+      // Add search functionality if searchTerm is provided
       if (searchTerm && searchTerm.trim()) {
         const term = `%${searchTerm.trim().toLowerCase()}%`;
         queryBuilder.andWhere(
@@ -70,11 +72,19 @@ export class ManagerMappingService {
         );
       }
 
+      // Default sorting by id
       queryBuilder.orderBy("managerMapping.id", sortOrder);
 
-      // STEP 3: Handle Pagination Meta
-      this.logger.debug(`[${METHOD}][STEP 3] Calculating pagination metadata...`);
+      this.logger.debug(`SQL: ${queryBuilder.getSql()}`);
+      this.logger.debug(
+        `Query parameters: ${JSON.stringify(queryBuilder.getParameters())}`,
+      );
+
       const totalMatching = await queryBuilder.getCount();
+      this.logger.log(
+        `Total matching rows (before pagination): ${totalMatching}`,
+      );
+
       if (options && options.limit) {
         const limitNum = Number(options.limit) || 1;
         const requestedPage = Number(options.page) || 1;
@@ -82,82 +92,95 @@ export class ManagerMappingService {
         if (totalPages === 0) {
           options.page = 1;
         } else if (requestedPage > totalPages) {
+          this.logger.log(
+            `Requested page ${requestedPage} > totalPages ${totalPages}, clamping to ${totalPages}`,
+          );
           options.page = totalPages;
         } else {
           options.page = requestedPage;
         }
       }
 
-      // STEP 4: Execute & Map
-      this.logger.debug(`[${METHOD}][STEP 4] Executing query and mapping results...`);
+      // Add join to get managerId (loginId) for each mapping
       queryBuilder
-        .leftJoin("employee_details", "m_details", "managerMapping.managerName = m_details.full_name")
+        .leftJoin(
+          "employee_details",
+          "m_details",
+          "managerMapping.managerName = m_details.full_name",
+        )
         .leftJoin("users", "m_user", "m_details.employee_id = m_user.loginId")
         .addSelect("m_user.loginId", "managerId");
 
-      const paginatedResult = await paginate<ManagerMapping>(queryBuilder, options);
-      
-      const items = await Promise.all(
+      const paginatedResult = await paginate<ManagerMapping>(
+        queryBuilder,
+        options,
+      );
+      // After pagination, we need to get the managerId for these items.
+      const rawItems = await Promise.all(
         paginatedResult.items.map(async (entity) => {
           const dto = ManagerMappingMapper.fromEntityToDTO(entity);
+          if (dto && managerName) {
+            dto.managerId = managerName;
+          }
           if (dto) {
-            if (managerName) dto.managerId = managerName;
-            const user = await this.userRepository.findOne({ where: { loginId: entity.employeeId } });
-            if (user) dto.status = user.status;
+            // Attach user status from raw query results if available, else fetch
+            // Since we joined e_user early, we can use the count/select approach or a quick fetch
+            const user = await this.userRepository.findOne({
+              where: { loginId: entity.employeeId },
+            });
+            if (user) {
+              dto.status = user.status;
+            }
           }
           return dto;
         }),
       );
 
-      this.logger.log(`[${METHOD}] Successfully fetched ${items.length} mapping records (Total: ${totalMatching})`);
+      const items = rawItems.filter(
+        (item): item is ManagerMappingDTO => item !== undefined,
+      );
+
       return {
         ...paginatedResult,
-        items: items.filter((i): i is ManagerMappingDTO => i !== undefined),
+        items,
       };
     } catch (error) {
-      this.logger.error(`[${METHOD}] Error: ${error.message}`, error.stack);
-      if (error instanceof HttpException) throw error;
-      throw new HttpException('Failed to fetch ManagerMappings', HttpStatus.INTERNAL_SERVER_ERROR);
+      this.logger.error('Error fetching ManagerMappings with pagination and search', error.stack);
+      throw new HttpException(error.message, HttpStatus.INTERNAL_SERVER_ERROR);
     }
   }
 
   async findOne(id: number): Promise<ManagerMappingDTO> {
-    const METHOD = 'findOne';
-    this.logger.log(`[${METHOD}] Fetching ManagerMapping with ID: ${id}`);
-    
+    this.logger.log(`Fetching ManagerMapping with id ${id}`);
     try {
       const entity = await this.managerMappingRepository.findOne({ where: { id } });
       if (!entity) {
-        this.logger.warn(`[${METHOD}] Mapping ${id} not found`);
+        this.logger.warn(`ManagerMapping with id ${id} not found`);
         throw new NotFoundException(`ManagerMapping with id ${id} not found`);
       }
-      
       const dto = ManagerMappingMapper.fromEntityToDTO(entity);
       if (!dto) {
         throw new HttpException('Failed to map entity to DTO', HttpStatus.INTERNAL_SERVER_ERROR);
       }
       return dto;
     } catch (error) {
-      this.logger.error(`[${METHOD}] Error: ${error.message}`, error.stack);
+      this.logger.error(`Error fetching ManagerMapping with id ${id}`, error.stack);
       if (error instanceof NotFoundException) throw error;
-      throw new HttpException('Failed to fetch mapping details', HttpStatus.INTERNAL_SERVER_ERROR);
+      throw new HttpException(error.message, HttpStatus.INTERNAL_SERVER_ERROR);
     }
   }
 
   async create(dto: ManagerMappingDTO): Promise<ManagerMappingDTO> {
-    const METHOD = 'create';
-    this.logger.log(`[${METHOD}] Started creating ManagerMapping for employee: ${dto.employeeId}`);
-    
+    this.logger.log('Creating a new ManagerMapping');
     try {
-      // STEP 1: Check existing mapping for employee
-      this.logger.debug(`[${METHOD}][STEP 1] Checking if employee ${dto.employeeId} is already mapped...`);
+      // Check if this manager is already mapped to another employee
+      // Check if this employee is already mapped
+      // Check if this employee is already mapped
       const mappingExists = await this.managerMappingRepository.findOne({
         where: { employeeId: dto.employeeId, status: ManagerMappingStatus.ACTIVE },
       });
 
       if (mappingExists) {
-        this.logger.warn(`[${METHOD}][STEP 1] existing mapping found for ${dto.employeeId} with manager ${mappingExists.managerName}`);
-        
         // Check if the MANAGER of this mapping is active
         const managerDetails = await this.managerMappingRepository.manager.connection
              .createQueryBuilder()
@@ -169,21 +192,19 @@ export class ManagerMappingService {
              
         // If manager is ACTIVE, then block
         if (managerDetails && managerDetails.status === 'ACTIVE') {
-           this.logger.warn(`[${METHOD}][STEP 1] Current manager is ACTIVE. Cannot remap.`);
            throw new HttpException(
              `Employee ${dto.employeeId} is already mapped to ${mappingExists.managerName}`,
              HttpStatus.BAD_REQUEST,
            );
         } else {
            // Manager is INACTIVE or not found, so we should deactivate the old mapping and allow new one
-           this.logger.log(`[${METHOD}][STEP 1] Deactivating old mapping because manager is inactive/missing`);
+           this.logger.log(`Deactivating old mapping for ${dto.employeeId} because manager ${mappingExists.managerName} is inactive/missing`);
            mappingExists.status = ManagerMappingStatus.INACTIVE;
            await this.managerMappingRepository.save(mappingExists);
+           // Proceed to create new mapping...
         }
       }
 
-      // STEP 2: Convert DTO to Entity
-      this.logger.debug(`[${METHOD}][STEP 2] Converting DTO to Entity...`);
       const entity = ManagerMappingMapper.fromDTOtoEntity(dto);
       if (!entity) {
         throw new HttpException('Failed to convert DTO to entity', HttpStatus.INTERNAL_SERVER_ERROR);
@@ -194,126 +215,89 @@ export class ManagerMappingService {
         entity.status = ManagerMappingStatus.ACTIVE;
       }
 
-      // STEP 3: Save to Database
-      this.logger.debug(`[${METHOD}][STEP 3] Saving new mapping to database...`);
       const saved = await this.managerMappingRepository.save(entity);
       const savedEntity = Array.isArray(saved) ? saved[0] : saved;
-      
-      this.logger.log(`[${METHOD}] Successfully created ManagerMapping ID: ${savedEntity.id}`);
-      
-      // STEP 4: Convert back to DTO
-      this.logger.debug(`[${METHOD}][STEP 4] robust mapping to response DTO...`);
+      this.logger.log(`ManagerMapping created with id ${savedEntity.id}`);
       const savedDTO = ManagerMappingMapper.fromEntityToDTO(savedEntity);
       if (!savedDTO) {
         throw new HttpException('Failed to map saved entity to DTO', HttpStatus.INTERNAL_SERVER_ERROR);
       }
       return savedDTO;
     } catch (error) {
-      this.logger.error(`[${METHOD}] Failed to create ManagerMapping. Error: ${error.message}`, error.stack);
-      if (error instanceof HttpException) throw error;
-      if (error instanceof NotFoundException) throw error;
+      this.logger.error('Error creating ManagerMapping', error.stack);
       throw new HttpException(error.message, HttpStatus.BAD_REQUEST);
     }
   }
 
   async update(id: number, dto: ManagerMappingDTO): Promise<ManagerMappingDTO> {
-    const METHOD = 'update';
-    this.logger.log(`[${METHOD}] Started updating ManagerMapping ID: ${id}`);
-    
+    this.logger.log(`Updating ManagerMapping with id ${id}`);
     try {
-      // STEP 1: Fetch Existing Mapping
-      this.logger.debug(`[${METHOD}][STEP 1] Fetching mapping from database...`);
-      const existing = await this.managerMappingRepository.findOne({ where: { id } });
-      if (!existing) {
-        this.logger.warn(`[${METHOD}][STEP 1] ManagerMapping with ID ${id} not found`);
+      const entity = await this.managerMappingRepository.findOne({ where: { id } });
+
+      if (!entity) {
+        this.logger.log(`ManagerMapping with id ${id} not found`);
         throw new NotFoundException(`ManagerMapping with id ${id} not found`);
       }
 
-      // STEP 2: Update Fields
-      this.logger.debug(`[${METHOD}][STEP 2] Updating fields...`);
-      const entity = ManagerMappingMapper.fromDTOtoEntity(dto);
-      
-      if (!entity) {
-        throw new HttpException('Failed to convert DTO to entity', HttpStatus.INTERNAL_SERVER_ERROR);
-      }
-      
-      entity.id = id; // Ensure ID is preserved
+      Object.assign(entity, dto);
 
-      // STEP 3: Save Changes
-      this.logger.debug(`[${METHOD}][STEP 3] Saving updates to database...`);
       const updated = await this.managerMappingRepository.save(entity);
-      
-      this.logger.log(`[${METHOD}] Successfully updated ManagerMapping ID: ${updated.id}`);
-      
-      // STEP 4: Convert to DTO
-      const resultDto = ManagerMappingMapper.fromEntityToDTO(updated);
-      if (!resultDto) {
+      this.logger.log(`ManagerMapping updated with id ${updated.id}`);
+      const updatedDTO = ManagerMappingMapper.fromEntityToDTO(updated);
+      if (!updatedDTO) {
         throw new HttpException('Failed to map updated entity to DTO', HttpStatus.INTERNAL_SERVER_ERROR);
       }
-      return resultDto;
+      return updatedDTO;
     } catch (error) {
+      this.logger.error(`Error updating ManagerMapping with id ${id}`, error.stack);
       if (error instanceof NotFoundException) throw error;
-      this.logger.error(`[${METHOD}] Failed to update ManagerMapping ${id}. Error: ${error.message}`, error.stack);
       throw new HttpException(error.message, HttpStatus.BAD_REQUEST);
     }
   }
 
   async partialUpdate(id: string, updateData: Partial<ManagerMappingDTO>, loginId: string): Promise<ManagerMappingDTO> {
-    const METHOD = 'partialUpdate';
-    this.logger.log(`[${METHOD}] User ${loginId} partially updating mapping ID: ${id}`);
+    this.logger.log(`User ${loginId} attempting partial update for ManagerMapping id: ${id}`);
 
-    try {
-      this.logger.debug(`[${METHOD}] Fetching existing mapping...`);
-      const entity = await this.managerMappingRepository.findOne({ where: { id: +id } });
-      if (!entity) {
-        this.logger.warn(`[${METHOD}] Mapping ${id} not found`);
-        throw new NotFoundException(`ManagerMapping with id ${id} not found`);
-      }
-
-      this.logger.debug(`[${METHOD}] Applying partial updates...`);
-      Object.assign(entity, updateData);
-
-      // Track who updated
-      (entity as any).updatedBy = loginId;
-      (entity as any).updatedAt = new Date();
-
-      const result = await this.managerMappingRepository.save(entity);
-
-      this.logger.log(`[${METHOD}] Mapping ${id} partially updated successfully`);
-      const updatedDTO = ManagerMappingMapper.fromEntityToDTO(result);
-      if (!updatedDTO) {
-        throw new HttpException('Failed to map partially updated entity to DTO', HttpStatus.INTERNAL_SERVER_ERROR);
-      }
-      return updatedDTO;
-    } catch (error) {
-      this.logger.error(`[${METHOD}] Error: ${error.message}`, error.stack);
-      if (error instanceof HttpException || error instanceof NotFoundException) throw error;
-      throw new HttpException('Failed to partially update mapping', HttpStatus.INTERNAL_SERVER_ERROR);
+    const entity = await this.managerMappingRepository.findOne({ where: { id: +id } });
+    if (!entity) {
+      this.logger.warn(`ManagerMapping with id ${id} not found`);
+      throw new HttpException(`ManagerMapping with id ${id} not found`, HttpStatus.NOT_FOUND);
     }
+
+    Object.assign(entity, updateData);
+
+    // Track who updated
+    (entity as any).updatedBy = loginId;
+    (entity as any).updatedAt = new Date();
+
+    const result = await this.managerMappingRepository.save(entity);
+
+    this.logger.log(`ManagerMapping with id ${id} partially updated successfully`);
+    const updatedDTO = ManagerMappingMapper.fromEntityToDTO(result);
+    if (!updatedDTO) {
+      throw new HttpException('Failed to map partially updated entity to DTO', HttpStatus.INTERNAL_SERVER_ERROR);
+    }
+    return updatedDTO;
   }
 
   async delete(id: number): Promise<void> {
-    const METHOD = 'delete';
-    this.logger.log(`[${METHOD}] Started deleting ManagerMapping ID: ${id}`);
-    
+    this.logger.log(`Deactivating ManagerMapping with id ${id}`);
     try {
-      // STEP 1: Check existence
-      this.logger.debug(`[${METHOD}][STEP 1] Checking if mapping exists...`);
-      const existing = await this.managerMappingRepository.findOne({ where: { id } });
-      if (!existing) {
-        this.logger.warn(`[${METHOD}][STEP 1] ManagerMapping with ID ${id} not found`);
+      const entity = await this.managerMappingRepository.findOne({ where: { id } });
+      if (!entity) {
+        this.logger.warn(`ManagerMapping with id ${id} not found`);
         throw new NotFoundException(`ManagerMapping with id ${id} not found`);
       }
 
-      // STEP 2: Perform Delete
-      this.logger.debug(`[${METHOD}][STEP 2] Deleting from database...`);
-      await this.managerMappingRepository.delete(id);
-      
-      this.logger.log(`[${METHOD}] Successfully deleted ManagerMapping ID: ${id}`);
+      // Instead of hard delete, mark as INACTIVE
+      entity.status = ManagerMappingStatus.INACTIVE;
+      await this.managerMappingRepository.save(entity);
+
+      this.logger.log(`ManagerMapping deactivated (set to INACTIVE) with id ${id}`);
     } catch (error) {
+      this.logger.error(`Error deactivating ManagerMapping with id ${id}`, error.stack);
       if (error instanceof NotFoundException) throw error;
-      this.logger.error(`[${METHOD}] Failed to delete ManagerMapping ${id}. Error: ${error.message}`, error.stack);
-      throw new HttpException(error.message, HttpStatus.BAD_REQUEST);
+      throw new HttpException(error.message, HttpStatus.INTERNAL_SERVER_ERROR);
     }
   }
 
@@ -328,12 +312,8 @@ export class ManagerMappingService {
     department?: string,
     status?: string
   ): Promise<any> {
-    const METHOD = 'getMappingHistory';
-    this.logger.log(`[${METHOD}] Fetching history (Search: "${search || ''}", Dept: ${department || 'All'}, Page: ${page})`);
-
+    this.logger.log(`Fetching grouped Manager Mapping history with pagination. Search: ${search || 'None'}, Status: ${status || 'All'}, Page: ${page}`);
     try {
-      // STEP 1: Build Grouped Query
-      this.logger.debug(`[${METHOD}][STEP 1] Building grouped query...`);
       const queryBuilder = this.managerMappingRepository.createQueryBuilder('managerMapping');
       
       queryBuilder
@@ -350,8 +330,7 @@ export class ManagerMappingService {
         .groupBy('managerMapping.managerName')
         .addGroupBy('managerMapping.department');
 
-      // STEP 2: Apply Filters
-      this.logger.debug(`[${METHOD}][STEP 2] Applying filters...`);
+      // Filters
       if (department && department !== 'All' && department !== 'All Departments') {
         queryBuilder.andWhere('managerMapping.department = :department', { department });
       }
@@ -370,26 +349,61 @@ export class ManagerMappingService {
         queryBuilder.having('MAX(user.status) = :status', { status });
       }
 
-      // STEP 3: Count for Pagination
-      this.logger.debug(`[${METHOD}][STEP 3] Counting total groups...`);
-      const totalItemsResults = await queryBuilder.getRawMany();
+      // To get the total number of groups for pagination meta
+      const countQuery = this.managerMappingRepository.createQueryBuilder('managerMapping')
+        .leftJoin(EmployeeDetails, 'manager', 'managerMapping.managerName = manager.fullName')
+        .select('managerMapping.managerName', 'managerName')
+        .addSelect('managerMapping.department', 'department')
+        .groupBy('managerMapping.managerName')
+        .addGroupBy('managerMapping.department');
+
+      if (department && department !== 'All' && department !== 'All Departments') {
+        countQuery.andWhere('managerMapping.department = :department', { department });
+      }
+      if (search && search.trim()) {
+        const term = `%${search.trim().toLowerCase()}%`;
+        countQuery.andWhere(
+          `(LOWER(managerMapping.managerName) LIKE :term OR 
+            LOWER(manager.employeeId) LIKE :term OR 
+            LOWER(managerMapping.department) LIKE :term)`,
+          { term }
+        );
+      }
+
+      if (status && (status === 'ACTIVE' || status === 'INACTIVE')) {
+        countQuery
+          .leftJoin(User, 'user', 'manager.employeeId = user.loginId')
+          .having('MAX(user.status) = :status', { status });
+      }
+
+      const totalItemsResults = await countQuery.getRawMany();
       const totalItems = totalItemsResults.length;
 
-      // STEP 4: Sorting & Pagination
-      this.logger.debug(`[${METHOD}][STEP 4] Executing paginated query...`);
+      // Sorting
       const validSortFields = ['managerName', 'department', 'employeeCount', 'managerId', 'managerStatus', 'createdAt'];
       const actualSortBy = validSortFields.includes(sortBy) ? sortBy : 'createdAt';
       const actualSortOrder = (sortOrder.toUpperCase() === 'DESC') ? 'DESC' : 'ASC';
 
-      if (actualSortBy === 'managerId') queryBuilder.orderBy('loginId', actualSortOrder);
-      else if (actualSortBy === 'managerStatus') queryBuilder.orderBy('managerStatus', actualSortOrder);
-      else if (actualSortBy === 'employeeCount') queryBuilder.orderBy('employeeCount', actualSortOrder);
-      else if (actualSortBy === 'department') queryBuilder.orderBy('managerMapping.department', actualSortOrder);
-      else if (actualSortBy === 'createdAt') queryBuilder.orderBy('createdAt', actualSortOrder);
-      else queryBuilder.orderBy('managerMapping.managerName', actualSortOrder);
+      if (actualSortBy === 'managerId') {
+        queryBuilder.orderBy('loginId', actualSortOrder);
+      } else if (actualSortBy === 'managerStatus') {
+        queryBuilder.orderBy('managerStatus', actualSortOrder);
+      } else if (actualSortBy === 'employeeCount') {
+        queryBuilder.orderBy('employeeCount', actualSortOrder);
+      } else if (actualSortBy === 'department') {
+        queryBuilder.orderBy('managerMapping.department', actualSortOrder);
+      } else if (actualSortBy === 'createdAt') {
+        queryBuilder.orderBy('createdAt', actualSortOrder);
+      } else {
+        queryBuilder.orderBy('managerMapping.managerName', actualSortOrder);
+      }
 
+      // Pagination
       const skip = (page - 1) * limit;
-      const results = await queryBuilder.offset(skip).limit(limit).getRawMany();
+      const results = await queryBuilder
+        .offset(skip)
+        .limit(limit)
+        .getRawMany();
 
       const items = results.map(r => ({
         managerName: r.managerName,
@@ -399,7 +413,6 @@ export class ManagerMappingService {
         employeeCount: parseInt(r.employeeCount, 10)
       }));
 
-      this.logger.log(`[${METHOD}] Successfully fetched ${items.length} history records`);
       return {
         items,
         meta: {
@@ -411,56 +424,53 @@ export class ManagerMappingService {
         }
       };
     } catch (error) {
-      this.logger.error(`[${METHOD}] Error: ${error.message}`, error.stack);
-      if (error instanceof HttpException) throw error;
-      throw new HttpException('Failed to fetch mapping history', HttpStatus.INTERNAL_SERVER_ERROR);
+      this.logger.error('Error fetching mapping history', error.stack);
+      throw new HttpException(error.message, HttpStatus.INTERNAL_SERVER_ERROR);
     }
   }
 
   async getMappedEmployeeIds(): Promise<string[]> {
-    const METHOD = 'getMappedEmployeeIds';
-    this.logger.log(`[${METHOD}] Fetching all active mapped employee IDs...`);
-
+    this.logger.log('Fetching all active mapped employee IDs (checking manager status)');
     try {
       const queryBuilder = this.managerMappingRepository.createQueryBuilder('managerMapping');
       
       const mappings = await queryBuilder
         .select('managerMapping.employeeId')
-        .leftJoin(EmployeeDetails, 'manager', 'managerMapping.managerName = manager.fullName') 
-        .leftJoin(User, 'user', 'manager.employeeId = user.loginId') 
-        .leftJoin(User, 'e_user', 'managerMapping.employeeId = e_user.loginId') 
+        .leftJoin(EmployeeDetails, 'manager', 'managerMapping.managerName = manager.fullName') // Join to get manager details
+        .leftJoin(User, 'user', 'manager.employeeId = user.loginId') // Join to get manager user status
+        .leftJoin(User, 'e_user', 'managerMapping.employeeId = e_user.loginId') // Join to get employee status
         .where('managerMapping.status = :mappingStatus', { mappingStatus: ManagerMappingStatus.ACTIVE })
-        .andWhere('user.status = :managerUserStatus', { managerUserStatus: 'ACTIVE' }) 
-        .andWhere('e_user.status = :employeeUserStatus', { employeeUserStatus: 'ACTIVE' }) 
+        .andWhere('user.status = :managerUserStatus', { managerUserStatus: 'ACTIVE' }) // Only consider mapping active if manager is active
+        .andWhere('e_user.status = :employeeUserStatus', { employeeUserStatus: 'ACTIVE' }) // Only consider mapping active if employee is active
         .getMany();
 
-      this.logger.log(`[${METHOD}] Found ${mappings.length} active mappings`);
       return mappings.map((m) => m.employeeId);
     } catch (error) {
-      this.logger.error(`[${METHOD}] Error: ${error.message}`, error.stack);
-      throw new HttpException('Failed to fetch mapped employee IDs', HttpStatus.INTERNAL_SERVER_ERROR);
+      this.logger.error('Error fetching mapped employee IDs', error.stack);
+      throw new HttpException(error.message, HttpStatus.INTERNAL_SERVER_ERROR);
     }
   }
 
   async findByEmployeeId(employeeId: string): Promise<ManagerMappingDTO | null> {
-    const METHOD = 'findByEmployeeId';
-    this.logger.log(`[${METHOD}] Fetching active mapping for employee: ${employeeId}`);
-
+    this.logger.log(`Fetching ManagerMapping for employeeId ${employeeId}`);
     try {
       const entity = await this.managerMappingRepository.findOne({
         where: { employeeId, status: ManagerMappingStatus.ACTIVE },
       });
 
       if (!entity) {
-        this.logger.debug(`[${METHOD}] No active mapping found for ${employeeId}`);
+        this.logger.log(`No active ManagerMapping found for employeeId ${employeeId}`);
         return null;
       }
 
       const dto = ManagerMappingMapper.fromEntityToDTO(entity);
-      return dto || null;
+      if (!dto) {
+        return null;
+      }
+      return dto;
     } catch (error) {
-      this.logger.error(`[${METHOD}] Error: ${error.message}`, error.stack);
-      throw new HttpException('Failed to fetch mapping by employee ID', HttpStatus.INTERNAL_SERVER_ERROR);
+      this.logger.error(`Error fetching ManagerMapping for employeeId ${employeeId}`, error.stack);
+      throw new HttpException(error.message, HttpStatus.INTERNAL_SERVER_ERROR);
     }
   }
 }
