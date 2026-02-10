@@ -66,11 +66,13 @@ export class EmployeeDetailsController {
   @ApiOperation({ summary: 'Get lightweight employee list for selection' })
   @ApiQuery({ name: 'department', required: false, type: String })
   @ApiQuery({ name: 'role', required: false, type: String, description: 'Filter by role (comma separated)' })
+  @ApiQuery({ name: 'search', required: false, type: String, description: 'Search by name or employee ID' })
   async getListSelect(
     @Query('department') department: string,
     @Query('role') role: string,
+    @Query('search') search: string,
   ) {
-    return this.employeeDetailsService.getListSelect(department, role);
+    return this.employeeDetailsService.getListSelect(department, role, search);
   }
 
   @Post()

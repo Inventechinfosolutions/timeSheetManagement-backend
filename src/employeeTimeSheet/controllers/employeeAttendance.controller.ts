@@ -86,8 +86,14 @@ export class EmployeeAttendanceController {
     description: 'Bad Request. The request body is invalid.',
   })
   async create(@Body() createEmployeeAttendanceDto: EmployeeAttendanceDto, @Req() req: any) {
-    const isAdmin = req.user?.userType === UserType.ADMIN;
-    return this.employeeAttendanceService.create(createEmployeeAttendanceDto, isAdmin);
+    const user = req.user;
+    const isAdmin = user?.userType === UserType.ADMIN;
+    
+    // Check for Manager Role
+    const roleUpper = (user?.role || '').toUpperCase();
+    const isManager = user && (user.userType === 'MANAGER' || roleUpper.includes('MNG') || roleUpper.includes('MANAGER'));
+
+    return this.employeeAttendanceService.create(createEmployeeAttendanceDto, isAdmin, isManager);
   }
 
  
@@ -248,18 +254,32 @@ export class EmployeeAttendanceController {
     @Body() updateEmployeeAttendanceDto: Partial<EmployeeAttendanceDto>,
     @Req() req: any
   ) {
-    const isAdmin = req.user?.userType === UserType.ADMIN;
+    const user = req.user;
+    const isAdmin = user?.userType === UserType.ADMIN;
+    
+    // Check for Manager Role
+    const roleUpper = (user?.role || '').toUpperCase();
+    const isManager = user && (user.userType === 'MANAGER' || roleUpper.includes('MNG') || roleUpper.includes('MANAGER'));
+
     return this.employeeAttendanceService.update(
       id,
       updateEmployeeAttendanceDto,
-      isAdmin
+      isAdmin,
+      isManager
     );
   }
 
+  @UseGuards(JwtAuthGuard)
   @Delete(':id')
   @ApiOperation({ summary: 'Delete an employee attendance record by ID' })
-  async remove(@Param('id', ParseIntPipe) id: number) {
-    return this.employeeAttendanceService.remove(id);
+  async remove(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
+    const user = req.user;
+    const isAdmin = user?.userType === UserType.ADMIN;
+    
+    const roleUpper = (user?.role || '').toUpperCase();
+    const isManager = user && (user.userType === 'MANAGER' || roleUpper.includes('MNG') || roleUpper.includes('MANAGER'));
+
+    return this.employeeAttendanceService.remove(id, isAdmin, isManager);
   }
 
 
@@ -269,8 +289,25 @@ export class EmployeeAttendanceController {
   @ApiOperation({ summary: 'Bulk create/update attendance records' })
   @ApiBody({ type: [EmployeeAttendanceDto] })
   async createBulk(@Body() createDtos: EmployeeAttendanceDto[], @Req() req: any) {
-    const isAdmin = req.user?.userType === UserType.ADMIN;
-    return this.employeeAttendanceService.createBulk(createDtos, isAdmin);
+    const user = req.user;
+    const isAdmin = user?.userType === UserType.ADMIN;
+    
+    // Check for Manager Role  
+    const roleUpper = (user?.role || '').toUpperCase();
+    const isManager = user && (user.userType === 'MANAGER' || roleUpper.includes('MNG') || roleUpper.includes('MANAGER'));
+    
+    return this.employeeAttendanceService.createBulk(createDtos, isAdmin, isManager);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('auto-update')
+  @ApiOperation({ summary: 'Auto update timesheet for current month' })
+  @ApiBody({ schema: { type: 'object', properties: { employeeId: { type: 'string' }, month: { type: 'string' }, year: { type: 'string' } } } })
+  async autoUpdate(
+    @Body() body: { employeeId: string; month: string; year: string },
+    @Req() req: any
+  ) {
+    return this.employeeAttendanceService.autoUpdateTimesheet(body.employeeId, body.month, body.year);
   }
 
   @Get('monthly-details-all/:month/:year')
