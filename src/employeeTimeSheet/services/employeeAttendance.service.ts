@@ -680,7 +680,7 @@ export class EmployeeAttendanceService {
         const location = (record.workLocation || '').toLowerCase();
 
         // Check for Full Leaves (1.0) and Half Days (0.5)
-        if (status === 'leave') {
+        if (status === 'leave' || status === 'absent') {
             stats.totalLeaves += 1;
         }
         else if (status === 'half day') {
