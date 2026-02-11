@@ -82,10 +82,11 @@ export class EmployeeAttendanceService {
       }
 
       if (existingRecord) {
-        // Priority Hierarchy: Leave (3) > Client Visit (2) > Work From Home (1)
+        // Priority Hierarchy: Level 2 (Leave/Half Day) > Level 1 (Client Visit/WFH)
         const getPriority = (status: string | null, location: string | null) => {
-          if (status === AttendanceStatus.LEAVE || String(status).toLowerCase() === 'leave') return 3;
-          if (location === 'Client Visit' || String(location).toLowerCase() === 'client visit') return 2;
+          if (status === AttendanceStatus.LEAVE || String(status).toLowerCase() === 'leave') return 2;
+          if (status === AttendanceStatus.HALF_DAY || String(status).toLowerCase() === 'half day') return 2;
+          if (location === 'Client Visit' || String(location).toLowerCase() === 'client visit') return 1;
           if (location === 'WFH' || location === 'Work From Home' || String(location).toLowerCase().includes('wfh')) return 1;
           return 0;
         };
@@ -93,11 +94,13 @@ export class EmployeeAttendanceService {
         const existingPriority = getPriority(existingRecord.status, existingRecord.workLocation);
         const incomingPriority = getPriority(createEmployeeAttendanceDto.status || null, createEmployeeAttendanceDto.workLocation || null);
 
-        // Rule: Only overwrite if incoming priority is GREATER THAN OR EQUAL to existing priority
-        // Exception: Always allow updates if the incoming update is from an Admin or is explicitly clearing the status
-        if (incomingPriority < existingPriority && !isAdmin && createEmployeeAttendanceDto.status !== null && createEmployeeAttendanceDto.workLocation !== null) {
-          // If trying to downgrade priority (e.g., WFH trying to overwrite CV), ignore the change
-          return existingRecord;
+        // Rule: Level 2 (Leave/Half Day) are immutable. Level 1 (CV/WFH) follow newest-wins.
+        // Block if trying to downgrade, or if incoming is same level as existing Level 2 (No-Overwrite).
+        if (incomingPriority < existingPriority) {
+          return existingRecord; // Block downgrade
+        }
+        if (incomingPriority === existingPriority && existingPriority === 2) {
+          return existingRecord; // Level 2 cannot overwrite itself
         }
         
         // Update existing record
@@ -397,10 +400,11 @@ export class EmployeeAttendanceService {
       }
     }
 
-    // Priority Hierarchy: Leave (3) > Client Visit (2) > Work From Home (1)
+    // Priority Hierarchy: Level 2 (Leave/Half Day) > Level 1 (Client Visit/WFH)
     const getPriority = (status: string | null, location: string | null) => {
-      if (status === AttendanceStatus.LEAVE || String(status).toLowerCase() === 'leave') return 3;
-      if (location === 'Client Visit' || String(location).toLowerCase() === 'client visit') return 2;
+      if (status === AttendanceStatus.LEAVE || String(status).toLowerCase() === 'leave') return 2;
+      if (status === AttendanceStatus.HALF_DAY || String(status).toLowerCase() === 'half day') return 2;
+      if (location === 'Client Visit' || String(location).toLowerCase() === 'client visit') return 1;
       if (location === 'WFH' || location === 'Work From Home' || String(location).toLowerCase().includes('wfh')) return 1;
       return 0;
     };
@@ -408,11 +412,13 @@ export class EmployeeAttendanceService {
     const existingPriority = getPriority(attendance.status, attendance.workLocation);
     const incomingPriority = getPriority(updateDto.status || null, updateDto.workLocation || null);
 
-    // Rule: Only overwrite if incoming priority is GREATER THAN OR EQUAL to existing priority
-    // Exception: Always allow updates if the incoming update is from an Admin or Manager, or is explicitly clearing the status
-    if (incomingPriority < existingPriority && !isAdmin && !isManager && updateDto.status !== null && updateDto.workLocation !== null) {
-      // If trying to downgrade priority (e.g., WFH trying to overwrite CV), ignore the change
-      return attendance;
+    // Rule: Level 2 (Leave/Half Day) are immutable. Level 1 (CV/WFH) follow newest-wins.
+    // Block if trying to downgrade, or if incoming is same level as existing Level 2 (No-Overwrite).
+    if (incomingPriority < existingPriority) {
+      return attendance; // Block downgrade
+    }
+    if (incomingPriority === existingPriority && existingPriority === 2 && updateDto.status !== null && updateDto.workLocation !== null) {
+      return attendance; // Level 2 cannot overwrite itself
     }
 
     // Preserve workLocation if it exists and updateDto doesn't explicitly change it

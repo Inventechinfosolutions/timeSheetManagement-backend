@@ -26,8 +26,8 @@ export class EmployeeAttendance {
   })
   status: AttendanceStatus | string | null;
 
-  @Column({ name: 'source_request_id', nullable: true })
-  sourceRequestId?: number;
+  @Column({ name: 'source_request_id', type: 'int', nullable: true })
+  sourceRequestId?: number | null;
 
   @CreateDateColumn()
   createdAt: Date;
