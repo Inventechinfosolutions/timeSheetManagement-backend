@@ -28,6 +28,27 @@ import { NotificationsService } from '../../notifications/Services/notifications
 export class LeaveRequestsService {
   private readonly logger = new Logger(LeaveRequestsService.name);
 
+  // Helper to check if weekend based on department
+  private async _isWeekend(date: dayjs.Dayjs, employeeId: string): Promise<boolean> {
+    
+    // Always block Sunday (0)
+    if (date.day() === 0) return true;
+
+    // If Saturday (6), check department
+    if (date.day() === 6) {
+       const emp = await this.employeeDetailsRepository.findOne({
+          where: { employeeId },
+          select: ['department']
+       });
+       if (emp && emp.department === 'Information Technology') {
+           return true; 
+       }
+       return false;
+    }
+
+    return false;
+  }
+
   constructor(
     @InjectRepository(LeaveRequest)
     private leaveRequestRepository: Repository<LeaveRequest>,
@@ -454,8 +475,9 @@ export class LeaveRequestsService {
       const currentDate = startDate.add(i, 'day');
 
       // URL: Exclude Weekends (Sat=6, Sun=0)
-      const dayOfWeek = currentDate.day();
-      if (dayOfWeek === 0 || dayOfWeek === 6) {
+      // Check weekend via helper (async)
+      const isWknd = await this._isWeekend(currentDate, employeeId);
+      if (isWknd) {
         continue;
       }
 
@@ -567,8 +589,8 @@ export class LeaveRequestsService {
           let temp = dayjs(prevDate).add(1, 'day');
           let hasWorkDayGap = false;
           while (temp.isBefore(dayjs(date))) {
-            const day = temp.day();
-            if (day !== 0 && day !== 6) { // Not Sat (6) or Sun (0)
+            const isWknd = await this._isWeekend(temp, employeeId);
+            if (!isWknd) {
               hasWorkDayGap = true;
               break;
             }
@@ -1123,8 +1145,10 @@ export class LeaveRequestsService {
 
             for (let i = 0; i <= diff; i++) {
                  const targetDate = startDate.add(i, 'day');
-                 const dayOfWeek = targetDate.day();
-                 if (dayOfWeek === 0 || dayOfWeek === 6) continue; // Skip Weekends
+                 
+                 // Check Weekend using helper
+                 const isWknd = await this._isWeekend(targetDate, request.employeeId);
+                 if (isWknd) continue; 
 
                  const startOfDay = targetDate.startOf('day').toDate();
                  const endOfDay = targetDate.endOf('day').toDate();
