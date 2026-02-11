@@ -1,7 +1,8 @@
 export enum Department {
-  HR = 'HR',
-  IT = 'IT',
-  FINANCE = 'Finance',
-  DESIGNER = 'Designer',
-  BUSINESS_ANALYST = 'Business Analyst',
+  IT = 'Information Technology',
+  TA = 'Recruitment / Talent Acquisition',
+  HR_OPS = 'HR Operations',
+  FIN = 'Finance & Accounts',
+  AM_CR = 'Account Management / Client Relations',
+  IT_SUPPORT = 'IT / Systems Support',
 }
