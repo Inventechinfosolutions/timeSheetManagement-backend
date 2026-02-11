@@ -4,6 +4,8 @@ import {
   Logger,
   NotFoundException,
   ForbiddenException,
+  HttpException,
+  HttpStatus,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Between, Repository, LessThanOrEqual, MoreThanOrEqual, In } from 'typeorm';
@@ -162,178 +164,176 @@ export class EmployeeAttendanceService {
     return results;
   }
 
-  async autoUpdateTimesheet(employeeId: string, month: string, year: string): Promise<any> {
+  async autoUpdateTimesheet(employeeId: string, month: string, year: string, dryRun: boolean = false): Promise<any> {
+    this.logger.log(`Auto-update started for: ${employeeId}, Month: ${month}/${year}, DryRun: ${dryRun}`);
+
     const monthNum = parseInt(month, 10);
     const yearNum = parseInt(year, 10);
     const today = new Date();
     
-    // Ensure we only auto-update for current month
-    if (today.getMonth() + 1 !== monthNum || today.getFullYear() !== yearNum) {
-      throw new BadRequestException('Auto-update is only available for the current month.');
-    }
-
-    const startDate = new Date(yearNum, monthNum - 1, 1, 12, 0, 0); // Noon to avoid timezone boundary issues
-    
-    // Set endDate to "today" to avoid future updates
-    const endDate = new Date(); 
-    endDate.setHours(23, 59, 59, 999);
-    
-    // 1. Fetch holidays (using existing findAll helper which seems to return entities with date/holidayDate)
-    const holidays = await this.masterHolidayService.findAll();
-    const holidayDates = new Set(holidays.map(h => {
-        // Handle various date formats from dirty data if needed, but usually it's Date or string
-        const d = new Date(h.holidayDate || (h as any).date);
-        // Normalize to YYYY-MM-DD
-        const year = d.getFullYear();
-        const month = String(d.getMonth() + 1).padStart(2, '0');
-        const day = String(d.getDate()).padStart(2, '0');
-        return `${year}-${month}-${day}`;
-    }));
-
-    // 2. Fetch existing attendance for the month
-    const existingRecords = await this.employeeAttendanceRepository.find({
-        where: {
-            employeeId,
-            workingDate: Between(startDate, endDate)
+    try {
+        if (today.getMonth() + 1 !== monthNum || today.getFullYear() !== yearNum) {
+          throw new BadRequestException('Auto-update is only available for the current month.');
         }
-    });
 
-    const existingDates = new Set<string>();
-    const existingZeroHourRecords = new Map<string, EmployeeAttendance>();
-
-    existingRecords.forEach(r => {
-        const d = new Date(r.workingDate);
-        const y = d.getFullYear();
-        const m = String(d.getMonth() + 1).padStart(2, '0');
-        const day = String(d.getDate()).padStart(2, '0');
-        const dateStr = `${y}-${m}-${day}`;
-
-        // Skip if totalHours > 0 (already filled)
-        if (r.totalHours && r.totalHours > 0) {
-             existingDates.add(dateStr);
-             return;
-        }
+        this.logger.debug(`Fetching holidays and existing records for ${employeeId}...`);
+        const startDate = new Date(yearNum, monthNum - 1, 1, 0, 0, 0); 
+        const endDate = new Date(); 
+        endDate.setHours(23, 59, 59, 999);
         
-        // Skip if Leave or Half Day
-        if (r.status === AttendanceStatus.LEAVE || r.status === AttendanceStatus.HALF_DAY) {
-             existingDates.add(dateStr);
-             return;
-        }
+        const holidays = await this.masterHolidayService.findAll();
+        const holidayDates = new Set(holidays.map(h => {
+            const d = new Date(h.holidayDate || (h as any).date);
+            const y = d.getFullYear();
+            const m = String(d.getMonth() + 1).padStart(2, '0');
+            const day = String(d.getDate()).padStart(2, '0');
+            return `${y}-${m}-${day}`;
+        }));
 
-        // If here, it is a 0-hour record (likely WFH, Client Visit, or Pending)
-        // We want to UPDATE these.
-        // We do NOT add to existingDates, so the loop processes this date.
-        // But we store it in map to retrieve ID and Location later.
-        existingZeroHourRecords.set(dateStr, r);
-    });
+        const existingRecords = await this.employeeAttendanceRepository.find({
+            where: {
+                employeeId,
+                workingDate: Between(startDate, endDate)
+            }
+        });
 
-    // 3. Fetch approved leaves (Full & Half)
-    const approvedLeaves = await this.leaveRequestRepository.find({
-        where: {
-            employeeId,
-            status: 'Approved',
-            fromDate: LessThanOrEqual(endDate.toISOString().split('T')[0]),
-            toDate: MoreThanOrEqual(startDate.toISOString().split('T')[0])
-        }
-    });
+        const existingDates = new Set<string>();
+        const existingZeroHourRecords = new Map<string, EmployeeAttendance>();
 
-    const leaveDates = new Set<string>();
-    approvedLeaves.forEach(leave => {
-        let current = new Date(leave.fromDate);
-        // Start from Noon to avoid timezone shifts
-        current.setHours(12, 0, 0, 0); 
-        
-        const end = new Date(leave.toDate);
-        end.setHours(23, 59, 59, 999);
+        existingRecords.forEach(r => {
+            const d = new Date(r.workingDate);
+            const y = d.getFullYear();
+            const m = String(d.getMonth() + 1).padStart(2, '0');
+            const day = String(d.getDate()).padStart(2, '0');
+            const dateStr = `${y}-${m}-${day}`;
 
-        // Safety break
-        let safety = 0;
-        while (current <= end && safety < 366) {
-            const y = current.getFullYear();
-            const m = String(current.getMonth() + 1).padStart(2, '0');
-            const d = String(current.getDate()).padStart(2, '0');
-            leaveDates.add(`${y}-${m}-${d}`);
-            
-            current.setDate(current.getDate() + 1);
-            safety++;
-        }
-    });
-
-    // 4. Generate records for eligible days
-    const recordsToCreate: EmployeeAttendanceDto[] = [];
-    const updatedDateStrings: string[] = [];
-    let currentDate = new Date(startDate);
-    
-    // Iterate from 1st of month up to today (inclusive)
-    while (currentDate <= endDate) {
-        // Stop if we go past "today"
-        if (currentDate > today) break;
-
-        // Force local string format for comparison (YYYY-MM-DD)
-        const year = currentDate.getFullYear();
-        const month = String(currentDate.getMonth() + 1).padStart(2, '0');
-        const day = String(currentDate.getDate()).padStart(2, '0');
-        const dateStr = `${year}-${month}-${day}`;
-        
-        // Skip Weekends (Explicit Inline Check)
-        // 0 = Sunday, 6 = Saturday
-        const dayOfWeek = currentDate.getDay();
-        const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
-        
-        // Skip Holidays
-        const isHoliday = holidayDates.has(dateStr);
-
-        // Skip COMPLETE Existing Attendance (Hours > 0 or Leave/HalfDay)
-        const hasAttendance = existingDates.has(dateStr);
-
-        // Skip Approved Leaves (Full & Half)
-        const hasLeave = leaveDates.has(dateStr);
-
-        if (!isWeekend && !isHoliday && !hasAttendance && !hasLeave) {
-            const dto = new EmployeeAttendanceDto();
-            dto.employeeId = employeeId;
-            dto.workingDate = new Date(currentDate); 
-            dto.workingDate.setHours(0,0,0,0);
-            
-            // CHECK FOR EXISTING 0-HOUR RECORD TO UPDATE
-            const existingZeroHour = existingZeroHourRecords.get(dateStr);
-            if (existingZeroHour) {
-                dto.id = existingZeroHour.id; // Crucial: Triggers UPDATE
-                dto.status = AttendanceStatus.FULL_DAY; 
-                // Restore Work Location to pass priority check (WFH -> WFH)
-                // If it was "WFH", we send "WFH". 
-                // incomingPriority (1) >= existingPriority (1) -> Update Allowed.
-                if (existingZeroHour.workLocation) {
-                    dto.workLocation = existingZeroHour.workLocation;
-                }
-            } else {
-                 dto.status = AttendanceStatus.FULL_DAY;
+            if (r.totalHours && r.totalHours > 0) {
+                 existingDates.add(dateStr);
+                 return;
             }
             
+            if (r.status === AttendanceStatus.LEAVE || r.status === AttendanceStatus.HALF_DAY) {
+                 existingDates.add(dateStr);
+                 return;
+            }
+
+            existingZeroHourRecords.set(dateStr, r);
+        });
+
+        const approvedLeaves = await this.leaveRequestRepository.find({
+            where: {
+                employeeId,
+                status: 'Approved',
+                fromDate: LessThanOrEqual(endDate.toISOString().split('T')[0]),
+                toDate: MoreThanOrEqual(startDate.toISOString().split('T')[0])
+            }
+        });
+
+        const absenceDates = new Set<string>();
+        const locationRequestDates = new Map<string, string>(); // date -> 'WFH' | 'Client Visit'
+
+        approvedLeaves.forEach(leave => {
+            const isAbsence = leave.requestType === 'Apply Leave' || leave.requestType === 'Leave' || leave.requestType === 'Half Day';
             
-            dto.totalHours = 9;
-            recordsToCreate.push(dto);
-            updatedDateStrings.push(dateStr);
+            let current = new Date(leave.fromDate);
+            current.setHours(12, 0, 0, 0); 
+            const end = new Date(leave.toDate);
+            end.setHours(23, 59, 59, 999);
+
+            let safety = 0;
+            while (current <= end && safety < 366) {
+                const y = current.getFullYear();
+                const m = String(current.getMonth() + 1).padStart(2, '0');
+                const d = String(current.getDate()).padStart(2, '0');
+                const dateStr = `${y}-${m}-${d}`;
+                
+                if (isAbsence) {
+                    absenceDates.add(dateStr);
+                } else {
+                    // Map WFH/CV request to it's type for auto-filling
+                    locationRequestDates.set(dateStr, leave.requestType);
+                }
+                
+                current.setDate(current.getDate() + 1);
+                safety++;
+            }
+        });
+
+        const recordsToCreate: EmployeeAttendanceDto[] = [];
+        const updatedDateStrings: string[] = [];
+        let currentDate = new Date(startDate);
+        
+        while (currentDate <= endDate) {
+            const year = currentDate.getFullYear();
+            const month = String(currentDate.getMonth() + 1).padStart(2, '0');
+            const day = String(currentDate.getDate()).padStart(2, '0');
+            const dateStr = `${year}-${month}-${day}`;
+            
+            const dayOfWeek = currentDate.getDay();
+            const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+            const isHoliday = holidayDates.has(dateStr);
+            const hasAttendance = existingDates.has(dateStr);
+            const isAbsence = absenceDates.has(dateStr);
+
+            if (!isWeekend && !isHoliday && !hasAttendance && !isAbsence) {
+                const dto = new EmployeeAttendanceDto();
+                dto.employeeId = employeeId;
+                dto.workingDate = new Date(currentDate); 
+                dto.workingDate.setHours(0,0,0,0);
+                
+                const existingZeroHour = existingZeroHourRecords.get(dateStr);
+                const locationRequestType = locationRequestDates.get(dateStr);
+
+                if (existingZeroHour) {
+                    dto.id = existingZeroHour.id;
+                    dto.status = AttendanceStatus.FULL_DAY; 
+                    // Priority 1: Use location from Approved Request
+                    if (locationRequestType === 'Work From Home') dto.workLocation = 'WFH';
+                    else if (locationRequestType === 'Client Visit') dto.workLocation = 'Client Visit';
+                    // Priority 2: Use existing location
+                    else if (existingZeroHour.workLocation) dto.workLocation = existingZeroHour.workLocation;
+                } else {
+                     dto.status = AttendanceStatus.FULL_DAY;
+                     if (locationRequestType === 'Work From Home') dto.workLocation = 'WFH';
+                     else if (locationRequestType === 'Client Visit') dto.workLocation = 'Client Visit';
+                }
+                
+                dto.totalHours = 9;
+                recordsToCreate.push(dto);
+                updatedDateStrings.push(dateStr);
+            }
+            currentDate.setDate(currentDate.getDate() + 1);
         }
 
-        // Increment day
-        currentDate.setDate(currentDate.getDate() + 1);
+        if (recordsToCreate.length === 0) {
+            this.logger.log(`No eligible days found to update for ${employeeId}.`);
+            return { message: 'No eligible days found to update.', count: 0, updatedDates: [] };
+        }
+
+        if (dryRun) {
+            this.logger.log(`Dry run completed for ${employeeId}. Found ${recordsToCreate.length} potential updates.`);
+            return {
+                message: 'Dry run successful',
+                count: recordsToCreate.length,
+                updatedDates: updatedDateStrings
+            };
+        }
+
+        this.logger.log(`Updating ${recordsToCreate.length} records for ${employeeId}...`);
+        await this.createBulk(recordsToCreate, false, false);
+
+        this.logger.log(`Auto-update completed for ${employeeId}. Dates: ${updatedDateStrings.join(', ')}`);
+        return { 
+            message: 'Timesheet updated successfully',
+            count: recordsToCreate.length,
+            updatedDates: updatedDateStrings
+        };
+
+    } catch (error) {
+        this.logger.error(`Error during auto-update for ${employeeId}: ${error.message}`, error.stack);
+        if (error instanceof HttpException) throw error;
+        throw new HttpException('Failed to auto-update timesheet', HttpStatus.INTERNAL_SERVER_ERROR);
     }
-
-    if (recordsToCreate.length === 0) {
-        return { message: 'No eligible days found to update.', count: 0, updatedDates: [] };
-    }
-
-    // 5. Bulk Create
-    // We update logic to use createBulk 
-    // We rely on the fact we set IDs for existing records to trigger updates
-    await this.createBulk(recordsToCreate, false, false);
-
-    return { 
-        message: 'Timesheet updated successfully',
-        count: recordsToCreate.length,
-        updatedDates: updatedDateStrings
-    };
   }
 
   async findAll(): Promise<EmployeeAttendance[]> {

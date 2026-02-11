@@ -302,12 +302,12 @@ export class EmployeeAttendanceController {
   @UseGuards(JwtAuthGuard)
   @Post('auto-update')
   @ApiOperation({ summary: 'Auto update timesheet for current month' })
-  @ApiBody({ schema: { type: 'object', properties: { employeeId: { type: 'string' }, month: { type: 'string' }, year: { type: 'string' } } } })
+  @ApiBody({ schema: { type: 'object', properties: { employeeId: { type: 'string' }, month: { type: 'string' }, year: { type: 'string' }, dryRun: { type: 'boolean' } } } })
   async autoUpdate(
-    @Body() body: { employeeId: string; month: string; year: string },
+    @Body() body: { employeeId: string; month: string; year: string; dryRun?: boolean },
     @Req() req: any
   ) {
-    return this.employeeAttendanceService.autoUpdateTimesheet(body.employeeId, body.month, body.year);
+    return this.employeeAttendanceService.autoUpdateTimesheet(body.employeeId, body.month, body.year, body.dryRun);
   }
 
   @Get('monthly-details-all/:month/:year')

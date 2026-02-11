@@ -14,7 +14,11 @@ import {
   getRequestNotificationTemplate, 
   getStatusUpdateTemplate, 
   getCancellationTemplate,
-  getEmployeeReceiptTemplate
+  getEmployeeReceiptTemplate,
+  getRejectionConfirmationTemplate,
+  getCancellationRejectionConfirmationTemplate,
+  getApprovalConfirmationTemplate,
+  getCancellationApprovalConfirmationTemplate
 } from '../../common/mail/templates';
 import { ManagerMapping } from '../../managerMapping/entities/managerMapping.entity';
 import { User } from '../../users/entities/user.entity';
@@ -188,6 +192,13 @@ export class LeaveRequestsService {
     await this.notifyEmployeeOfSubmission(savedRequest);
 
     return savedRequest;
+  }
+
+  getLeaveDurationTypes() {
+    return [
+      { label: 'Full Day Application', value: 'Full Day' },
+      { label: 'Half Day Application', value: 'Half Day' }
+    ];
   }
 
   async findUnifiedRequests(
@@ -1067,7 +1078,20 @@ export class LeaveRequestsService {
     return stats;
   }
 
-  async updateStatus(id: number, status: 'Approved' | 'Rejected' | 'Cancelled' | 'Cancellation Approved', employeeId?: string, reviewedBy?: string) {
+  async updateStatus(id: number, status: 'Approved' | 'Rejected' | 'Cancelled' | 'Cancellation Approved', employeeId?: string, reviewedBy?: string, reviewerEmail?: string) {
+    // Resolve Reviewer Email if it's an ID (no @ symbol)
+    if (reviewerEmail && !reviewerEmail.includes('@')) {
+        const reviewerEmp = await this.employeeDetailsRepository.findOne({ where: { employeeId: reviewerEmail } });
+        if (reviewerEmp?.email) {
+            reviewerEmail = reviewerEmp.email;
+        }
+    }
+    
+    // Fallback: If reviewedBy is 'Admin' or email is still invalid/missing, use system admin email
+    if ((!reviewerEmail || !reviewerEmail.includes('@')) && (reviewedBy === 'Admin' || reviewedBy === 'ADMIN')) {
+          reviewerEmail = process.env.ADMIN_EMAIL || process.env.SMTP_USERNAME;
+    }
+
     const request = await this.leaveRequestRepository.findOne({ where: { id } });
     if (!request) {
       throw new NotFoundException('Leave request not found');
@@ -1326,6 +1350,101 @@ export class LeaveRequestsService {
       this.logger.error('Failed to send status update email:', error);
     }
 
+    // --- NEW: Confirmation Email to Reviewer ---
+    // --- NEW: Confirmation Email to Reviewer ---
+    if (status === 'Rejected' && reviewerEmail && reviewerEmail.includes('@')) {
+      try {
+           const emp = await this.employeeDetailsRepository.findOne({ where: { employeeId: request.employeeId } });
+           if (emp) {
+               const subject = `Confirmation: You rejected a request for ${emp.fullName}`;
+               const htmlContent = getRejectionConfirmationTemplate({
+                   reviewerName: reviewedBy || 'Reviewer',
+                   employeeName: emp.fullName,
+                   employeeId: emp.employeeId,
+                   requestType: request.requestType,
+                   startDate: dayjs(request.fromDate).format('YYYY-MM-DD'),
+                   endDate: dayjs(request.toDate).format('YYYY-MM-DD'),
+                   duration: request.duration || 0,
+                   // reason: request.description -- description is the request reason, not rejection reason.
+                   // As we don't capture rejection reason yet, leave undefined.
+                   reason: undefined
+               });
+
+               await this.emailService.sendEmail(
+                   reviewerEmail,
+                   subject,
+                   'Request Rejection Confirmation',
+                   htmlContent
+               );
+               this.logger.log(`Rejection confirmation sent to reviewer: ${reviewerEmail}`);
+           }
+      } catch (error) {
+           this.logger.error('Failed to send rejection confirmation email', error);
+      }
+    }
+
+    // --- NEW: Confirmation Email to Reviewer for APPROVALS ---
+    // --- NEW: Confirmation Email to Reviewer for APPROVALS ---
+    if (status === 'Approved' && reviewerEmail && reviewerEmail.includes('@')) {
+        try {
+            const emp = await this.employeeDetailsRepository.findOne({ where: { employeeId: request.employeeId } });
+            if (emp) {
+                const subject = `Confirmation: You approved a request for ${emp.fullName}`;
+                const htmlContent = getApprovalConfirmationTemplate({
+                    reviewerName: reviewedBy || 'Reviewer',
+                    employeeName: emp.fullName,
+                    employeeId: emp.employeeId,
+                    requestType: request.requestType,
+                    startDate: dayjs(request.fromDate).format('YYYY-MM-DD'),
+                    endDate: dayjs(request.toDate).format('YYYY-MM-DD'),
+                    duration: request.duration || 0,
+                    reason: undefined
+                });
+ 
+                await this.emailService.sendEmail(
+                    reviewerEmail,
+                    subject,
+                    'Request Approval Confirmation',
+                    htmlContent
+                );
+                this.logger.log(`Approval confirmation sent to reviewer: ${reviewerEmail}`);
+            }
+       } catch (error) {
+            this.logger.error('Failed to send approval confirmation email', error);
+       }
+    }
+    
+    // --- NEW: Confirmation Email to Reviewer for CANCELLATION APPROVALS ---
+    // --- NEW: Confirmation Email to Reviewer for CANCELLATION APPROVALS ---
+    if (status === 'Cancellation Approved' && reviewerEmail && reviewerEmail.includes('@')) {
+        try {
+            const emp = await this.employeeDetailsRepository.findOne({ where: { employeeId: request.employeeId } });
+            if (emp) {
+                const checkStart = dayjs(request.fromDate).format('YYYY-MM-DD');
+                const checkEnd = dayjs(request.toDate).format('YYYY-MM-DD');
+
+                const subject = `Confirmation: You cancelled the approved ${request.requestType}`;
+                const htmlContent = getCancellationApprovalConfirmationTemplate({
+                    reviewerName: reviewedBy || 'Reviewer',
+                    employeeName: emp.fullName,
+                    requestType: request.requestType,
+                    dates: `${checkStart} to ${checkEnd}`,
+                    reason: undefined
+                });
+ 
+                await this.emailService.sendEmail(
+                    reviewerEmail,
+                    subject,
+                    'Cancellation Approval Confirmation',
+                    htmlContent
+                );
+                this.logger.log(`Cancellation Approval confirmation sent to reviewer: ${reviewerEmail}`);
+            }
+       } catch (error) {
+            this.logger.error('Failed to send cancellation approval confirmation email', error);
+       }
+     }
+
     return savedRequest;
   }
 
@@ -1357,7 +1476,21 @@ export class LeaveRequestsService {
   }
 
   // NEW: Dedicated API for Rejecting Cancellation
-  async rejectCancellation(id: number, employeeId: string, reviewedBy?: string) {
+  async rejectCancellation(id: number, employeeId: string, reviewedBy?: string, reviewerEmail?: string) {
+    // Resolve Reviewer Email if it's an ID
+    if (reviewerEmail && !reviewerEmail.includes('@')) {
+        const reviewerEmp = await this.employeeDetailsRepository.findOne({ where: { employeeId: reviewerEmail } });
+        if (reviewerEmp?.email) {
+            reviewerEmail = reviewerEmp.email;
+        }
+    }
+
+
+    // Fallback: If reviewedBy is 'Admin' or email is still invalid/missing, use system admin email
+    if ((!reviewerEmail || !reviewerEmail.includes('@')) && (reviewedBy === 'Admin' || reviewedBy === 'ADMIN')) {
+          reviewerEmail = process.env.ADMIN_EMAIL || process.env.SMTP_USERNAME;
+    }
+
     const request = await this.leaveRequestRepository.findOne({
       where: { id },
     });
@@ -1450,6 +1583,38 @@ export class LeaveRequestsService {
       );
     } catch (e) {
       console.error('Failed to send rejection email', e);
+    }
+
+    // --- NEW: Confirmation Email to Reviewer ---
+    // --- NEW: Confirmation Email to Reviewer ---
+    if (reviewerEmail && reviewerEmail.includes('@')) {
+        try {
+            const emp = await this.employeeDetailsRepository.findOne({ where: { employeeId: request.employeeId } });
+            if (emp) {
+                const checkStart = dayjs(request.fromDate).format('YYYY-MM-DD');
+                const checkEnd = dayjs(request.toDate).format('YYYY-MM-DD');
+            
+                const subject = `Confirmation: Cancellation Rejected for ${emp.fullName}`;
+                const htmlContent = getCancellationRejectionConfirmationTemplate({
+                    reviewerName: reviewedBy || 'Reviewer',
+                    employeeName: emp.fullName,
+                    requestType: request.requestType,
+                    dates: `${checkStart} to ${checkEnd}`,
+                    // reason: request.description -- description is the cancellation reason, not rejection reason.
+                    reason: undefined
+                });
+
+                await this.emailService.sendEmail(
+                    reviewerEmail,
+                    subject,
+                    'Cancellation Rejection Confirmation',
+                    htmlContent
+                );
+                this.logger.log(`Cancellation rejection confirmation sent to reviewer: ${reviewerEmail}`);
+            }
+        } catch (error) {
+           this.logger.error('Failed to send cancellation rejection confirmation', error);
+        }
     }
 
     return request;
