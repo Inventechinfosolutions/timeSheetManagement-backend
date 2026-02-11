@@ -16,6 +16,11 @@ export class LeaveRequestsController {
     private readonly fileService: FileService,
   ) {}
 
+  @Get('duration-types')
+  getLeaveDurationTypes() {
+    return this.leaveRequestsService.getLeaveDurationTypes();
+  }
+
   @Post(':employeeId/leave-requests')
   create(@Param('employeeId') employeeId: string, @Body() body: LeaveRequestDto) {
     body.employeeId = employeeId;
@@ -176,7 +181,8 @@ export class LeaveRequestsController {
   ) {
     const user = req.user;
     const reviewerName = user?.aliasLoginName || user?.fullName || 'Admin';
-    return this.leaveRequestsService.updateStatus(+id, status, undefined, reviewerName);
+    const reviewerEmail = user?.loginId || user?.email;
+    return this.leaveRequestsService.updateStatus(+id, status, undefined, reviewerName, reviewerEmail);
   }
 
   @Post(':id/request-modified')
@@ -201,7 +207,8 @@ export class LeaveRequestsController {
   ) {
     const user = req.user;
     const reviewerName = user?.aliasLoginName || user?.fullName || 'Admin';
-    return this.leaveRequestsService.rejectCancellation(+id, employeeId, reviewerName);
+    const reviewerEmail = user?.loginId || user?.email;
+    return this.leaveRequestsService.rejectCancellation(+id, employeeId, reviewerName, reviewerEmail);
   }
 
   @Get(':id/cancellable-dates')

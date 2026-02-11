@@ -164,8 +164,8 @@ export class EmployeeAttendanceService {
     return results;
   }
 
-  async autoUpdateTimesheet(employeeId: string, month: string, year: string): Promise<any> {
-    this.logger.log(`Auto-update started for: ${employeeId}, Month: ${month}/${year}`);
+  async autoUpdateTimesheet(employeeId: string, month: string, year: string, dryRun: boolean = false): Promise<any> {
+    this.logger.log(`Auto-update started for: ${employeeId}, Month: ${month}/${year}, DryRun: ${dryRun}`);
 
     const monthNum = parseInt(month, 10);
     const yearNum = parseInt(year, 10);
@@ -308,6 +308,15 @@ export class EmployeeAttendanceService {
         if (recordsToCreate.length === 0) {
             this.logger.log(`No eligible days found to update for ${employeeId}.`);
             return { message: 'No eligible days found to update.', count: 0, updatedDates: [] };
+        }
+
+        if (dryRun) {
+            this.logger.log(`Dry run completed for ${employeeId}. Found ${recordsToCreate.length} potential updates.`);
+            return {
+                message: 'Dry run successful',
+                count: recordsToCreate.length,
+                updatedDates: updatedDateStrings
+            };
         }
 
         this.logger.log(`Updating ${recordsToCreate.length} records for ${employeeId}...`);
