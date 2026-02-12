@@ -1232,6 +1232,11 @@ export class LeaveRequestsService {
                 // Case 1: Direct link via ID (works for full cancellation/rejection)
                 qb.where("sourceRequestId = :requestId", { requestId: id });
 
+                // NEW: Handle parent ID matching if this is a split cancellation segment
+                if (request.requestModifiedFrom && !isNaN(Number(request.requestModifiedFrom))) {
+                    qb.orWhere("sourceRequestId = :parentId", { parentId: Number(request.requestModifiedFrom) });
+                }
+
                 // Case 2: Link via dates (essential for partial cancellation approvals)
                 // We only do this for cancellation-related statuses to avoid accidental wipes
                 if (status === 'Cancellation Approved' || status === 'Cancelled') {
