@@ -1,5 +1,7 @@
 import { Module } from '@nestjs/common';
-import { ConfigModule } from '@nestjs/config';
+import { APP_INTERCEPTOR } from '@nestjs/core';
+import { NoCacheInterceptor } from './common/interceptors/no-cache.interceptor';
+import { ConfigModule, ConfigService } from '@nestjs/config';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { DatabaseModule } from './database/database.module';
@@ -17,6 +19,9 @@ import { EmployeeAttendance } from './employeeTimeSheet/entities/employeeAttenda
 import { EmployeeDetails } from './employeeTimeSheet/entities/employeeDetails.entity';
 import { MailModule } from './common/mail/mail.module';
 import { NotificationsModule } from './notifications/notifications.module';
+import { CacheModule } from '@nestjs/cache-manager';
+import * as redisStore from 'cache-manager-redis-store';
+import { CachingUtil } from './common/utils/caching.util';
 
 function getEnvFiles(): string[] {
   const envPath = path.join(process.cwd(), '.env');
@@ -50,10 +55,29 @@ function getEnvFiles(): string[] {
     TypeOrmModule.forFeature([EmployeeAttendance, EmployeeDetails]),
     MailModule,
     NotificationsModule,
+    CacheModule.registerAsync({
+      isGlobal: true,
+      imports: [ConfigModule],
+      useFactory: async (configService: ConfigService) => ({
+        store: redisStore,
+        host: configService.get('REDIS_HOST'),
+        port: configService.get('REDIS_PORT'),
+        ttl: 600,
+      }),
+      inject: [ConfigService],
+    }),
     ManagerMappingModule,
   ],
   controllers: [AppController],
-  providers: [AppService, AttendanceCronService],
+  providers: [
+    AppService,
+    AttendanceCronService,
+    CachingUtil,
+    {
+      provide: APP_INTERCEPTOR,
+      useClass: NoCacheInterceptor,
+    },
+  ],
 })
 // Registered ManagerMappingModule
 export class AppModule {}

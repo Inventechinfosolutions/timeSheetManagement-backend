@@ -356,9 +356,19 @@ export class EmployeeAttendanceService {
     // BLOCKING LOGIC: If record is auto-generated from an approved Half Day request
     // Only Admin and Manager can override this block.
     if (attendance.sourceRequestId && !isAdmin && !isManager) {
-      throw new ForbiddenException(
+      // Check if the source request is still in 'Approved' status
+      const sourceRequest = await this.leaveRequestRepository.findOne({ 
+        where: { id: attendance.sourceRequestId } 
+      });
+
+      if (sourceRequest && sourceRequest.status === 'Approved') {
+        throw new ForbiddenException(
           'This attendance record was auto-generated from an approved Half Day request and cannot be edited by the employee.'
-      );
+        );
+      } else {
+        // Automatically unlock if request is cancelled, rejected, or missing
+        attendance.sourceRequestId = null;
+      }
     }
 
     if (!isAdmin && !isManager && !this.isEditableMonth(new Date(attendance.workingDate))) {

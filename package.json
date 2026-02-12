@@ -41,7 +41,6 @@
     "minio": "^8.0.6",
     "multer": "^2.0.2",
     "mysql2": "^3.16.0",
-    "nestjs-typeorm-paginate": "^4.1.0",
     "nodemailer": "^7.0.12",
     "passport": "^0.7.0",
     "passport-jwt": "^4.0.1",
