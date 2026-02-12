@@ -13,6 +13,7 @@ import { ManagerMapping } from '../managerMapping/entities/managerMapping.entity
 import { UsersModule } from '../users/users.module';
 import { AuthModule } from '../auth/auth.module';
 import { MasterModule } from '../master/master.module';
+import { MasterHolidays } from '../master/models/master-holidays.entity';
 import { DocumentUploaderModule } from '../common/document-uploader/document-uploader.module';
 import { DocumentMetaInfo } from '../common/document-uploader/models/documentmetainfo.model';
 import { TimesheetBlocker } from './entities/timesheetBlocker.entity';
@@ -35,6 +36,7 @@ import { FileService } from '../common/core/utils/fileType.utils';
       LeaveRequest,
       DocumentMetaInfo,
       ManagerMapping,
+      MasterHolidays,
     ]),
     UsersModule,
     AuthModule,

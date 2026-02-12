@@ -23,6 +23,7 @@ import {
 import { ManagerMapping } from '../../managerMapping/entities/managerMapping.entity';
 import { User } from '../../users/entities/user.entity';
 import { NotificationsService } from '../../notifications/Services/notifications.service';
+import { MasterHolidays } from '../../master/models/master-holidays.entity';
 
 @Injectable()
 export class LeaveRequestsService {
@@ -62,10 +63,23 @@ export class LeaveRequestsService {
     private managerMappingRepository: Repository<ManagerMapping>,
     @InjectRepository(User)
     private userRepository: Repository<User>,
+    @InjectRepository(MasterHolidays)
+    private masterHolidayRepository: Repository<MasterHolidays>,
     private emailService: EmailService,
     private documentUploaderService: DocumentUploaderService,
     private notificationsService: NotificationsService,
   ) {}
+
+  // Helper to check if holiday
+  private async _isHoliday(date: dayjs.Dayjs): Promise<boolean> {
+    const dateStr = date.format('YYYY-MM-DD');
+    // Using QueryBuilder for robust Date comparison in MySQL
+    const holiday = await this.masterHolidayRepository.createQueryBuilder('h')
+      .where('h.date = :dateStr', { dateStr })
+      .getOne();
+    
+    return !!holiday;
+  }
 
   async create(data: Partial<LeaveRequest>) {
     // Check for overlapping dates based on request type
@@ -480,6 +494,14 @@ export class LeaveRequestsService {
       if (isWknd) {
         continue;
       }
+
+      // Check for Holiday
+      const isHol = await this._isHoliday(currentDate);
+      if (isHol) {
+        continue;
+      }
+
+
 
       // Check if this date is already covered by a cancellation request
       const currentStr = currentDate.format('YYYY-MM-DD');
@@ -1133,7 +1155,6 @@ export class LeaveRequestsService {
     const savedRequest = await this.leaveRequestRepository.save(request);
 
     // --- AUTOMATION: If Half Day Request is APPROVED, update Attendance to 5 hours + Status 'Half Day' ---
-    // --- AUTOMATION: If Half Day Request is APPROVED, update Attendance to 5 hours + Status 'Half Day' ---
     const reqType = request.requestType ? request.requestType.trim().toLowerCase() : '';
     // Check if request type contains "half" to catch "Half Day", "Half-Day", "WFH (Half Day)", etc.
     if (status === 'Approved' && reqType.includes('half')) {
@@ -1196,19 +1217,40 @@ export class LeaveRequestsService {
         }
     }
 
-    // --- CLEANUP: If Half Day Request is REJECTED/CANCELLED, clear sourceRequestId to unlock attendance ---
-    if ((status === 'Rejected' || status === 'Cancelled' || status === 'Cancellation Approved') && reqType.includes('half')) {
+    // --- CLEANUP: If Request is REJECTED/CANCELLED/CANCELLATION APPROVED, clear sourceRequestId to unlock attendance ---
+    if (status === 'Rejected' || status === 'Cancelled' || status === 'Cancellation Approved') {
         try {
-            this.logger.log(`Clearing sourceRequestId for rejected/cancelled Half Day request ID: ${id}`);
-            await this.employeeAttendanceRepository
+            this.logger.log(`Checking for attendance records to unlock (Status: ${status}, Request ID: ${id})`);
+            
+            const query = this.employeeAttendanceRepository
                 .createQueryBuilder()
                 .update(EmployeeAttendance)
-                .set({ sourceRequestId: () => 'NULL' })
-                .where("sourceRequestId = :requestId", { requestId: request.id })
-                .execute();
-            this.logger.log(`Unlocked attendance records for Half Day request ${id}`);
+                .set({ sourceRequestId: () => 'NULL' });
+
+            // Use Brackets to combine ID-based check and Date-based check
+            query.where(new Brackets(qb => {
+                // Case 1: Direct link via ID (works for full cancellation/rejection)
+                qb.where("sourceRequestId = :requestId", { requestId: id });
+
+                // Case 2: Link via dates (essential for partial cancellation approvals)
+                // We only do this for cancellation-related statuses to avoid accidental wipes
+                if (status === 'Cancellation Approved' || status === 'Cancelled') {
+                    qb.orWhere(new Brackets(innerQb => {
+                        innerQb.where("employeeId = :employeeId", { employeeId: request.employeeId })
+                               .andWhere("workingDate BETWEEN :startDate AND :endDate", {
+                                   startDate: dayjs(request.fromDate).format('YYYY-MM-DD'),
+                                   endDate: dayjs(request.toDate).format('YYYY-MM-DD')
+                               });
+                    }));
+                }
+            }));
+
+            const result = await query.execute();
+            if (result.affected && result.affected > 0) {
+                this.logger.log(`Unlocked ${result.affected} attendance records for request ${id}`);
+            }
         } catch (err) {
-            this.logger.error(`Failed to unlock attendance for Half Day request ${id}`, err);
+            this.logger.error(`Failed to unlock attendance for request ${id}`, err);
         }
     }
 
@@ -1469,6 +1511,11 @@ export class LeaveRequestsService {
        }
      }
 
+    // --- CLEANUP: If Cancellation is APPROVED, revert attendance records ---
+    if (status === 'Cancellation Approved') {
+        await this.revertAttendance(request.employeeId, request.fromDate, request.toDate);
+    }
+
     return savedRequest;
   }
 
@@ -1651,29 +1698,26 @@ export class LeaveRequestsService {
     toDate: string,
   ) {
     try {
-      const start = new Date(fromDate);
-      const end = new Date(toDate);
+      // Use dayjs for consistent date handling
+      // Using strings for Between query on DATE column is safer and works in TypeORM/MySQL
+      const startStr = dayjs(fromDate).format('YYYY-MM-DD');
+      const endStr = dayjs(toDate).format('YYYY-MM-DD');
 
-      // Loop dates or use Between query
-      // Using Between is safer for DB operations
-      const startStr = start.toISOString().split('T')[0];
-      const endStr = end.toISOString().split('T')[0];
+      this.logger.log(`Reverting attendance for ${employeeId} from ${startStr} to ${endStr}`);
 
       const records = await this.employeeAttendanceRepository.find({
         where: {
           employeeId,
-          workingDate: Between(
-            new Date(startStr + 'T00:00:00'),
-            new Date(endStr + 'T23:59:59'),
-          ),
+          workingDate: Between(startStr as any, endStr as any),
         },
       });
 
       for (const record of records) {
         // Reset the record to 'empty' state
         record.status = null;
-        record.totalHours = 0;
+        record.totalHours = null;
         record.workLocation = null;
+        record.sourceRequestId = null;
         // We do NOT delete it, just reset it, as per requirements
         await this.employeeAttendanceRepository.save(record);
       }
