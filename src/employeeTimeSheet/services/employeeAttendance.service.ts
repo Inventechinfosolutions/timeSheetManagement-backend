@@ -413,12 +413,20 @@ export class EmployeeAttendanceService {
     const incomingPriority = getPriority(updateDto.status || null, updateDto.workLocation || null);
 
     // Rule: Level 2 (Leave/Half Day) are immutable. Level 1 (CV/WFH) follow newest-wins.
-    // Block if trying to downgrade, or if incoming is same level as existing Level 2 (No-Overwrite).
-    if (incomingPriority < existingPriority) {
-      return attendance; // Block downgrade
-    }
-    if (incomingPriority === existingPriority && existingPriority === 2 && updateDto.status !== null && updateDto.workLocation !== null) {
-      return attendance; // Level 2 cannot overwrite itself
+    // BLOCK if trying to downgrade, or if incoming is same level as existing Level 2 (No-Overwrite).
+    // EXCEPTION 1: Admins and Managers can OVERRIDE any priority rules.
+    // EXCEPTION 2: The record is only "Locked" if it has a sourceRequestId AND its status is currently 'Half Day'.
+    const isOverride = isAdmin || isManager;
+    const isHalfDayStatus = attendance.status === AttendanceStatus.HALF_DAY || String(attendance.status).toLowerCase() === 'half day';
+    const isLocked = !!attendance.sourceRequestId && isHalfDayStatus;
+
+    if (!isOverride && isLocked) {
+      if (incomingPriority < existingPriority) {
+        return attendance; // Block downgrade of records locked by a Half Day request
+      }
+      if (incomingPriority === existingPriority && existingPriority === 2 && updateDto.status !== null && updateDto.workLocation !== null) {
+        return attendance; // Level 2 cannot overwrite itself if locked by a request
+      }
     }
 
     // Preserve workLocation if it exists and updateDto doesn't explicitly change it
@@ -426,6 +434,13 @@ export class EmployeeAttendanceService {
     const existingStatus = attendance.status;
     const isLeave = existingStatus === AttendanceStatus.LEAVE;
     Object.assign(attendance, updateDto);
+
+    // CRITICAL: Clear sourceRequestId on manual updates
+    // This field should ONLY be set when a Half Day request is approved (via leave-requests.service.ts)
+    // All other updates should unlink the record from the original request
+    if (!updateDto.hasOwnProperty('sourceRequestId')) {
+        attendance.sourceRequestId = null;
+    }
     
     // If workLocation was set (WFH, Client Visit) and updateDto doesn't explicitly clear it (undefined), preserve it.
     // Explicit null MEANs clear it.
