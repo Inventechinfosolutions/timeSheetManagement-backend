@@ -1184,7 +1184,8 @@ export class LeaveRequestsService {
                  const halfDayStatus = typeof AttendanceStatus !== 'undefined' ? (AttendanceStatus as any).HALF_DAY : 'Half Day';
 
                  if (!attendance) {
-                     this.logger.log(`Creating new attendance record for ${request.employeeId} on ${targetDate.format('YYYY-MM-DD')}`);
+                     this.logger.log(`[HALF_DAY_CREATE] Creating new attendance record for ${request.employeeId} on ${targetDate.format('YYYY-MM-DD')}`);
+                     this.logger.log(`[HALF_DAY_CREATE] Setting sourceRequestId to: ${request.id}`);
                      attendance = this.employeeAttendanceRepository.create({
                          employeeId: request.employeeId,
                          workingDate: startOfDay,
@@ -1193,11 +1194,14 @@ export class LeaveRequestsService {
                          sourceRequestId: request.id,
                          // workLocation: 'Half Day' <-- REMOVED
                      });
-                     await this.employeeAttendanceRepository.save(attendance);
+                     const saved = await this.employeeAttendanceRepository.save(attendance);
+                     this.logger.log(`[HALF_DAY_CREATE] Created attendance ID: ${saved.id}, sourceRequestId: ${saved.sourceRequestId}`);
+                     attendance = saved;
                  } else {
-                     this.logger.log(`Updating existing attendance record ${attendance.id} for ${request.employeeId}`);
+                     this.logger.log(`[HALF_DAY_UPDATE] Updating existing attendance record ${attendance.id} for ${request.employeeId}`);
+                     this.logger.log(`[HALF_DAY_UPDATE] Setting sourceRequestId to: ${request.id}`);
                      // Force explicit update via QueryBuilder to ensure it sticks
-                     await this.employeeAttendanceRepository
+                     const updateResult = await this.employeeAttendanceRepository
                         .createQueryBuilder()
                         .update(EmployeeAttendance)
                         .set({ 
@@ -1209,6 +1213,7 @@ export class LeaveRequestsService {
                         })
                         .where("id = :id", { id: attendance.id })
                         .execute();
+                     this.logger.log(`[HALF_DAY_UPDATE] Update result - Affected: ${updateResult.affected || 0}`);
                  }
                  this.logger.log(`Auto-updated attendance for ${request.employeeId} on ${targetDate.format('YYYY-MM-DD')} to 5hrs (Half Day)`);
             }
@@ -1220,12 +1225,68 @@ export class LeaveRequestsService {
     // --- CLEANUP: If Request is REJECTED/CANCELLED/CANCELLATION APPROVED, clear sourceRequestId to unlock attendance ---
     if (status === 'Rejected' || status === 'Cancelled' || status === 'Cancellation Approved') {
         try {
-            this.logger.log(`Checking for attendance records to unlock (Status: ${status}, Request ID: ${id})`);
+            this.logger.log(`[SOURCE_REQUEST_CLEAR] ===== START CLEANUP =====`);
+            this.logger.log(`[SOURCE_REQUEST_CLEAR] Status: ${status}, Request ID: ${id}`);
+            this.logger.log(`[SOURCE_REQUEST_CLEAR] EmployeeID: ${request.employeeId}, FromDate: ${request.fromDate}, ToDate: ${request.toDate}`);
+            this.logger.log(`[SOURCE_REQUEST_CLEAR] RequestModifiedFrom: ${request.requestModifiedFrom}`);
             
+            // STEP 1: Find all attendance records that SHOULD be cleared
+            const attendanceToCheck = await this.employeeAttendanceRepository
+                .createQueryBuilder('ea')
+                .where(new Brackets(qb => {
+                    // Case 1: Direct link via ID
+                    qb.where("ea.sourceRequestId = :requestId", { requestId: id });
+
+                    // Case 2: Handle parent ID matching if this is a split cancellation segment
+                    if (request.requestModifiedFrom && !isNaN(Number(request.requestModifiedFrom))) {
+                        qb.orWhere("ea.sourceRequestId = :parentId", { parentId: Number(request.requestModifiedFrom) });
+                    }
+
+                    // Case 3: Link via dates (essential for partial cancellation approvals)
+                    if (status === 'Cancellation Approved' || status === 'Cancelled') {
+                        qb.orWhere(new Brackets(innerQb => {
+                            innerQb.where("ea.employeeId = :employeeId", { employeeId: request.employeeId })
+                                   .andWhere("ea.workingDate BETWEEN :startDate AND :endDate", {
+                                       startDate: dayjs(request.fromDate).format('YYYY-MM-DD'),
+                                       endDate: dayjs(request.toDate).format('YYYY-MM-DD')
+                                   });
+                        }));
+                    }
+                }))
+                .getMany();
+
+            this.logger.log(`[SOURCE_REQUEST_CLEAR] Found ${attendanceToCheck.length} attendance records to check`);
+            
+            if (attendanceToCheck.length > 0) {
+                attendanceToCheck.forEach((att, index) => {
+                    this.logger.log(`[SOURCE_REQUEST_CLEAR] Record ${index + 1}: ID=${att.id}, Date=${att.workingDate}, SourceRequestId=${att.sourceRequestId}, Status=${att.status}`);
+                });
+            } else {
+                this.logger.warn(`[SOURCE_REQUEST_CLEAR] ⚠️ NO attendance records found matching criteria! This might indicate:`);
+                this.logger.warn(`[SOURCE_REQUEST_CLEAR]   - No attendance records were created for this request`);
+                this.logger.warn(`[SOURCE_REQUEST_CLEAR]   - sourceRequestId was already NULL`);
+                this.logger.warn(`[SOURCE_REQUEST_CLEAR]   - Date range mismatch`);
+            }
+            
+            // STEP 2: Execute the UPDATE query
             const query = this.employeeAttendanceRepository
                 .createQueryBuilder()
-                .update(EmployeeAttendance)
-                .set({ sourceRequestId: () => 'NULL' });
+                .update(EmployeeAttendance);
+            
+            // For Cancellation Approved: Reset ALL fields to null (complete revert)
+            // For Rejected/Cancelled: Only clear sourceRequestId to unlock the record
+            if (status === 'Cancellation Approved') {
+                query.set({ 
+                    status: () => 'NULL',
+                    totalHours: () => 'NULL',
+                    workLocation: () => 'NULL',
+                    sourceRequestId: () => 'NULL'
+                });
+                this.logger.log(`[SOURCE_REQUEST_CLEAR] Full revert mode: clearing status, totalHours, workLocation, sourceRequestId`);
+            } else {
+                query.set({ sourceRequestId: () => 'NULL' });
+                this.logger.log(`[SOURCE_REQUEST_CLEAR] Unlock mode: clearing sourceRequestId only`);
+            }
 
             // Use Brackets to combine ID-based check and Date-based check
             query.where(new Brackets(qb => {
@@ -1235,27 +1296,61 @@ export class LeaveRequestsService {
                 // NEW: Handle parent ID matching if this is a split cancellation segment
                 if (request.requestModifiedFrom && !isNaN(Number(request.requestModifiedFrom))) {
                     qb.orWhere("sourceRequestId = :parentId", { parentId: Number(request.requestModifiedFrom) });
+                    this.logger.log(`[SOURCE_REQUEST_CLEAR] Including parent ID in query: ${request.requestModifiedFrom}`);
                 }
 
                 // Case 2: Link via dates (essential for partial cancellation approvals)
                 // We only do this for cancellation-related statuses to avoid accidental wipes
                 if (status === 'Cancellation Approved' || status === 'Cancelled') {
+                    const formattedStartDate = dayjs(request.fromDate).format('YYYY-MM-DD');
+                    const formattedEndDate = dayjs(request.toDate).format('YYYY-MM-DD');
+                    this.logger.log(`[SOURCE_REQUEST_CLEAR] Date range query: ${formattedStartDate} to ${formattedEndDate}`);
+                    
                     qb.orWhere(new Brackets(innerQb => {
                         innerQb.where("employeeId = :employeeId", { employeeId: request.employeeId })
                                .andWhere("workingDate BETWEEN :startDate AND :endDate", {
-                                   startDate: dayjs(request.fromDate).format('YYYY-MM-DD'),
-                                   endDate: dayjs(request.toDate).format('YYYY-MM-DD')
+                                   startDate: formattedStartDate,
+                                   endDate: formattedEndDate
                                });
                     }));
                 }
             }));
 
+            this.logger.log(`[SOURCE_REQUEST_CLEAR] Executing UPDATE query...`);
             const result = await query.execute();
+            
+            this.logger.log(`[SOURCE_REQUEST_CLEAR] UPDATE Result - Affected: ${result.affected || 0}`);
+            
             if (result.affected && result.affected > 0) {
-                this.logger.log(`Unlocked ${result.affected} attendance records for request ${id}`);
+                this.logger.log(`[SOURCE_REQUEST_CLEAR] ✅ Successfully unlocked ${result.affected} attendance records for request ${id}`);
+                
+                // STEP 3: Verify the update was successful
+                const verifyRecords = await this.employeeAttendanceRepository
+                    .createQueryBuilder('ea')
+                    .where("ea.employeeId = :employeeId", { employeeId: request.employeeId })
+                    .andWhere("ea.workingDate BETWEEN :startDate AND :endDate", {
+                        startDate: dayjs(request.fromDate).format('YYYY-MM-DD'),
+                        endDate: dayjs(request.toDate).format('YYYY-MM-DD')
+                    })
+                    .getMany();
+                    
+                this.logger.log(`[SOURCE_REQUEST_CLEAR] === VERIFICATION AFTER UPDATE ===`);
+                verifyRecords.forEach((att, index) => {
+                    this.logger.log(`[SOURCE_REQUEST_CLEAR] After Update Record ${index + 1}: ID=${att.id}, Date=${att.workingDate}, SourceRequestId=${att.sourceRequestId}, Status=${att.status}`);
+                });
+            } else {
+                this.logger.warn(`[SOURCE_REQUEST_CLEAR] ⚠️ UPDATE executed but 0 rows affected!`);
+                this.logger.warn(`[SOURCE_REQUEST_CLEAR] This indicates the WHERE clause didn't match any records.`);
+                this.logger.warn(`[SOURCE_REQUEST_CLEAR] Possible reasons:`);
+                this.logger.warn(`[SOURCE_REQUEST_CLEAR]   1. sourceRequestId was already NULL`);
+                this.logger.warn(`[SOURCE_REQUEST_CLEAR]   2. Date format mismatch in BETWEEN clause`);
+                this.logger.warn(`[SOURCE_REQUEST_CLEAR]   3. EmployeeID mismatch`);
             }
+            
+            this.logger.log(`[SOURCE_REQUEST_CLEAR] ===== END CLEANUP =====`);
         } catch (err) {
-            this.logger.error(`Failed to unlock attendance for request ${id}`, err);
+            this.logger.error(`[SOURCE_REQUEST_CLEAR] ❌ ERROR Failed to unlock attendance for request ${id}:`, err);
+            this.logger.error(`[SOURCE_REQUEST_CLEAR] Error details:`, err.stack);
         }
     }
 
@@ -1516,11 +1611,15 @@ export class LeaveRequestsService {
        }
      }
 
-    // --- CLEANUP: If Cancellation is APPROVED, revert attendance records ---
-    if (status === 'Cancellation Approved') {
-        await this.revertAttendance(request.employeeId, request.fromDate, request.toDate);
-    }
-
+    // --- CLEANUP: Cancellation Approved attendance handling ---
+    // NOTE: The cleanup section (lines 1220-1341) already clears sourceRequestId to NULL.
+    // We do NOT call revertAttendance() here because:
+    // 1. It's redundant (cleanup already clears sourceRequestId)
+    // 2. It can trigger cascading re-approval automation that re-sets sourceRequestId
+    // 3. The attendance records should remain as-is after sourceRequestId is cleared
+    //
+    // Previously: await this.revertAttendance(...) was called here, causing sourceRequestId to be re-set!
+    
     return savedRequest;
   }
 

@@ -37,4 +37,8 @@ export class EmployeeAttendanceDto {
   @IsEnum(AttendanceStatus)
   @IsOptional()
   status: AttendanceStatus;
+
+  @IsNumber()
+  @IsOptional()
+  sourceRequestId: number;
 }

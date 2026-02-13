@@ -82,6 +82,10 @@ export class EmployeeAttendanceService {
       }
 
       if (existingRecord) {
+        this.logger.log(`[ATTENDANCE_CREATE] Found existing record ID: ${existingRecord.id}, Date: ${existingRecord.workingDate}`);
+        this.logger.log(`[ATTENDANCE_CREATE] Existing sourceRequestId: ${existingRecord.sourceRequestId}`);
+        this.logger.log(`[ATTENDANCE_CREATE] Incoming sourceRequestId: ${createEmployeeAttendanceDto.sourceRequestId}`);
+        
         // Priority Hierarchy: Level 2 (Leave/Half Day) > Level 1 (Client Visit/WFH)
         const getPriority = (status: string | null, location: string | null) => {
           if (status === AttendanceStatus.LEAVE || String(status).toLowerCase() === 'leave') return 2;
@@ -96,15 +100,22 @@ export class EmployeeAttendanceService {
 
         // Rule: Level 2 (Leave/Half Day) are immutable. Level 1 (CV/WFH) follow newest-wins.
         // Block if trying to downgrade, or if incoming is same level as existing Level 2 (No-Overwrite).
-        if (incomingPriority < existingPriority) {
-          return existingRecord; // Block downgrade
-        }
-        if (incomingPriority === existingPriority && existingPriority === 2) {
-          return existingRecord; // Level 2 cannot overwrite itself
+        // Admin/Manager can override all blocking rules
+        if (!isAdmin && !isManager) {
+          if (incomingPriority < existingPriority) {
+            this.logger.log(`[ATTENDANCE_CREATE] Blocking downgrade: existing priority ${existingPriority} > incoming ${incomingPriority}`);
+            return existingRecord; // Block downgrade
+          }
+          if (incomingPriority === existingPriority && existingPriority === 2) {
+            this.logger.log(`[ATTENDANCE_CREATE] Blocking Level 2 self-overwrite attempt`);
+            return existingRecord; // Level 2 cannot overwrite itself
+          }
         }
         
         // Update existing record
+        this.logger.log(`[ATTENDANCE_CREATE] Updating existing record with new data`);
         Object.assign(existingRecord, createEmployeeAttendanceDto);
+        
         if (
           !createEmployeeAttendanceDto.status &&
           existingRecord.totalHours !== undefined &&
@@ -116,9 +127,15 @@ export class EmployeeAttendanceService {
             existingRecord.workLocation || undefined,
           );
         }
-        return await this.employeeAttendanceRepository.save(existingRecord);
+        
+        const saved = await this.employeeAttendanceRepository.save(existingRecord);
+        this.logger.log(`[ATTENDANCE_CREATE] Updated record ID: ${saved.id}, sourceRequestId after save: ${saved.sourceRequestId}`);
+        return saved;
       }
 
+      this.logger.log(`[ATTENDANCE_CREATE] Creating NEW attendance record for ${createEmployeeAttendanceDto.employeeId} on ${createEmployeeAttendanceDto.workingDate}`);
+      this.logger.log(`[ATTENDANCE_CREATE] sourceRequestId being set to: ${createEmployeeAttendanceDto.sourceRequestId}`);
+      
       const attendance = this.employeeAttendanceRepository.create(
         createEmployeeAttendanceDto,
       );
@@ -136,7 +153,9 @@ export class EmployeeAttendanceService {
         );
       }
 
-      return await this.employeeAttendanceRepository.save(attendance);
+      const saved = await this.employeeAttendanceRepository.save(attendance);
+      this.logger.log(`[ATTENDANCE_CREATE] Created attendance ID: ${saved.id}, sourceRequestId after save: ${saved.sourceRequestId}`);
+      return saved;
     } catch (error) {
       if (error instanceof BadRequestException) throw error;
       throw new BadRequestException('Failed to create: ' + error.message);
@@ -353,19 +372,28 @@ export class EmployeeAttendanceService {
   async update(id: number, updateDto: Partial<EmployeeAttendanceDto>, isAdmin: boolean = false, isManager: boolean = false): Promise<EmployeeAttendance | null> {
     const attendance = await this.findOne(id);
     
+    this.logger.log(`[ATTENDANCE_UPDATE] ===== START UPDATE =====`);
+    this.logger.log(`[ATTENDANCE_UPDATE] Updating attendance ID: ${id}, EmployeeID: ${attendance.employeeId}`);
+    this.logger.log(`[ATTENDANCE_UPDATE] Date: ${attendance.workingDate}, Current sourceRequestId: ${attendance.sourceRequestId}`);
+    this.logger.log(`[ATTENDANCE_UPDATE] Incoming sourceRequestId in DTO: ${(updateDto as any).sourceRequestId}`);
+    this.logger.log(`[ATTENDANCE_UPDATE] isAdmin: ${isAdmin}, isManager: ${isManager}`);
+    
     // BLOCKING LOGIC: If record is auto-generated from an approved Half Day request
     // Only Admin and Manager can override this block.
     if (attendance.sourceRequestId && !isAdmin && !isManager) {
+      this.logger.log(`[ATTENDANCE_UPDATE] Record has sourceRequestId ${attendance.sourceRequestId}, checking source request status...`);
       // Check if the source request is still in 'Approved' status
       const sourceRequest = await this.leaveRequestRepository.findOne({ 
         where: { id: attendance.sourceRequestId } 
       });
 
       if (sourceRequest && sourceRequest.status === 'Approved') {
+        this.logger.warn(`[ATTENDANCE_UPDATE] ⚠️ Blocking update: Source request ${attendance.sourceRequestId} is still Approved`);
         throw new ForbiddenException(
           'This attendance record was auto-generated from an approved Half Day request and cannot be edited by the employee.'
         );
       } else {
+        this.logger.log(`[ATTENDANCE_UPDATE] Source request not Approved or missing, auto-unlocking...`);
         // Automatically unlock if request is cancelled, rejected, or missing
         attendance.sourceRequestId = null;
       }
@@ -391,6 +419,7 @@ export class EmployeeAttendanceService {
     // Rule: Delete future records if hours are cleared AND no workLocation is set
     // But NEVER delete records with workLocation (WFH, Client Visit) - preserve them even with 0 hours
     if ((updateDto.totalHours === 0 || updateDto.totalHours === null) && workingDateObj > today && !hasWorkLocation) {
+        this.logger.log(`[ATTENDANCE_UPDATE] Deleting future record with 0 hours and no workLocation`);
         await this.employeeAttendanceRepository.delete(id);
         return null;
     }
@@ -432,9 +461,11 @@ export class EmployeeAttendanceService {
 
     if (!isOverride && isLocked) {
       if (incomingPriority < existingPriority) {
+        this.logger.log(`[ATTENDANCE_UPDATE] Blocking downgrade of locked record`);
         return attendance; // Block downgrade of records locked by a Half Day request
       }
       if (incomingPriority === existingPriority && existingPriority === 2 && updateDto.status !== null && updateDto.workLocation !== null) {
+        this.logger.log(`[ATTENDANCE_UPDATE] Blocking Level 2 self-overwrite of locked record`);
         return attendance; // Level 2 cannot overwrite itself if locked by a request
       }
     }
@@ -449,7 +480,10 @@ export class EmployeeAttendanceService {
     // This field should ONLY be set when a Half Day request is approved (via leave-requests.service.ts)
     // All other updates should unlink the record from the original request
     if (!updateDto.hasOwnProperty('sourceRequestId')) {
+        this.logger.log(`[ATTENDANCE_UPDATE] Clearing sourceRequestId (manual update)`);
         attendance.sourceRequestId = null;
+    } else {
+        this.logger.log(`[ATTENDANCE_UPDATE] Preserving sourceRequestId from updateDto: ${(updateDto as any).sourceRequestId}`);
     }
     
     // If workLocation was set (WFH, Client Visit) and updateDto doesn't explicitly clear it (undefined), preserve it.
