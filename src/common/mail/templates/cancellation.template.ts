@@ -53,12 +53,12 @@ export const getCancellationTemplate = (data: CancellationData) => {
       Please log in to the portal for more details.
     </p>
 
-    <div style="text-align: left; margin-top: 40px;">
+    <div style="text-align: center; margin-top: 40px;">
       <a href="https://timesheet.inventech-developer.in" class="btn">LOGIN TO PORTAL →</a>
     </div>
   `;
 
   const headerLabel = isRevert ? 'CANCELLATION REVERTED' : isRevertBack ? `${data.requestType} REVERTED` : `${data.requestType} CANCELLATION`;
 
-  return baseLayout(content, `${data.requestType} Update`, headerLabel, 'white');
+  return baseLayout(content, `${data.requestType} Update`, headerLabel);
 };

@@ -129,6 +129,12 @@ export class EmployeeAttendanceService {
         this.logger.log(`[ATTENDANCE_CREATE] Existing sourceRequestId: ${existingRecord.sourceRequestId}`);
         this.logger.log(`[ATTENDANCE_CREATE] Incoming sourceRequestId: ${createEmployeeAttendanceDto.sourceRequestId}`);
         
+        // GUARD: Protect Approved Leaves for non-privileged users
+        if (!isPrivileged && existingRecord.sourceRequestId && !createEmployeeAttendanceDto.sourceRequestId) {
+          this.logger.warn(`[ATTENDANCE_RESTRICTION] Blocking manual update for record ${existingRecord.id} because it is linked to Leave Request ${existingRecord.sourceRequestId}`);
+          return existingRecord; // Skip update and return existing record
+        }
+
         // Update existing record
         this.logger.log(`[ATTENDANCE_CREATE] Updating existing record with new data`);
         

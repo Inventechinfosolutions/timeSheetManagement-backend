@@ -38,13 +38,21 @@ export const getEmployeeReceiptTemplate = (data: EmployeeReceiptData) => {
       }
   }
 
-  const content = `
-    <p style="font-size: 16px; color: #1f2937;">Dear ${data.employeeName},</p>
-    <p style="font-size: 14px; color: #4b5563; line-height: 1.6;">
-      Your request for <strong>${requestDisplayName}</strong> titled "<strong>${data.title}</strong>" has been successfully submitted. It is now awaiting review.
-    </p>
-
-    <div class="day-details-container">
+  const dayDetailsSection = (fHalf === sHalf) 
+    ? `
+    <div class="day-details-container" style="background-color: #f8fafc; border: 1px solid #e2e8f0;">
+      <div class="day-details-header">
+        <span style="font-size: 16px; margin-right: 8px;">🕒</span> DAY DETAILS
+      </div>
+      <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px; display: flex; justify-content: space-between; align-items: center;">
+          <span style="font-size: 14px; font-weight: 700; color: #1d4ed8;">Full Day : </span>
+          <span style="background-color: #dbeafe; color: #1e40af; font-size: 12px; font-weight: 700; padding: 4px 12px; border-radius: 6px;">
+              ${fHalf}
+          </span>
+      </div>
+    </div>`
+    : `
+    <div class="day-details-container" style="background-color: #f8fafc; border: 1px solid #e2e8f0;">
       <div class="day-details-header">
         <span style="font-size: 16px; margin-right: 8px;">🕒</span> DAY DETAILS
       </div>
@@ -52,15 +60,23 @@ export const getEmployeeReceiptTemplate = (data: EmployeeReceiptData) => {
         <tr>
           <td class="half-card">
             <div class="half-label">FIRST HALF</div>
-            <div class="half-value">${data.firstHalf || 'Office'}</div>
+            <div class="half-value">${fHalf}</div>
           </td>
           <td class="half-card">
             <div class="half-label">SECOND HALF</div>
-            <div class="half-value">${data.secondHalf || 'Office'}</div>
+            <div class="half-value">${sHalf}</div>
           </td>
         </tr>
       </table>
-    </div>
+    </div>`;
+
+  const content = `
+    <p style="font-size: 16px; color: #1f2937;">Dear ${data.employeeName},</p>
+    <p style="font-size: 14px; color: #4b5563; line-height: 1.6;">
+      Your request for <strong>${requestDisplayName}</strong> titled "<strong>${data.title}</strong>" has been successfully submitted. It is now awaiting review.
+    </p>
+
+    ${dayDetailsSection}
 
     <p style="font-size: 16px; font-weight: 700; margin-top: 20px;">
       Current Status: <span style="color: ${statusColor}; text-transform: uppercase;">${data.status}</span>
@@ -70,10 +86,10 @@ export const getEmployeeReceiptTemplate = (data: EmployeeReceiptData) => {
       You will receive another update once your request has been reviewed by your manager or administrator.
     </p>
 
-    <div style="text-align: left; margin-top: 40px;">
+    <div style="text-align: center; margin-top: 40px;">
       <a href="https://timesheet.inventech-developer.in" class="btn">VIEW IN PORTAL →</a>
     </div>
   `;
 
-  return baseLayout(content, `${requestDisplayName} Submitted`, 'SUBMISSION SUCCESSFUL', 'white');
+  return baseLayout(content, `${requestDisplayName} Submitted`, 'SUBMISSION SUCCESSFUL');
 };

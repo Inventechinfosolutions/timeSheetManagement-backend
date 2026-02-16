@@ -668,6 +668,27 @@ export class LeaveRequestsService {
       // Notify Manager
       await this.notifyManagerOfRequest(saved);
       
+      // Notify Employee (Submission Receipt)
+      await this.notifyEmployeeOfSubmission(saved);
+
+      // --- Notify Manager via App Notification ---
+      try {
+        const mapping = await this.managerMappingRepository.findOne({ where: { employeeId, status: 'ACTIVE' as any } });
+        if (mapping) {
+            const manager = await this.userRepository.findOne({ where: { aliasLoginName: mapping.managerName } });
+             if (manager && manager.loginId) {
+                await this.notificationsService.createNotification({
+                    employeeId: manager.loginId,
+                    title: 'Cancellation Request',
+                    message: `${employeeId} requested to Cancel an approved Leave.`,
+                    type: 'alert'
+                });
+             }
+        }
+      } catch (e) {
+         this.logger.error(`Failed to create app notification for manager: ${e.message}`);
+      }
+      
       return saved;
     } else {
       // PARTIAL CANCEL - Handle Non-Contiguous Dates by grouping them into ranges
@@ -739,7 +760,6 @@ export class LeaveRequestsService {
         
         createdRequests.push(savedNew);
 
-        // Notify Admin of this specific segment
         await this.notifyAdminOfCancellationRequest(savedNew, employeeId, range.count);
         
         // Notify Manager of this specific segment
@@ -747,6 +767,27 @@ export class LeaveRequestsService {
         
         // Notify Employee (Submission Receipt) of this specific segment
         await this.notifyEmployeeOfSubmission(savedNew);
+
+        // --- Notify Manager via App Notification ---
+        try {
+          const mapping = await this.managerMappingRepository.findOne({ where: { employeeId, status: 'ACTIVE' as any } });
+          if (mapping) {
+              const manager = await this.userRepository.findOne({ where: { aliasLoginName: mapping.managerName } });
+               if (manager && manager.loginId) {
+                  await this.notificationsService.createNotification({
+                      employeeId: manager.loginId,
+                      title: 'Cancellation Request',
+                      message: `${employeeId} requested to Cancel an approved Leave.`,
+                      type: 'alert'
+                  });
+               }
+          }
+          // Notify Admin (optional, if admin has an employee ID for notifications)
+          // const admin = await this.userRepository.findOne({ where: { userType: 'ADMIN' } });
+          // if (admin && admin.loginId) { ... }
+        } catch (e) {
+           this.logger.error(`Failed to create app notification for manager: ${e.message}`);
+        }
       }
 
       // Updated Original Request Duration - REMOVED per requirements.
@@ -1227,9 +1268,19 @@ export class LeaveRequestsService {
           }
       }
       
-      // Fallback: If reviewedBy is 'Admin' or email is still invalid/missing, use system admin email
-      if ((!reviewerEmail || !reviewerEmail.includes('@')) && (reviewedBy === 'Admin' || reviewedBy === 'ADMIN')) {
-            reviewerEmail = process.env.ADMIN_EMAIL || process.env.SMTP_USERNAME;
+      // Fallback: If reviewerEmail still invalid, try looking up by reviewer name
+      if (!reviewerEmail || !reviewerEmail.includes('@')) {
+          if (reviewedBy) {
+              const mgr = await this.employeeDetailsRepository.findOne({ where: { fullName: reviewedBy } });
+              if (mgr?.email) {
+                  reviewerEmail = mgr.email;
+              }
+          }
+
+          // Final fallback for Admin
+          if ((!reviewerEmail || !reviewerEmail.includes('@')) && (reviewedBy === 'Admin' || reviewedBy === 'ADMIN')) {
+              reviewerEmail = process.env.ADMIN_EMAIL || process.env.SMTP_USERNAME;
+          }
       }
 
       const request = await this.leaveRequestRepository.findOne({ where: { id } });
@@ -1385,7 +1436,18 @@ export class LeaveRequestsService {
                   }
               }));
 
-              await query.execute();
+              const result = await query.execute();
+              const affectedCount = result.affected ?? 0;
+              this.logger.log(`[SOURCE_REQUEST_CLEAR] Successfully unlocked ${affectedCount} records for request ${id}`);
+              
+              // Add a summary to attendanceUpdates for visibility in response
+              if (affectedCount > 0) {
+                  attendanceUpdates.push({
+                      action: 'UNLOCKED',
+                      affectedCount: affectedCount,
+                      message: `Unlocked attendance records for request ${id} (Status: ${status})`
+                  });
+              }
           } catch (err) {
               this.logger.error(`[SOURCE_REQUEST_CLEAR] ❌ ERROR Failed to unlock attendance for request ${id}:`, err);
           }
@@ -1456,10 +1518,10 @@ export class LeaveRequestsService {
                  let template;
                  let subject;
                  
-                 if (status === 'Approved') {
+                 if (status === 'Approved' || status === 'Modification Approved') {
                      template = getApprovalConfirmationTemplate;
                      subject = `Confirmation: You approved a request for ${emp.fullName}`;
-                 } else if (status === 'Rejected') {
+                 } else if (status === 'Rejected' || status === 'Modification Rejected' || status === 'Modification Cancelled') {
                      template = getRejectionConfirmationTemplate;
                      subject = `Confirmation: You rejected a request for ${emp.fullName}`;
                  } else if (status === 'Cancellation Approved') {
@@ -1489,11 +1551,27 @@ export class LeaveRequestsService {
         }
       }
 
-      return {
-        request: savedRequest,
+      const response = {
+        message: `Request ${status} successfully`,
+        status: status,
+        id: id,
         employeeId: request.employeeId,
-        attendanceUpdates: attendanceUpdates
+        requestType: request.requestType,
+        updatedRequest: {
+            id: savedRequest.id,
+            status: savedRequest.status,
+            reviewedBy: savedRequest.reviewedBy,
+            submittedDate: savedRequest.submittedDate,
+            firstHalf: savedRequest.firstHalf,
+            secondHalf: savedRequest.secondHalf
+        },
+        attendanceUpdates: attendanceUpdates,
+        attendanceUpdatesCount: attendanceUpdates.length,
+        timestamp: new Date().toISOString()
       };
+
+      this.logger.log(`[STATUS_UPDATE_SUCCESS] Request ${id} ${status}. Attendance updates: ${attendanceUpdates.length}`);
+      return response;
     } catch (error) {
       this.logger.error(`Error updating leave request status for ID ${id}:`, error);
       if (error instanceof NotFoundException || error instanceof ForbiddenException || error instanceof BadRequestException) throw error;
@@ -1588,6 +1666,26 @@ export class LeaveRequestsService {
     // Copy documents from the parent request to this new modification record
     await this.copyRequestDocuments(parent.id, savedModification.id);
 
+    // --- Notify Manager via App Notification ---
+    if (modification.status === 'Requesting for Modification') {
+        try {
+            const mapping = await this.managerMappingRepository.findOne({ where: { employeeId: parent.employeeId, status: 'ACTIVE' as any } });
+            if (mapping) {
+                const manager = await this.userRepository.findOne({ where: { aliasLoginName: mapping.managerName } });
+                if (manager && manager.loginId) {
+                    await this.notificationsService.createNotification({
+                        employeeId: manager.loginId,
+                        title: 'Modification Request',
+                        message: `${parent.employeeId} requested to Modify an approved Leave.`,
+                        type: 'alert'
+                    });
+                }
+            }
+        } catch (e) {
+            this.logger.error(`Failed to create app notification for manager: ${e.message}`);
+        }
+    }
+
     return savedModification;
   }
 
@@ -1602,9 +1700,20 @@ export class LeaveRequestsService {
     }
 
 
-    // Fallback: If reviewedBy is 'Admin' or email is still invalid/missing, use system admin email
-    if ((!reviewerEmail || !reviewerEmail.includes('@')) && (reviewedBy === 'Admin' || reviewedBy === 'ADMIN')) {
-          reviewerEmail = process.env.ADMIN_EMAIL || process.env.SMTP_USERNAME;
+    // Fallback: IfReviewedBy is NOT an email, try to resolve via fullName or admin fallback
+    if (!reviewerEmail || !reviewerEmail.includes('@')) {
+        // Try lookup by fullName (reviewedBy)
+        if (reviewedBy) {
+            const mgr = await this.employeeDetailsRepository.findOne({ where: { fullName: reviewedBy } });
+            if (mgr?.email) {
+                reviewerEmail = mgr.email;
+            }
+        }
+        
+        // Final fallback for Admin
+        if ((!reviewerEmail || !reviewerEmail.includes('@')) && (reviewedBy === 'Admin' || reviewedBy === 'ADMIN')) {
+            reviewerEmail = process.env.ADMIN_EMAIL || process.env.SMTP_USERNAME;
+        }
     }
 
     const request = await this.leaveRequestRepository.findOne({
@@ -1888,7 +1997,7 @@ export class LeaveRequestsService {
       where: { 
         employeeId, 
         isReadEmployee: false, // Fetch unread updates
-        status: In(['Approved', 'Rejected', 'Cancellation Approved', 'Cancelled', 'Request Modified', 'Cancellation Rejected'])
+        status: In(['Approved', 'Rejected', 'Cancellation Approved', 'Cancelled', 'Request Modified', 'Cancellation Rejected', 'Modification Approved', 'Modification Rejected', 'Modification Cancelled'])
       },
       order: { createdAt: 'DESC' }
     });
