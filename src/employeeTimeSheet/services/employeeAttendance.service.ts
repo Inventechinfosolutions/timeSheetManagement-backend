@@ -9,13 +9,10 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Between, Repository, LessThanOrEqual, MoreThanOrEqual, In } from 'typeorm';
-// import { Between, Repository } from 'typeorm';
-// import { EmployeeAttendance } from '../entities/employeeAttendance.entity';
-// import { AttendanceStatus } from '../enums/attendance-status.enum';
 import { EmployeeAttendance } from '../entities/employeeAttendance.entity';
 import { AttendanceStatus } from '../enums/attendance-status.enum';
+import { WorkLocation } from '../enums/work-location.enum';
 import { LeaveRequest } from '../entities/leave-request.entity';
-// import { EmployeeDetails } from '../entities/employeeDetails.entity';
 import { EmployeeAttendanceDto } from '../dto/employeeAttendance.dto';
 import { MasterHolidayService } from '../../master/service/master-holiday.service';
 import { TimesheetBlockerService } from './timesheetBlocker.service';
@@ -37,6 +34,46 @@ export class EmployeeAttendanceService {
     private readonly masterHolidayService: MasterHolidayService,
     private readonly blockerService: TimesheetBlockerService,
   ) {}
+
+  /**
+   * Calculate total working hours based on firstHalf and secondHalf values
+   * @param firstHalf - Activity for first half ('Work From Home', 'Client Visit', 'Office', 'Leave', etc.)
+   * @param secondHalf - Activity for second half
+   * @returns Total working hours (0, 4.5, or 9)
+   */
+  private calculateTotalHours(firstHalf: string | null, secondHalf: string | null): number {
+    const getHalfHours = (half: string | null): number => {
+      if (!half || half === 'Leave') return 0;
+      
+      const normalized = half.toLowerCase();
+      if (normalized.includes('office') || 
+          normalized.includes('wfh') || 
+          normalized.includes('work from home') || 
+          normalized.includes('client visit')) {
+        return 4.5;
+      }
+      
+      return 0; // Default for unknown values
+    };
+    
+    return getHalfHours(firstHalf) + getHalfHours(secondHalf);
+  }
+
+  private determineDefaultActivity(firstHalf: string | null, secondHalf: string | null): string {
+    const h1 = (firstHalf || '').toLowerCase();
+    const h2 = (secondHalf || '').toLowerCase();
+    
+    // If one half has a work activity, use that
+    if (h1.includes('wfh') || h1.includes('work from home')) return 'Work From Home';
+    if (h2.includes('wfh') || h2.includes('work from home')) return 'Work From Home';
+    if (h1.includes('client') || h1.includes('visit')) return 'Client Visit';
+    if (h2.includes('client') || h2.includes('visit')) return 'Client Visit';
+    if (h1.includes('office')) return 'Office';
+    if (h2.includes('office')) return 'Office';
+    
+    return 'Office'; // Default to Office
+  }
+
 
   async create(createEmployeeAttendanceDto: EmployeeAttendanceDto, isAdmin: boolean = false, isManager: boolean = false): Promise<EmployeeAttendance | null> {
     try {
@@ -81,40 +118,38 @@ export class EmployeeAttendanceService {
          return null; 
       }
 
+      // Force work_location to NULL - we use first_half/second_half instead
+      createEmployeeAttendanceDto.workLocation = null;
+
       if (existingRecord) {
         this.logger.log(`[ATTENDANCE_CREATE] Found existing record ID: ${existingRecord.id}, Date: ${existingRecord.workingDate}`);
         this.logger.log(`[ATTENDANCE_CREATE] Existing sourceRequestId: ${existingRecord.sourceRequestId}`);
         this.logger.log(`[ATTENDANCE_CREATE] Incoming sourceRequestId: ${createEmployeeAttendanceDto.sourceRequestId}`);
         
-        // Priority Hierarchy: Level 2 (Leave/Half Day) > Level 1 (Client Visit/WFH)
-        const getPriority = (status: string | null, location: string | null) => {
-          if (status === AttendanceStatus.LEAVE || String(status).toLowerCase() === 'leave') return 2;
-          if (status === AttendanceStatus.HALF_DAY || String(status).toLowerCase() === 'half day') return 2;
-          if (location === 'Client Visit' || String(location).toLowerCase() === 'client visit') return 1;
-          if (location === 'WFH' || location === 'Work From Home' || String(location).toLowerCase().includes('wfh')) return 1;
-          return 0;
-        };
-
-        const existingPriority = getPriority(existingRecord.status, existingRecord.workLocation);
-        const incomingPriority = getPriority(createEmployeeAttendanceDto.status || null, createEmployeeAttendanceDto.workLocation || null);
-
-        // Rule: Level 2 (Leave/Half Day) are immutable. Level 1 (CV/WFH) follow newest-wins.
-        // Block if trying to downgrade, or if incoming is same level as existing Level 2 (No-Overwrite).
-        // Admin/Manager can override all blocking rules
-        if (!isAdmin && !isManager) {
-          if (incomingPriority < existingPriority) {
-            this.logger.log(`[ATTENDANCE_CREATE] Blocking downgrade: existing priority ${existingPriority} > incoming ${incomingPriority}`);
-            return existingRecord; // Block downgrade
-          }
-          if (incomingPriority === existingPriority && existingPriority === 2) {
-            this.logger.log(`[ATTENDANCE_CREATE] Blocking Level 2 self-overwrite attempt`);
-            return existingRecord; // Level 2 cannot overwrite itself
-          }
-        }
-        
         // Update existing record
         this.logger.log(`[ATTENDANCE_CREATE] Updating existing record with new data`);
+        
+        // Calculate totalHours based on incoming or existing firstHalf/secondHalf
+        const finalFirstHalf = createEmployeeAttendanceDto.firstHalf !== undefined 
+          ? createEmployeeAttendanceDto.firstHalf 
+          : existingRecord.firstHalf;
+        const finalSecondHalf = createEmployeeAttendanceDto.secondHalf !== undefined 
+          ? createEmployeeAttendanceDto.secondHalf 
+          : existingRecord.secondHalf;
+        
+        // If we have firstHalf or secondHalf (either from incoming DTO or existing record), recalculate
+        if (finalFirstHalf || finalSecondHalf) {
+          const calculatedHours = this.calculateTotalHours(finalFirstHalf || null, finalSecondHalf || null);
+          createEmployeeAttendanceDto.totalHours = calculatedHours;
+          this.logger.log(`[ATTENDANCE_CREATE] Calculated totalHours: ${calculatedHours} from firstHalf: ${finalFirstHalf}, secondHalf: ${finalSecondHalf}`);
+        } else if (createEmployeeAttendanceDto.totalHours === null || createEmployeeAttendanceDto.totalHours === undefined) {
+          // If no firstHalf/secondHalf and incoming totalHours is null/undefined, don't overwrite existing
+          delete createEmployeeAttendanceDto.totalHours;
+          this.logger.log(`[ATTENDANCE_CREATE] Skipping null/undefined totalHours to preserve existing value`);
+        }
+        
         Object.assign(existingRecord, createEmployeeAttendanceDto);
+        existingRecord.workLocation = null; // Ensure null
         
         if (
           !createEmployeeAttendanceDto.status &&
@@ -124,8 +159,26 @@ export class EmployeeAttendanceService {
           existingRecord.status = await this.determineStatus(
             existingRecord.totalHours,
             existingRecord.workingDate,
-            existingRecord.workLocation || undefined,
+            existingRecord.firstHalf,
+            existingRecord.secondHalf
           );
+        }
+
+        // CRITICAL: Synchronize splits and status for UPDATED existing records in create branch
+        const hours = Number(existingRecord.totalHours || 0);
+        if (hours > 0 && hours <= 4.5) {
+          existingRecord.firstHalf = 'Office';
+          existingRecord.secondHalf = 'Leave';
+          existingRecord.status = AttendanceStatus.HALF_DAY;
+          this.logger.log(`[ATTENDANCE_CREATE] Enforced Half Day synchronization for existing record (<= 4.5h)`);
+        } else if (hours === 9) {
+          const defaultActivity = this.determineDefaultActivity(existingRecord.firstHalf, existingRecord.secondHalf);
+          if (!existingRecord.firstHalf || existingRecord.firstHalf === 'Leave') existingRecord.firstHalf = defaultActivity;
+          if (!existingRecord.secondHalf || existingRecord.secondHalf === 'Leave') existingRecord.secondHalf = defaultActivity;
+          existingRecord.status = AttendanceStatus.FULL_DAY;
+          this.logger.log(`[ATTENDANCE_CREATE] Enforced Full Day synchronization for existing record (9h)`);
+        } else if (hours === 0) {
+          existingRecord.status = await this.determineStatus(0, existingRecord.workingDate);
         }
         
         const saved = await this.employeeAttendanceRepository.save(existingRecord);
@@ -136,32 +189,112 @@ export class EmployeeAttendanceService {
       this.logger.log(`[ATTENDANCE_CREATE] Creating NEW attendance record for ${createEmployeeAttendanceDto.employeeId} on ${createEmployeeAttendanceDto.workingDate}`);
       this.logger.log(`[ATTENDANCE_CREATE] sourceRequestId being set to: ${createEmployeeAttendanceDto.sourceRequestId}`);
       
-      const attendance = this.employeeAttendanceRepository.create(
-        createEmployeeAttendanceDto,
-      );
+      // Calculate totalHours if firstHalf and secondHalf are provided
+      if (createEmployeeAttendanceDto.firstHalf || createEmployeeAttendanceDto.secondHalf) {
+        const calculatedHours = this.calculateTotalHours(
+          createEmployeeAttendanceDto.firstHalf || null, 
+          createEmployeeAttendanceDto.secondHalf || null
+        );
+        createEmployeeAttendanceDto.totalHours = calculatedHours;
+        this.logger.log(`[ATTENDANCE_CREATE] Calculated totalHours: ${calculatedHours} from firstHalf: ${createEmployeeAttendanceDto.firstHalf}, secondHalf: ${createEmployeeAttendanceDto.secondHalf}`);
+      }
+      
+      const newAttendance = this.employeeAttendanceRepository.create(createEmployeeAttendanceDto);
+      newAttendance.workLocation = null; // Always null
 
       // Only calculate status if NOT provided
       if (
-        !attendance.status &&
-        attendance.totalHours !== undefined &&
-        attendance.totalHours !== null
+        !newAttendance.status &&
+        newAttendance.totalHours !== undefined &&
+        newAttendance.totalHours !== null
       ) {
-        attendance.status = await this.determineStatus(
-          attendance.totalHours,
-          attendance.workingDate,
-          attendance.workLocation || undefined,
+        newAttendance.status = await this.determineStatus(
+          newAttendance.totalHours,
+          newAttendance.workingDate,
+          newAttendance.firstHalf,
+          newAttendance.secondHalf
         );
       }
 
-      const saved = await this.employeeAttendanceRepository.save(attendance);
+      // CRITICAL: Strictly enforce synchronization rules for BOTH branches (Create/Update)
+      const hours = Number(newAttendance.totalHours || 0);
+
+      if (hours > 0 && hours <= 4.5) {
+        // Enforce Half Day split rule
+        newAttendance.firstHalf = 'Office';
+        newAttendance.secondHalf = 'Leave';
+        newAttendance.status = AttendanceStatus.HALF_DAY;
+        this.logger.log(`[ATTENDANCE_CREATE] Enforced Half Day synchronization (<= 4.5h)`);
+      } else if (hours === 9) {
+        // Enforce Full Day splits if missing or inconsistent
+        const defaultActivity = this.determineDefaultActivity(newAttendance.firstHalf, newAttendance.secondHalf);
+        if (!newAttendance.firstHalf || newAttendance.firstHalf === 'Leave') newAttendance.firstHalf = defaultActivity;
+        if (!newAttendance.secondHalf || newAttendance.secondHalf === 'Leave') newAttendance.secondHalf = defaultActivity;
+        newAttendance.status = AttendanceStatus.FULL_DAY;
+        this.logger.log(`[ATTENDANCE_CREATE] Enforced Full Day synchronization (9h)`);
+      } else if (hours === 0) {
+        newAttendance.status = await this.determineStatus(0, newAttendance.workingDate);
+        this.logger.log(`[ATTENDANCE_CREATE] Synchronized 0 hours status: ${newAttendance.status}`);
+      }
+
+      const saved = await this.employeeAttendanceRepository.save(newAttendance);
       this.logger.log(`[ATTENDANCE_CREATE] Created attendance ID: ${saved.id}, sourceRequestId after save: ${saved.sourceRequestId}`);
       return saved;
     } catch (error) {
+      this.logger.error(`[ATTENDANCE_CREATE] Error creating attendance for ${createEmployeeAttendanceDto.employeeId}: ${error.message}`, error.stack);
       if (error instanceof BadRequestException) throw error;
-      throw new BadRequestException('Failed to create: ' + error.message);
+      if (error instanceof ForbiddenException) throw error;
+      if (error instanceof NotFoundException) throw error;
+      if (error instanceof HttpException) throw error;
+      throw new HttpException(
+        `Failed to create attendance: ${error.message}`, 
+        HttpStatus.INTERNAL_SERVER_ERROR
+      );
     }
   }
 
+  async checkEntryBlock(employeeId: string, date: string): Promise<{ isBlocked: boolean; reason: string | null }> {
+    const workingDate = new Date(date);
+    
+    // 1. Check Month Lock
+    if (!this.isEditableMonth(workingDate)) {
+      return { isBlocked: true, reason: 'Month Locked' };
+    }
+
+    // 2. Check Manual Blocker
+    const blocker = await this.blockerService.isBlocked(employeeId, workingDate);
+    if (blocker) {
+      return { isBlocked: true, reason: blocker.reason || 'Admin Blocked' };
+    }
+
+    // 3. Check Mixed Combinations (Existing Attendance)
+    const startOfDay = new Date(date);
+    startOfDay.setHours(0, 0, 0, 0);
+    const endOfDay = new Date(date);
+    endOfDay.setHours(23, 59, 59, 999);
+    
+    const attendance = await this.employeeAttendanceRepository.findOne({
+      where: {
+        employeeId,
+        workingDate: Between(startOfDay, endOfDay),
+      },
+    });
+
+    if (attendance) {
+        const h1 = (attendance.firstHalf || '').toLowerCase();
+        const h2 = (attendance.secondHalf || '').toLowerCase();
+
+        // If either half has a value that is NOT 'office', it is a restricted entry (Leave, WFH, Client Visit, etc.)
+        // This effectively blocks editing for: Leave, WFH, Client Visit, and any split containing them.
+        const isRestricted = (val: string) => val && !val.includes('office');
+
+        if (isRestricted(h1) || isRestricted(h2)) {
+             return { isBlocked: true, reason: 'Restricted Activity' };
+        }
+    }
+
+    return { isBlocked: false, reason: null };
+  }
 
   async createBulk(attendanceDtos: EmployeeAttendanceDto[], isAdmin: boolean = false, isManager: boolean = false): Promise<EmployeeAttendance[]> {
     const results: EmployeeAttendance[] = [];
@@ -306,18 +439,18 @@ export class EmployeeAttendanceService {
                 const existingZeroHour = existingZeroHourRecords.get(dateStr);
                 const locationRequestType = locationRequestDates.get(dateStr);
 
+                const activity = locationRequestType === 'Work From Home' || locationRequestType === 'WFH' 
+                    ? 'Work From Home' 
+                    : (locationRequestType === 'Client Visit' ? 'Client Visit' : 'Office');
+
+                dto.firstHalf = activity;
+                dto.secondHalf = activity;
+                dto.workLocation = null;
+                dto.status = AttendanceStatus.FULL_DAY;
+                dto.totalHours = 9;
+
                 if (existingZeroHour) {
                     dto.id = existingZeroHour.id;
-                    dto.status = AttendanceStatus.FULL_DAY; 
-                    // Priority 1: Use location from Approved Request
-                    if (locationRequestType === 'Work From Home') dto.workLocation = 'WFH';
-                    else if (locationRequestType === 'Client Visit') dto.workLocation = 'Client Visit';
-                    // Priority 2: Use existing location
-                    else if (existingZeroHour.workLocation) dto.workLocation = existingZeroHour.workLocation;
-                } else {
-                     dto.status = AttendanceStatus.FULL_DAY;
-                     if (locationRequestType === 'Work From Home') dto.workLocation = 'WFH';
-                     else if (locationRequestType === 'Client Visit') dto.workLocation = 'Client Visit';
                 }
                 
                 dto.totalHours = 9;
@@ -370,182 +503,219 @@ export class EmployeeAttendanceService {
   }
 
   async update(id: number, updateDto: Partial<EmployeeAttendanceDto>, isAdmin: boolean = false, isManager: boolean = false): Promise<EmployeeAttendance | null> {
-    const attendance = await this.findOne(id);
-    
-    this.logger.log(`[ATTENDANCE_UPDATE] ===== START UPDATE =====`);
-    this.logger.log(`[ATTENDANCE_UPDATE] Updating attendance ID: ${id}, EmployeeID: ${attendance.employeeId}`);
-    this.logger.log(`[ATTENDANCE_UPDATE] Date: ${attendance.workingDate}, Current sourceRequestId: ${attendance.sourceRequestId}`);
-    this.logger.log(`[ATTENDANCE_UPDATE] Incoming sourceRequestId in DTO: ${(updateDto as any).sourceRequestId}`);
-    this.logger.log(`[ATTENDANCE_UPDATE] isAdmin: ${isAdmin}, isManager: ${isManager}`);
-    
-    // BLOCKING LOGIC: If record is auto-generated from an approved Half Day request
-    // Only Admin and Manager can override this block.
-    if (attendance.sourceRequestId && !isAdmin && !isManager) {
-      this.logger.log(`[ATTENDANCE_UPDATE] Record has sourceRequestId ${attendance.sourceRequestId}, checking source request status...`);
-      // Check if the source request is still in 'Approved' status
-      const sourceRequest = await this.leaveRequestRepository.findOne({ 
-        where: { id: attendance.sourceRequestId } 
-      });
+    try {
+      const attendance = await this.findOne(id);
+      
+      this.logger.log(`[ATTENDANCE_UPDATE] ===== START UPDATE =====`);
+      this.logger.log(`[ATTENDANCE_UPDATE] Updating attendance ID: ${id}, EmployeeID: ${attendance.employeeId}`);
+      this.logger.log(`[ATTENDANCE_UPDATE] Date: ${attendance.workingDate}, Current sourceRequestId: ${attendance.sourceRequestId}`);
+      this.logger.log(`[ATTENDANCE_UPDATE] Incoming sourceRequestId in DTO: ${(updateDto as any).sourceRequestId}`);
+      this.logger.log(`[ATTENDANCE_UPDATE] isAdmin: ${isAdmin}, isManager: ${isManager}`);
+      
+      
+      if (!isAdmin && !isManager && !this.isEditableMonth(new Date(attendance.workingDate))) {
+        throw new BadRequestException('Attendance for this month is locked.');
+      }
 
-      if (sourceRequest && sourceRequest.status === 'Approved') {
-        this.logger.warn(`[ATTENDANCE_UPDATE] ⚠️ Blocking update: Source request ${attendance.sourceRequestId} is still Approved`);
-        throw new ForbiddenException(
-          'This attendance record was auto-generated from an approved Half Day request and cannot be edited by the employee.'
+      const workingDateObj = new Date(attendance.workingDate);
+      const today = new Date();
+      today.setHours(0,0,0,0);
+      workingDateObj.setHours(0,0,0,0);
+
+      // Rule: Delete future records if hours are cleared AND no work activity exists in splits
+      const hasWorkActivity = (val: string | null) => {
+        if (!val) return false;
+        const v = val.toLowerCase();
+        return v.includes('office') || v.includes('wfh') || v.includes('home') || v.includes('visit');
+      };
+
+      const hasActivity = hasWorkActivity(attendance.firstHalf) || 
+                          hasWorkActivity(attendance.secondHalf) ||
+                          hasWorkActivity(updateDto.firstHalf as any) ||
+                          hasWorkActivity(updateDto.secondHalf as any);
+
+      if ((updateDto.totalHours === 0 || updateDto.totalHours === null) && workingDateObj > today && !hasActivity) {
+          this.logger.log(`[ATTENDANCE_UPDATE] Deleting future record with 0 hours and no work activity`);
+          await this.employeeAttendanceRepository.delete(id);
+          return null;
+      }
+
+      if (!isAdmin && !isManager) {
+        const blocker = await this.blockerService.isBlocked(
+          attendance.employeeId, 
+          attendance.workingDate
         );
+        if (blocker) {
+          const blockedByName = blocker.blockedBy || 'Administrator';
+          throw new BadRequestException(`Timesheet is locked for this date by ${blockedByName}. Please contact them to unlock.`);
+        }
+      }
+
+      const isOverride = isAdmin || isManager;
+      const isHalfDayStatus = attendance.status === AttendanceStatus.HALF_DAY || String(attendance.status).toLowerCase() === 'half day';
+      const isLocked = !!attendance.sourceRequestId && isHalfDayStatus;
+
+      // Always null out work_location - use splits instead
+      updateDto.workLocation = null;
+      attendance.workLocation = null;
+
+      const existingStatus = attendance.status;
+      const isLeave = existingStatus === AttendanceStatus.LEAVE;
+      Object.assign(attendance, updateDto);
+      attendance.workLocation = null; // Force null again after assign
+
+      // CRITICAL: Clear sourceRequestId on manual updates
+      // This field should ONLY be set when a Half Day request is approved (via leave-requests.service.ts)
+      // All other updates should unlink the record from the original request
+      if (!updateDto.hasOwnProperty('sourceRequestId')) {
+          this.logger.log(`[ATTENDANCE_UPDATE] Clearing sourceRequestId (manual update)`);
+          attendance.sourceRequestId = null;
       } else {
-        this.logger.log(`[ATTENDANCE_UPDATE] Source request not Approved or missing, auto-unlocking...`);
-        // Automatically unlock if request is cancelled, rejected, or missing
-        attendance.sourceRequestId = null;
+          this.logger.log(`[ATTENDANCE_UPDATE] Preserving sourceRequestId from updateDto: ${(updateDto as any).sourceRequestId}`);
       }
-    }
+      
+      // CRITICAL FIX: Synchronize splits and status with the new totalHours
+      if (updateDto.totalHours !== undefined) {
+        const hours = Number(updateDto.totalHours);
+        
+        // If hours is 9, it's ALWAYS a Full Day. Force splits to match.
+        if (hours === 9) {
+          const defaultActivity = this.determineDefaultActivity(attendance.firstHalf, attendance.secondHalf);
+          attendance.firstHalf = defaultActivity;
+          attendance.secondHalf = defaultActivity;
+          attendance.status = AttendanceStatus.FULL_DAY;
+          
+          // Also update updateDto to ensure consistency in TypeORM save
+          updateDto.firstHalf = defaultActivity;
+          updateDto.secondHalf = defaultActivity;
+          updateDto.status = AttendanceStatus.FULL_DAY;
+          
+          this.logger.log(`[ATTENDANCE_UPDATE] Force Full Day (9h) synchronization: ${defaultActivity}, ${defaultActivity}`);
+        } 
+        // If hours is <= 4.5 and > 0, it's ALWAYS a Half Day.
+        else if (hours > 0 && hours <= 4.5) {
+          // Rule: First Half = Office, Second Half = Leave
+          attendance.firstHalf = "Office";
+          attendance.secondHalf = "Leave";
+          attendance.status = AttendanceStatus.HALF_DAY;
+          
+          // Sync updateDto for TypeORM
+          updateDto.firstHalf = "Office";
+          updateDto.secondHalf = "Leave";
+          updateDto.status = AttendanceStatus.HALF_DAY;
+          
+          this.logger.log(`[ATTENDANCE_UPDATE] Synchronized Half Day (${hours}h) - Set splits to: Office, Leave`);
+        }
+        else if (hours === 0) {
+          attendance.firstHalf = null;
+          attendance.secondHalf = null;
+          updateDto.firstHalf = null as any;
+          updateDto.secondHalf = null as any;
+          
+          const newStatus = await this.determineStatus(0, attendance.workingDate);
+          attendance.status = newStatus;
+          updateDto.status = newStatus;
+          this.logger.log(`[ATTENDANCE_UPDATE] Reset to 0 hours: ${newStatus}`);
+        }
+      }
+      
+      // If ONLY splits were updated (unlikely from frontend but possible from API), 
+      // recalculate totalHours and status
+      else if (updateDto.firstHalf !== undefined || updateDto.secondHalf !== undefined) {
+        const firstHalf = updateDto.firstHalf !== undefined ? updateDto.firstHalf : attendance.firstHalf;
+        const secondHalf = updateDto.secondHalf !== undefined ? updateDto.secondHalf : attendance.secondHalf;
+        const calculatedHours = this.calculateTotalHours(firstHalf || null, secondHalf || null);
+        
+        attendance.totalHours = calculatedHours;
+        updateDto.totalHours = calculatedHours;
+        
+        const newStatus = await this.determineStatus(calculatedHours, attendance.workingDate, firstHalf, secondHalf);
+        attendance.status = newStatus;
+        updateDto.status = newStatus;
+        
+        this.logger.log(`[ATTENDANCE_UPDATE] Split-based update: ${calculatedHours}h, status: ${newStatus}`);
+      }
+      
 
-    if (!isAdmin && !isManager && !this.isEditableMonth(new Date(attendance.workingDate))) {
-      throw new BadRequestException('Attendance for this month is locked.');
-    }
-
-    const workingDateObj = new Date(attendance.workingDate);
-    const today = new Date();
-    today.setHours(0,0,0,0);
-    workingDateObj.setHours(0,0,0,0);
-
-    // Check if record has workLocation (WFH, Client Visit) - these should never be deleted
-    const hasWorkLocation = attendance.workLocation === 'WFH' || 
-                           attendance.workLocation === 'Work From Home' || 
-                           attendance.workLocation === 'Client Visit' ||
-                           updateDto.workLocation === 'WFH' ||
-                           updateDto.workLocation === 'Work From Home' ||
-                           updateDto.workLocation === 'Client Visit';
-
-    // Rule: Delete future records if hours are cleared AND no workLocation is set
-    // But NEVER delete records with workLocation (WFH, Client Visit) - preserve them even with 0 hours
-    if ((updateDto.totalHours === 0 || updateDto.totalHours === null) && workingDateObj > today && !hasWorkLocation) {
-        this.logger.log(`[ATTENDANCE_UPDATE] Deleting future record with 0 hours and no workLocation`);
-        await this.employeeAttendanceRepository.delete(id);
-        return null;
-    }
-
-    if (!isAdmin) {
-      const blocker = await this.blockerService.isBlocked(
-        attendance.employeeId, 
-        attendance.workingDate
+      // Auto-fill splits for Full Day (9 hours) if missing
+      if (attendance.totalHours === 9 && (!attendance.firstHalf || !attendance.secondHalf)) {
+        const defaultActivity = this.determineDefaultActivity(attendance.firstHalf, attendance.secondHalf);
+        if (!attendance.firstHalf) {
+          attendance.firstHalf = defaultActivity;
+          updateDto.firstHalf = defaultActivity;
+        }
+        if (!attendance.secondHalf) {
+          attendance.secondHalf = defaultActivity;
+          updateDto.secondHalf = defaultActivity;
+        }
+        this.logger.log(`[ATTENDANCE_UPDATE] Auto-filled missing splits for Full Day: ${attendance.firstHalf}, ${attendance.secondHalf}`);
+      }
+      
+      return await this.employeeAttendanceRepository.save(attendance);
+    } catch (error) {
+      this.logger.error(`[ATTENDANCE_UPDATE] Error updating attendance ID ${id}: ${error.message}`, error.stack);
+      if (error instanceof BadRequestException) throw error;
+      if (error instanceof ForbiddenException) throw error;
+      if (error instanceof NotFoundException) throw error;
+      if (error instanceof HttpException) throw error;
+      throw new HttpException(
+        `Failed to update attendance: ${error.message}`,
+        HttpStatus.INTERNAL_SERVER_ERROR
       );
-      if (blocker) {
-        // If the current user is a Manager AND they are the one who blocked it, or they are a manager 
-        // we might want to allow override here, but the user said "manger can also unblock that" 
-        // suggesting they should unblock first. However, many systems allow the blocker to edit.
-        // For now, let's just make the error message dynamic as requested.
-        const blockedByName = blocker.blockedBy || 'Administrator';
-        throw new BadRequestException(`Timesheet is locked for this date by ${blockedByName}. Please contact them to unlock.`);
-      }
     }
-
-    // Priority Hierarchy: Level 2 (Leave/Half Day) > Level 1 (Client Visit/WFH)
-    const getPriority = (status: string | null, location: string | null) => {
-      if (status === AttendanceStatus.LEAVE || String(status).toLowerCase() === 'leave') return 2;
-      if (status === AttendanceStatus.HALF_DAY || String(status).toLowerCase() === 'half day') return 2;
-      if (location === 'Client Visit' || String(location).toLowerCase() === 'client visit') return 1;
-      if (location === 'WFH' || location === 'Work From Home' || String(location).toLowerCase().includes('wfh')) return 1;
-      return 0;
-    };
-
-    const existingPriority = getPriority(attendance.status, attendance.workLocation);
-    const incomingPriority = getPriority(updateDto.status || null, updateDto.workLocation || null);
-
-    // Rule: Level 2 (Leave/Half Day) are immutable. Level 1 (CV/WFH) follow newest-wins.
-    // BLOCK if trying to downgrade, or if incoming is same level as existing Level 2 (No-Overwrite).
-    // EXCEPTION 1: Admins and Managers can OVERRIDE any priority rules.
-    // EXCEPTION 2: The record is only "Locked" if it has a sourceRequestId AND its status is currently 'Half Day'.
-    const isOverride = isAdmin || isManager;
-    const isHalfDayStatus = attendance.status === AttendanceStatus.HALF_DAY || String(attendance.status).toLowerCase() === 'half day';
-    const isLocked = !!attendance.sourceRequestId && isHalfDayStatus;
-
-    if (!isOverride && isLocked) {
-      if (incomingPriority < existingPriority) {
-        this.logger.log(`[ATTENDANCE_UPDATE] Blocking downgrade of locked record`);
-        return attendance; // Block downgrade of records locked by a Half Day request
-      }
-      if (incomingPriority === existingPriority && existingPriority === 2 && updateDto.status !== null && updateDto.workLocation !== null) {
-        this.logger.log(`[ATTENDANCE_UPDATE] Blocking Level 2 self-overwrite of locked record`);
-        return attendance; // Level 2 cannot overwrite itself if locked by a request
-      }
-    }
-
-    // Preserve workLocation if it exists and updateDto doesn't explicitly change it
-    const existingWorkLocation = attendance.workLocation;
-    const existingStatus = attendance.status;
-    const isLeave = existingStatus === AttendanceStatus.LEAVE;
-    Object.assign(attendance, updateDto);
-
-    // CRITICAL: Clear sourceRequestId on manual updates
-    // This field should ONLY be set when a Half Day request is approved (via leave-requests.service.ts)
-    // All other updates should unlink the record from the original request
-    if (!updateDto.hasOwnProperty('sourceRequestId')) {
-        this.logger.log(`[ATTENDANCE_UPDATE] Clearing sourceRequestId (manual update)`);
-        attendance.sourceRequestId = null;
-    } else {
-        this.logger.log(`[ATTENDANCE_UPDATE] Preserving sourceRequestId from updateDto: ${(updateDto as any).sourceRequestId}`);
-    }
-    
-    // If workLocation was set (WFH, Client Visit) and updateDto doesn't explicitly clear it (undefined), preserve it.
-    // Explicit null MEANs clear it.
-    if (hasWorkLocation && updateDto.workLocation === undefined) {
-      attendance.workLocation = existingWorkLocation; // Preserve original workLocation
-    }
-    
-    // Preserve Leave status if it exists and updateDto doesn't explicitly change it (undefined).
-    // Explicit null MEANs clear it.
-    if (isLeave && updateDto.status === undefined) {
-      attendance.status = existingStatus; // Preserve Leave status
-    }
-    
-    if (attendance.totalHours !== undefined && attendance.totalHours !== null) {
-      attendance.status = await this.determineStatus(attendance.totalHours, attendance.workingDate, attendance.workLocation || undefined);
-    }
-    
-    return await this.employeeAttendanceRepository.save(attendance);
   }
 
-  private async determineStatus(hours: number, workingDate: Date, workLocation?: string): Promise<AttendanceStatus> {
+  private  async determineStatus(
+    hours: number, 
+    workingDate: Date, 
+    firstHalf?: string | null,
+    secondHalf?: string | null
+  ): Promise<AttendanceStatus> {
     const dateObj = new Date(workingDate);
-    // Normalize date for comparison: YYYY-MM-DD
     const year = dateObj.getFullYear();
     const month = String(dateObj.getMonth() + 1).padStart(2, '0');
     const day = String(dateObj.getDate()).padStart(2, '0');
     const dateStr = `${year}-${month}-${day}`;
 
-    // Special Rule: WFH and Client Visit should default to NOT_UPDATED if hours are 0
-    // This allows the employee to log their hours later.
-    if ((workLocation === 'WFH' || workLocation === 'Client Visit') && (hours === 0 || hours === null || hours === undefined)) {
-        return AttendanceStatus.NOT_UPDATED;
+    // 0. Primary Rule: Hours strictly dictate status if available
+    if (hours > 0 && hours <= 4.5) {
+      return AttendanceStatus.HALF_DAY;
+    }
+    if (hours === 9) {
+      return AttendanceStatus.FULL_DAY;
+    }
+
+    // 1. Check Split-Day Logic if halves are provided (fallback/validation)
+    if (firstHalf || secondHalf) {
+        const h1 = (firstHalf || '').toLowerCase();
+        const h2 = (secondHalf || '').toLowerCase();
+        
+        const isWork = (val: string) => val.includes('office') || val.includes('wfh') || val.includes('home') || val.includes('visit') || val.includes('present');
+        const isLeave = (val: string) => val.includes('leave');
+        const isAbsent = (val: string) => val.includes('absent');
+
+        if (isWork(h1) && isWork(h2)) return AttendanceStatus.FULL_DAY;
+        if ((isWork(h1) && isLeave(h2)) || (isLeave(h1) && isWork(h2))) return AttendanceStatus.HALF_DAY;
+        if ((isWork(h1) && isAbsent(h2)) || (isAbsent(h1) && isWork(h2))) return AttendanceStatus.HALF_DAY;
+        if (isLeave(h1) && isLeave(h2)) return AttendanceStatus.LEAVE; // Custom string or enum value if exists
     }
 
     if (hours === 0 || hours === null || hours === undefined) {
-      // 1. Check Holiday
       const holiday = await this.masterHolidayService.findByDate(dateStr);
-      if (holiday) {
-        return AttendanceStatus.HOLIDAY;
-      }
+      if (holiday) return AttendanceStatus.HOLIDAY;
 
-      // 2. Check Weekend
-      if (this.masterHolidayService.isWeekend(dateObj)) {
-        return AttendanceStatus.WEEKEND;
-      }
+      if (this.masterHolidayService.isWeekend(dateObj)) return AttendanceStatus.WEEKEND;
 
-      // 3. Weekday with 0 hours
       const today = new Date();
       today.setHours(0, 0, 0, 0);
       dateObj.setHours(0, 0, 0, 0);
       
-      if (dateObj <= today) {
-          // Past or Today weekday with 0 hours -> ABSENT (user purposefully didn't update)
-          return AttendanceStatus.ABSENT;
-      } else {
-          // Future weekday -> NOT_UPDATED (Upcoming)
-          return AttendanceStatus.NOT_UPDATED;
-      }
-    } else if (hours >= 6) {
+      return dateObj <= today ? AttendanceStatus.ABSENT : AttendanceStatus.NOT_UPDATED;
+    } else if (hours > 4.5) {
+      // Hours > 4.5 is FULL_DAY
       return AttendanceStatus.FULL_DAY;
     } else {
+      // Hours > 0 and <= 4.5 is HALF_DAY
       return AttendanceStatus.HALF_DAY;
     }
   }
@@ -804,144 +974,145 @@ export class EmployeeAttendanceService {
     );
   }
   async getDashboardStats(employeeId: string, queryMonth?: string, queryYear?: string) {
-    const today = new Date();
-    const currentMonth = queryMonth ? parseInt(queryMonth) : today.getMonth() + 1;
-    const currentYear = queryYear ? parseInt(queryYear) : today.getFullYear();
-    
-    // 1. Total Week Hours
-    const dayOfWeek = today.getDay(); // 0 (Sun) - 6 (Sat)
-    // Adjust to make Monday 0, Sunday 6
-    const diffToMonday = today.getDate() - dayOfWeek + (dayOfWeek === 0 ? -6 : 1);
-    const weekStart = new Date(today);
-    weekStart.setDate(diffToMonday);
-    weekStart.setHours(0, 0, 0, 0);
+    try {
+      const today = new Date();
+      const currentMonth = queryMonth ? parseInt(queryMonth) : today.getMonth() + 1;
+      const currentYear = queryYear ? parseInt(queryYear) : today.getFullYear();
+      
+      // 1. Total Week Hours
+      const dayOfWeek = today.getDay(); // 0 (Sun) - 6 (Sat)
+      // Adjust to make Monday 0, Sunday 6
+      const diffToMonday = today.getDate() - dayOfWeek + (dayOfWeek === 0 ? -6 : 1);
+      const weekStart = new Date(today);
+      weekStart.setDate(diffToMonday);
+      weekStart.setHours(0, 0, 0, 0);
 
-    const weekEnd = new Date(weekStart);
-    weekEnd.setDate(weekStart.getDate() + 6);
-    weekEnd.setHours(23, 59, 59, 999);
+      const weekEnd = new Date(weekStart);
+      weekEnd.setDate(weekStart.getDate() + 6);
+      weekEnd.setHours(23, 59, 59, 999);
 
-    const weekRecords = await this.employeeAttendanceRepository.find({
-      where: {
-        employeeId,
-        workingDate: Between(weekStart, weekEnd),
-      },
-    });
-
-    const totalWeekHours = weekRecords.reduce((acc, curr) => acc + (curr.totalHours || 0), 0);
-
-    // 2. Total Monthly Hours
-    const monthStart = new Date(currentYear, currentMonth - 1, 1);
-    const monthEnd = new Date(currentYear, currentMonth, 0, 23, 59, 59, 999);
-
-    const monthRecords = await this.employeeAttendanceRepository.find({
-      where: {
-        employeeId,
-        workingDate: Between(monthStart, monthEnd),
-      },
-    });
-
-    const totalMonthlyHours = monthRecords.reduce((acc, curr) => acc + (curr.totalHours || 0), 0);
-
-    // 3. Pending Updates
-    // Count until today inclusive (if current month) or end of month (if past month)
-    const checkEndDate = new Date(today);
-    checkEndDate.setHours(23, 59, 59, 999);
-    
-    // Determine the boundary for checking pending updates:
-    // If we are looking at a past month, check until the end of that month.
-    // If current month, check until today.
-    let pendingLimitDate = checkEndDate;
-    if (monthEnd < pendingLimitDate) {
-        pendingLimitDate = monthEnd;
-    }
-
-    let pendingUpdates = 0;
-
-    // Fetch master holidays for the month
-    // NOTE: validation error fixed: findAll takes no arguments. It returns ALL holidays.
-    // We will filter or just put all in the Set, which is fine since the set key includes year.
-    const holidayEntities = await this.masterHolidayService.findAll(); 
-
-    // Better: Fetch approved leaves for the range
-    const leaves = await this.leaveRequestRepository.find({
-      where: {
-        employeeId,
-        status: 'Approved',
-        fromDate: Between(monthStart.toISOString().split('T')[0], pendingLimitDate.toISOString().split('T')[0])
-      }
-    });
-
-    // Helper to avoid timezone shifts when converting to YYYY-MM-DD
-    const toLocalYMD = (dateInput: Date | string) => {
-        const date = new Date(dateInput);
-        const y = date.getFullYear();
-        const m = String(date.getMonth() + 1).padStart(2, '0');
-        const d = String(date.getDate()).padStart(2, '0');
-        return `${y}-${m}-${d}`;
-    };
-
-    // Optimization: Create Set of existing attendance dates (string YYYY-MM-DD)
-    const existingAttendanceDates = new Set(
-        monthRecords.map(r => toLocalYMD(r.workingDate))
-    );
-
-    // Optimization: Set of Holidays
-    const yearHolidays = await this.masterHolidayService.findAll();
-    const holidayDates = new Set(
-        yearHolidays.map(h => {
-             const d = h.holidayDate || (h as any).date; 
-             // If d is string 'YYYY-MM-DD', direct usage is safest. 
-             // If ISO string with time, we might still want to parse it to check local date if it was saved with timezone? 
-             // Usually holiday is just a date. Let's rely on standard parsing.
-             return toLocalYMD(d);
-        })
-    );
-
-    // Optimization: Approved Leaves ranges
-    // We already fetched `leaves`? No, simpler to query fully covering leaves or check day by day in memory.
-    const allApprovedLeaves = await this.leaveRequestRepository.find({
+      const weekRecords = await this.employeeAttendanceRepository.find({
         where: {
-            employeeId,
-            status: 'Approved'
+          employeeId,
+          workingDate: Between(weekStart, weekEnd),
+        },
+      });
+
+      const totalWeekHours = weekRecords.reduce((acc, curr) => acc + Number(curr.totalHours || 0), 0);
+
+      // 2. Total Monthly Hours
+      const monthStart = new Date(currentYear, currentMonth - 1, 1);
+      const monthEnd = new Date(currentYear, currentMonth, 0, 23, 59, 59, 999);
+
+      const monthRecords = await this.employeeAttendanceRepository.find({
+        where: {
+          employeeId,
+          workingDate: Between(monthStart, monthEnd),
+        },
+      });
+
+      const totalMonthlyHours = monthRecords.reduce((acc, curr) => acc + Number(curr.totalHours || 0), 0);
+
+      // 3. Pending Updates
+      // Count until today inclusive (if current month) or end of month (if past month)
+      const checkEndDate = new Date(today);
+      checkEndDate.setHours(23, 59, 59, 999);
+      
+      // Determine the boundary for checking pending updates:
+      // If we are looking at a past month, check until the end of that month.
+      // If current month, check until today.
+      let pendingLimitDate = checkEndDate;
+      if (monthEnd < pendingLimitDate) {
+          pendingLimitDate = monthEnd;
+      }
+
+      let pendingUpdates = 0;
+
+      // Fetch master holidays for the month
+      // NOTE: validation error fixed: findAll takes no arguments. It returns ALL holidays.
+      // We will filter or just put all in the Set, which is fine since the set key includes year.
+      const holidayEntities = await this.masterHolidayService.findAll(); 
+
+      // Better: Fetch approved leaves for the range
+      const leaves = await this.leaveRequestRepository.find({
+        where: {
+          employeeId,
+          status: 'Approved',
+          fromDate: Between(monthStart.toISOString().split('T')[0], pendingLimitDate.toISOString().split('T')[0])
         }
-    });
+      });
+
+      // Helper to avoid timezone shifts when converting to YYYY-MM-DD
+      const toLocalYMD = (dateInput: Date | string) => {
+          const date = new Date(dateInput);
+          const y = date.getFullYear();
+          const m = String(date.getMonth() + 1).padStart(2, '0');
+          const d = String(date.getDate()).padStart(2, '0');
+          return `${y}-${m}-${d}`;
+      };
+
+      // Optimization: Create Set of existing attendance dates (string YYYY-MM-DD)
+      const existingAttendanceDates = new Set(
+          monthRecords.map(r => toLocalYMD(r.workingDate))
+      );
+
+      // Optimization: Set of Holidays
+      const yearHolidays = await this.masterHolidayService.findAll();
+      const holidayDates = new Set(
+          yearHolidays.map(h => {
+               const d = h.holidayDate || (h as any).date; 
+               return toLocalYMD(d);
+          })
+      );
+
+      // Optimization: Approved Leaves ranges
+      const allApprovedLeaves = await this.leaveRequestRepository.find({
+          where: {
+              employeeId,
+              status: 'Approved'
+          }
+      });
 
 
-    // Loop from monthStart to pendingLimitDate
-    let loopDate = new Date(monthStart);
-    while (loopDate <= pendingLimitDate) {
-        if (loopDate > today) break; // Extra safety
+      // Loop from monthStart to pendingLimitDate
+      let loopDate = new Date(monthStart);
+      while (loopDate <= pendingLimitDate) {
+          if (loopDate > today) break; // Extra safety
 
-        const dateStr = toLocalYMD(loopDate);
-        
-        // 1. Check Weekend
-        const isWeekend = this.masterHolidayService.isWeekend(loopDate);
-        // 2. Check Holiday
-        const isHoliday = holidayDates.has(dateStr);
-        // 3. Check existing attendance
-        const hasAttendance = existingAttendanceDates.has(dateStr);
-        // 4. Check Leave
-        const hasLeave = allApprovedLeaves.some(l => {
-             const lStartStr = toLocalYMD(l.fromDate);
-             const lEndStr = toLocalYMD(l.toDate);
-             return dateStr >= lStartStr && dateStr <= lEndStr;
-        });
+          const dateStr = toLocalYMD(loopDate);
+          
+          // 1. Check Weekend
+          const isWeekend = this.masterHolidayService.isWeekend(loopDate);
+          // 2. Check Holiday
+          const isHoliday = holidayDates.has(dateStr);
+          // 3. Check existing attendance
+          const hasAttendance = existingAttendanceDates.has(dateStr);
+          // 4. Check Leave
+          const hasLeave = allApprovedLeaves.some(l => {
+               const lStartStr = toLocalYMD(l.fromDate);
+               const lEndStr = toLocalYMD(l.toDate);
+               return dateStr >= lStartStr && dateStr <= lEndStr;
+          });
 
-        if (!isWeekend && !isHoliday && !hasAttendance && !hasLeave) {
-            pendingUpdates++;
-        }
+          if (!isWeekend && !isHoliday && !hasAttendance && !hasLeave) {
+              pendingUpdates++;
+          }
 
-        loopDate.setDate(loopDate.getDate() + 1);
+          loopDate.setDate(loopDate.getDate() + 1);
+      }
+
+      const isFutureMonth = monthStart.getTime() > today.getTime();
+
+      return {
+        totalWeekHours: parseFloat(Number(totalWeekHours).toFixed(2)),
+        totalMonthlyHours: parseFloat(Number(totalMonthlyHours).toFixed(2)),
+        pendingUpdates,
+        monthStatus: (!isFutureMonth && pendingUpdates === 0) ? 'Completed' : 'Pending',
+      };
+    } catch (error) {
+      this.logger.error(`Error calculating dashboard stats for employee ${employeeId}:`, error);
+      throw new HttpException('Failed to calculate dashboard statistics', HttpStatus.INTERNAL_SERVER_ERROR);
     }
-
-    const isFutureMonth = monthStart.getTime() > today.getTime();
-
-    return {
-      totalWeekHours: parseFloat(totalWeekHours.toFixed(2)),
-      totalMonthlyHours: parseFloat(totalMonthlyHours.toFixed(2)),
-      pendingUpdates,
-      monthStatus: (!isFutureMonth && pendingUpdates === 0) ? 'Completed' : 'Pending',
-    };
   }
 
   async getAllDashboardStats(queryMonth?: string, queryYear?: string, managerName?: string, managerId?: string) {
@@ -1057,7 +1228,7 @@ export class EmployeeAttendanceService {
                 const d = new Date(r.workingDate);
                 return d >= weekStart && d <= weekEnd;
             })
-            .reduce((acc, curr) => acc + (curr.totalHours || 0), 0);
+            .reduce((acc, curr) => acc + Number(curr.totalHours || 0), 0);
 
         // Monthly Hours
         const totalMonthlyHours = empRecords
@@ -1065,7 +1236,7 @@ export class EmployeeAttendanceService {
                 const d = new Date(r.workingDate);
                 return d >= monthStart && d <= monthEnd;
             })
-            .reduce((acc, curr) => acc + (curr.totalHours || 0), 0);
+            .reduce((acc, curr) => acc + Number(curr.totalHours || 0), 0);
 
         // Pending Updates
         const existingAttendanceDates = new Set(
@@ -1099,8 +1270,8 @@ export class EmployeeAttendanceService {
         }
 
         results[empId] = {
-            totalWeekHours: parseFloat(totalWeekHours.toFixed(2)),
-            totalMonthlyHours: parseFloat(totalMonthlyHours.toFixed(2)),
+            totalWeekHours: parseFloat(Number(totalWeekHours).toFixed(2)),
+            totalMonthlyHours: parseFloat(Number(totalMonthlyHours).toFixed(2)),
             pendingUpdates,
             monthStatus: (!isFutureMonth && pendingUpdates === 0) ? 'Completed' : 'Pending',
         };
@@ -1383,13 +1554,16 @@ export class EmployeeAttendanceService {
                     text = 'Half day';
                     fontColor = 'FFA500'; // Orange
                 } 
-                // 2. Then check Work Location (Client Visit / WFH)
-                else if (record.workLocation === 'Client Visit') {
+                // 2. Then check Work Location (Client Visit / WFH / Office)
+                else if (record.workLocation === WorkLocation.CLIENT_VISIT) {
                     text = 'Client Visit';
                     fontColor = '0000FF'; // Blue
-                } else if (record.workLocation === 'WFH') {
+                } else if (record.workLocation === WorkLocation.WFH || record.workLocation === WorkLocation.WORK_FROM_HOME) {
                     text = 'WFH';
                     fontColor = '000000'; 
+                } else if (record.workLocation === WorkLocation.OFFICE) {
+                    text = 'Office';
+                    fontColor = '008000'; // Green 
                 } 
                 // 3. Finally standard Present
                 else if (record.status === AttendanceStatus.FULL_DAY) {

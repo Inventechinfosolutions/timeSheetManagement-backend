@@ -47,4 +47,24 @@ export class LeaveRequestDto {
   @IsNumber()
   @IsOptional()
   duration?: number;
+
+  @IsString()
+  @IsOptional()
+  halfDayType?: string;
+
+  @IsString()
+  @IsOptional()
+  otherHalfType?: string;
+
+  @IsNotEmpty()
+  @IsOptional()
+  isHalfDay?: boolean;
+
+  @IsString()
+  @IsOptional()
+  firstHalf?: string;
+
+  @IsString()
+  @IsOptional()
+  secondHalf?: string;
 }
