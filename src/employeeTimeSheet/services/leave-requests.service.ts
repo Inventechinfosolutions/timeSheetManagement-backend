@@ -600,11 +600,11 @@ export class LeaveRequestsService {
         continue; // Skip already cancelled dates
       }
 
-      // Rule: Cancel allowed until 12:00 PM (12:00) of the SAME day
-      // Deadline = CurrentDate at 12:00:00
+      // Rule: Cancel allowed until 6:30 PM (18:30) of the SAME day
+      // Deadline = CurrentDate at 18:30:00
       const deadline = currentDate
-        .hour(12)
-        .minute(0)
+        .hour(18)
+        .minute(30)
         .second(0);
 
       const isCancellable = now.isBefore(deadline);
@@ -640,8 +640,8 @@ export class LeaveRequestsService {
     for (const dateStr of datesToCancel) {
       const targetDate = dayjs(dateStr);
       const deadline = targetDate
-        .hour(12)
-        .minute(0)
+        .hour(18)
+        .minute(30)
         .second(0);
       if (now.isAfter(deadline)) {
         throw new ForbiddenException(
