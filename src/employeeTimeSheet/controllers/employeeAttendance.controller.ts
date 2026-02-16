@@ -145,6 +145,21 @@ export class EmployeeAttendanceController {
     return this.employeeAttendanceService.findOne(id);
   }
 
+  @Get('check-entry-block')
+  @ApiOperation({ summary: 'Check if an attendance entry is blocked' })
+  @ApiQuery({ name: 'employeeId', type: String })
+  @ApiQuery({ name: 'date', type: String })
+  @ApiResponse({
+    status: 200,
+    description: 'Returns blocking status and reason.',
+  })
+  async checkEntryBlock(
+    @Query('employeeId') employeeId: string,
+    @Query('date') date: string,
+  ) {
+    return this.employeeAttendanceService.checkEntryBlock(employeeId, date);
+  }
+
   @Get('work-trends/:employeeId')
   @ApiOperation({ summary: 'Get work trends for last 5 months' })
   @ApiParam({ name: 'employeeId', type: String })

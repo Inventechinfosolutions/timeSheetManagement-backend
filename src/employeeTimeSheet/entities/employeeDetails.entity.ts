@@ -35,7 +35,7 @@ export class EmployeeDetails extends BaseEntity {
   })
   employmentType: EmploymentType | null;
 
-  @Column({ name: 'email', unique: true, length: 255 })
+  @Column({ name: 'email', unique: true, length: 255 ,nullable: true })
   email: string;
 
   @Column({ name: 'joining_date', type: 'date', nullable: true })

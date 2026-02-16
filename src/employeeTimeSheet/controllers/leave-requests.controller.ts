@@ -185,6 +185,23 @@ export class LeaveRequestsController {
     return this.leaveRequestsService.updateStatus(+id, status, undefined, reviewerName, reviewerEmail);
   }
 
+  @Patch(':id/:employeeId/clear-attendance')
+  @UseGuards(JwtAuthGuard)
+  clearAttendance(@Param('id') id: string, @Param('employeeId') employeeId: string) {
+    return this.leaveRequestsService.clearAttendanceForRequest(+id);
+  }
+
+  @Patch(':id/modify')
+  @UseGuards(JwtAuthGuard)
+  modifyRequest(
+    @Param('id') id: string,
+    @Body() updateData: { title?: string; description?: string; firstHalf?: string; secondHalf?: string; employeeId?: string },
+    @Req() req: any,
+  ) {
+    const employeeId = updateData.employeeId || req.user.id || req.user.employeeId;
+    return this.leaveRequestsService.modifyRequest(+id, employeeId, updateData);
+  }
+
   @Post(':id/request-modified')
   createModification(
     @Param('id') id: string,
@@ -209,6 +226,11 @@ export class LeaveRequestsController {
     const reviewerName = user?.aliasLoginName || user?.fullName || 'Admin';
     const reviewerEmail = user?.loginId || user?.email;
     return this.leaveRequestsService.rejectCancellation(+id, employeeId, reviewerName, reviewerEmail);
+  }
+
+  @Patch(':id/undo-modification')
+  async undoModificationRequest(@Param('id') id: number, @Body('employeeId') employeeId: string) {
+    return this.leaveRequestsService.undoModificationRequest(id, employeeId);
   }
 
   @Get(':id/cancellable-dates')

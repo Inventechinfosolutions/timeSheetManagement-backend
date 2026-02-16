@@ -118,6 +118,42 @@ export const baseLayout = (content: string, title: string, headerCardTitle?: str
       font-size: 12px;
       color: #9ca3af;
     }
+    .day-details-container {
+      background-color: #eff6ff;
+      border: 1px solid #dbeafe;
+      border-radius: 12px;
+      padding: 16px;
+      margin: 20px 0;
+    }
+    .day-details-header {
+      font-size: 13px;
+      font-weight: 800;
+      color: #1e3a8a;
+      text-transform: uppercase;
+      margin-bottom: 12px;
+      display: flex;
+      align-items: center;
+    }
+    .half-card-table { width: 100%; border-collapse: separate; border-spacing: 10px 0; margin: 0 -10px; }
+    .half-card {
+      background-color: #ffffff;
+      border: 1px solid #e5e7eb;
+      border-radius: 8px;
+      padding: 12px;
+      width: 50%;
+    }
+    .half-label {
+      font-size: 10px;
+      font-weight: 700;
+      color: #6b7280;
+      text-transform: uppercase;
+      margin-bottom: 4px;
+    }
+    .half-value {
+      font-size: 15px;
+      font-weight: 800;
+      color: #4f46e5;
+    }
   </style>
 </head>
 <body>
