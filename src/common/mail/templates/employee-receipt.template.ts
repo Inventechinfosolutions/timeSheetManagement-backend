@@ -9,6 +9,8 @@ export interface EmployeeReceiptData {
   duration: string | number;
   status: string;
   description?: string;
+  firstHalf?: string | null;
+  secondHalf?: string | null;
 }
 
 export const getEmployeeReceiptTemplate = (data: EmployeeReceiptData) => {
@@ -16,25 +18,48 @@ export const getEmployeeReceiptTemplate = (data: EmployeeReceiptData) => {
   // Amber color for pending/requesting statuses
   const statusColor = '#f59e0b'; 
 
+  // Custom Header/Subject Logic
+  let requestDisplayName = data.requestType;
+  const fHalf = data.firstHalf || 'Office';
+  const sHalf = data.secondHalf || 'Office';
+
+  if (fHalf !== 'Office' || sHalf !== 'Office') {
+      if (fHalf === sHalf) {
+          requestDisplayName = fHalf === 'Apply Leave' || fHalf === 'Leave' ? 'Leave' : fHalf;
+      } else if ((fHalf === 'Leave' || fHalf === 'Apply Leave') && sHalf === 'Office') {
+          requestDisplayName = 'Half Day Leave';
+      } else if (fHalf === 'Office' && (sHalf === 'Leave' || sHalf === 'Apply Leave')) {
+          requestDisplayName = 'Half Day Leave';
+      } else {
+          const parts = [fHalf, sHalf]
+              .map(h => (h === 'Apply Leave' || h === 'Leave') ? 'Leave' : h)
+              .filter(h => h && h !== 'Office');
+          requestDisplayName = parts.join(' + ');
+      }
+  }
+
   const content = `
     <p style="font-size: 16px; color: #1f2937;">Dear ${data.employeeName},</p>
     <p style="font-size: 14px; color: #4b5563; line-height: 1.6;">
-      Your request for <strong>${data.requestType}</strong> titled "<strong>${data.title}</strong>" has been successfully submitted. It is now awaiting review.
+      Your request for <strong>${requestDisplayName}</strong> titled "<strong>${data.title}</strong>" has been successfully submitted. It is now awaiting review.
     </p>
 
-    <div class="details-box">
-      <div class="detail-row">
-        <span class="detail-label">Request Type:</span> ${data.requestType}
+    <div class="day-details-container">
+      <div class="day-details-header">
+        <span style="font-size: 16px; margin-right: 8px;">🕒</span> DAY DETAILS
       </div>
-      <div class="detail-row">
-        <span class="detail-label">From:</span> ${data.fromDate}
-      </div>
-      <div class="detail-row">
-        <span class="detail-label">To:</span> ${data.toDate}
-      </div>
-      <div class="detail-row">
-        <span class="detail-label">Duration:</span> ${data.duration} Day(s)
-      </div>
+      <table class="half-card-table" width="100%" border="0" cellspacing="0" cellpadding="0">
+        <tr>
+          <td class="half-card">
+            <div class="half-label">FIRST HALF</div>
+            <div class="half-value">${data.firstHalf || 'Office'}</div>
+          </td>
+          <td class="half-card">
+            <div class="half-label">SECOND HALF</div>
+            <div class="half-value">${data.secondHalf || 'Office'}</div>
+          </td>
+        </tr>
+      </table>
     </div>
 
     <p style="font-size: 16px; font-weight: 700; margin-top: 20px;">
@@ -50,5 +75,5 @@ export const getEmployeeReceiptTemplate = (data: EmployeeReceiptData) => {
     </div>
   `;
 
-  return baseLayout(content, `${data.requestType} Submitted`, 'SUBMISSION SUCCESSFUL', 'white');
+  return baseLayout(content, `${requestDisplayName} Submitted`, 'SUBMISSION SUCCESSFUL', 'white');
 };

@@ -9,6 +9,8 @@ interface RejectionConfirmationParams {
   endDate: string;
   duration: number;
   reason?: string;
+  firstHalf?: string | null;
+  secondHalf?: string | null;
 }
 
 interface CancellationRejectionConfirmationParams {
@@ -17,6 +19,8 @@ interface CancellationRejectionConfirmationParams {
   requestType: string;
   dates: string;
   reason?: string;
+  firstHalf?: string | null;
+  secondHalf?: string | null;
 }
 
 interface ApprovalConfirmationParams {
@@ -28,6 +32,8 @@ interface ApprovalConfirmationParams {
   endDate: string;
   duration: number;
   reason?: string;
+  firstHalf?: string | null;
+  secondHalf?: string | null;
 }
 
 interface CancellationApprovalConfirmationParams {
@@ -36,23 +42,43 @@ interface CancellationApprovalConfirmationParams {
   requestType: string;
   dates: string;
   reason?: string;
+  firstHalf?: string | null;
+  secondHalf?: string | null;
 }
 
 export const getRejectionConfirmationTemplate = (data: RejectionConfirmationParams) => {
   const reasonText = data.reason ? `<br><strong>Reason for Rejection:</strong> ${data.reason}` : '';
-  
+
   const content = `
     <p>Dear ${data.reviewerName},</p>
     
     <p>This is a confirmation that you have <strong>Rejected</strong> the following request:</p>
     
-    <div style="background-color: #f8fafc; padding: 15px; border-radius: 8px; margin: 20px 0;">
-      <p style="margin: 5px 0;"><strong>Employee:</strong> ${data.employeeName} (${data.employeeId})</p>
-      <p style="margin: 5px 0;"><strong>Type:</strong> ${data.requestType}</p>
-      <p style="margin: 5px 0;"><strong>Dates:</strong> ${data.startDate} to ${data.endDate}</p>
-      <p style="margin: 5px 0;"><strong>Duration:</strong> ${data.duration} Day(s)</p>
-      ${reasonText}
-    </div>
+      <div style="background-color: #f8fafc; padding: 15px; border-radius: 8px; margin: 20px 0;">
+        <p style="margin: 5px 0;"><strong>Employee:</strong> ${data.employeeName} (${data.employeeId})</p>
+        <p style="margin: 5px 0;"><strong>Type:</strong> ${data.requestType}</p>
+        <p style="margin: 5px 0;"><strong>Dates:</strong> ${data.startDate} to ${data.endDate}</p>
+        <p style="margin: 5px 0;"><strong>Duration:</strong> ${data.duration} Day(s)</p>
+        ${reasonText}
+      </div>
+
+      <div class="day-details-container">
+        <div class="day-details-header">
+          <span style="font-size: 16px; margin-right: 8px;">🕒</span> DAY DETAILS
+        </div>
+        <table class="half-card-table" width="100%" border="0" cellspacing="0" cellpadding="0">
+          <tr>
+            <td class="half-card">
+              <div class="half-label">FIRST HALF</div>
+              <div class="half-value">${data.firstHalf || 'Office'}</div>
+            </td>
+            <td class="half-card">
+              <div class="half-label">SECOND HALF</div>
+              <div class="half-value">${data.secondHalf || 'Office'}</div>
+            </td>
+          </tr>
+        </table>
+      </div>
     
     <p>The employee has been notified that this request was not approved. Their attendance record for these dates will remain unchanged (or marked as Absent/Upcoming).</p>
   `;
@@ -70,6 +96,24 @@ export const getCancellationRejectionConfirmationTemplate = (data: CancellationR
       <p style="margin: 5px 0;"><strong>Employee:</strong> ${data.employeeName}</p>
       <p style="margin: 5px 0;"><strong>Original Request:</strong> ${data.requestType} on ${data.dates}</p>
     </div>
+
+    <div class="day-details-container">
+      <div class="day-details-header">
+        <span style="font-size: 16px; margin-right: 8px;">🕒</span> DAY DETAILS
+      </div>
+      <table class="half-card-table" width="100%" border="0" cellspacing="0" cellpadding="0">
+        <tr>
+          <td class="half-card">
+            <div class="half-label">FIRST HALF</div>
+            <div class="half-value">${data.firstHalf || 'Office'}</div>
+          </td>
+          <td class="half-card">
+            <div class="half-label">SECOND HALF</div>
+            <div class="half-value">${data.secondHalf || 'Office'}</div>
+          </td>
+        </tr>
+      </table>
+    </div>
     
     <p>This means the Original Approval remains in effect. The employee's attendance status for these dates will not be reverted and will stay as <strong>${data.requestType}</strong>.</p>
     <p>The employee has been notified of this decision.</p>
@@ -80,7 +124,7 @@ export const getCancellationRejectionConfirmationTemplate = (data: CancellationR
 
 export const getApprovalConfirmationTemplate = (data: ApprovalConfirmationParams) => {
     const reasonText = data.reason ? `<br><strong>Note:</strong> ${data.reason}` : '';
-    
+
     const content = `
       <p>Dear ${data.reviewerName},</p>
       
@@ -92,6 +136,24 @@ export const getApprovalConfirmationTemplate = (data: ApprovalConfirmationParams
         <p style="margin: 5px 0;"><strong>Dates:</strong> ${data.startDate} to ${data.endDate}</p>
         <p style="margin: 5px 0;"><strong>Duration:</strong> ${data.duration} Day(s)</p>
         ${reasonText}
+      </div>
+
+      <div class="day-details-container">
+        <div class="day-details-header">
+          <span style="font-size: 16px; margin-right: 8px;">🕒</span> DAY DETAILS
+        </div>
+        <table class="half-card-table" width="100%" border="0" cellspacing="0" cellpadding="0">
+          <tr>
+            <td class="half-card">
+              <div class="half-label">FIRST HALF</div>
+              <div class="half-value">${data.firstHalf || 'Office'}</div>
+            </td>
+            <td class="half-card">
+              <div class="half-label">SECOND HALF</div>
+              <div class="half-value">${data.secondHalf || 'Office'}</div>
+            </td>
+          </tr>
+        </table>
       </div>
       
       <p>The employee has been notified that this request was approved. Their attendance record for these dates will be updated to reflect this approval.</p>
@@ -109,6 +171,24 @@ export const getCancellationApprovalConfirmationTemplate = (data: CancellationAp
       <div style="background-color: #f8fafc; padding: 15px; border-radius: 8px; margin: 20px 0;">
         <p style="margin: 5px 0;"><strong>Employee:</strong> ${data.employeeName}</p>
         <p style="margin: 5px 0;"><strong>Original Request:</strong> ${data.requestType} on ${data.dates}</p>
+      </div>
+
+      <div class="day-details-container">
+        <div class="day-details-header">
+          <span style="font-size: 16px; margin-right: 8px;">🕒</span> DAY DETAILS
+        </div>
+        <table class="half-card-table" width="100%" border="0" cellspacing="0" cellpadding="0">
+          <tr>
+            <td class="half-card">
+              <div class="half-label">FIRST HALF</div>
+              <div class="half-value">${data.firstHalf || 'Office'}</div>
+            </td>
+            <td class="half-card">
+              <div class="half-label">SECOND HALF</div>
+              <div class="half-value">${data.secondHalf || 'Office'}</div>
+            </td>
+          </tr>
+        </table>
       </div>
       
       <p>This means the Original Approval has been revoked. The employee's attendance status for these dates will be reverted to its original state.</p>
