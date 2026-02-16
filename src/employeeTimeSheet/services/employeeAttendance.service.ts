@@ -74,11 +74,14 @@ export class EmployeeAttendanceService {
     return 'Office'; // Default to Office
   }
 
+  private isActivity(half: string | null, pattern: string): boolean {
+    return !!(half && half.toLowerCase().includes(pattern));
+  }
 
-  async create(createEmployeeAttendanceDto: EmployeeAttendanceDto, isAdmin: boolean = false, isManager: boolean = false): Promise<EmployeeAttendance | null> {
+
+  async create(createEmployeeAttendanceDto: EmployeeAttendanceDto, isPrivileged: boolean = false): Promise<EmployeeAttendance | null> {
     try {
-      if (!isAdmin && !isManager && createEmployeeAttendanceDto.workingDate && 
-          !this.isEditableMonth(new Date(createEmployeeAttendanceDto.workingDate))) {
+      if (!isPrivileged && !this.isEditableMonth(new Date(createEmployeeAttendanceDto.workingDate))) {
           throw new BadRequestException('Attendance for this month is locked.');
       }
 
@@ -89,7 +92,7 @@ export class EmployeeAttendanceService {
 
       // (Moved future check down)
 
-      if (!isAdmin && createEmployeeAttendanceDto.employeeId && createEmployeeAttendanceDto.workingDate) {
+      if (createEmployeeAttendanceDto.employeeId && createEmployeeAttendanceDto.workingDate) {
         const blocker = await this.blockerService.isBlocked(
           createEmployeeAttendanceDto.employeeId, 
           createEmployeeAttendanceDto.workingDate
@@ -167,10 +170,14 @@ export class EmployeeAttendanceService {
         // CRITICAL: Synchronize splits and status for UPDATED existing records in create branch
         const hours = Number(existingRecord.totalHours || 0);
         if (hours > 0 && hours <= 4.5) {
-          existingRecord.firstHalf = 'Office';
-          existingRecord.secondHalf = 'Leave';
+          // Relaxed enforcement: Only set defaults if no source request is linked and splits are empty
+          if (!existingRecord.sourceRequestId && (!existingRecord.firstHalf || !existingRecord.secondHalf)) {
+            existingRecord.firstHalf = 'Office';
+            existingRecord.secondHalf = 'Leave';
+            this.logger.log(`[ATTENDANCE_CREATE] Enforced default Half Day splits for Record ${existingRecord.id}`);
+          }
           existingRecord.status = AttendanceStatus.HALF_DAY;
-          this.logger.log(`[ATTENDANCE_CREATE] Enforced Half Day synchronization for existing record (<= 4.5h)`);
+          this.logger.log(`[ATTENDANCE_CREATE] Synchronized Half Day status (<= 4.5h)`);
         } else if (hours === 9) {
           const defaultActivity = this.determineDefaultActivity(existingRecord.firstHalf, existingRecord.secondHalf);
           if (!existingRecord.firstHalf || existingRecord.firstHalf === 'Leave') existingRecord.firstHalf = defaultActivity;
@@ -220,11 +227,14 @@ export class EmployeeAttendanceService {
       const hours = Number(newAttendance.totalHours || 0);
 
       if (hours > 0 && hours <= 4.5) {
-        // Enforce Half Day split rule
-        newAttendance.firstHalf = 'Office';
-        newAttendance.secondHalf = 'Leave';
+        // Relaxed enforcement: Only set defaults if no source request is linked and splits are empty
+        if (!newAttendance.sourceRequestId && (!newAttendance.firstHalf || !newAttendance.secondHalf)) {
+          newAttendance.firstHalf = 'Office';
+          newAttendance.secondHalf = 'Leave';
+          this.logger.log(`[ATTENDANCE_CREATE] Enforced default Half Day splits for NEW record`);
+        }
         newAttendance.status = AttendanceStatus.HALF_DAY;
-        this.logger.log(`[ATTENDANCE_CREATE] Enforced Half Day synchronization (<= 4.5h)`);
+        this.logger.log(`[ATTENDANCE_CREATE] Synchronized Half Day status (<= 4.5h)`);
       } else if (hours === 9) {
         // Enforce Full Day splits if missing or inconsistent
         const defaultActivity = this.determineDefaultActivity(newAttendance.firstHalf, newAttendance.secondHalf);
@@ -296,17 +306,17 @@ export class EmployeeAttendanceService {
     return { isBlocked: false, reason: null };
   }
 
-  async createBulk(attendanceDtos: EmployeeAttendanceDto[], isAdmin: boolean = false, isManager: boolean = false): Promise<EmployeeAttendance[]> {
+  async createBulk(attendanceDtos: EmployeeAttendanceDto[], isPrivileged: boolean = false): Promise<EmployeeAttendance[]> {
     const results: EmployeeAttendance[] = [];
     for (const dto of attendanceDtos) {
         try {
             let record;
             if (dto.id) {
                 // Update existing
-                record = await this.update(dto.id, dto, isAdmin, isManager);
+                record = await this.update(dto.id, dto, isPrivileged);
             } else {
                 // Create new
-                record = await this.create(dto, isAdmin, isManager);
+                record = await this.create(dto, isPrivileged);
             }
             
             if (record) {
@@ -475,7 +485,7 @@ export class EmployeeAttendanceService {
         }
 
         this.logger.log(`Updating ${recordsToCreate.length} records for ${employeeId}...`);
-        await this.createBulk(recordsToCreate, false, false);
+        await this.createBulk(recordsToCreate);
 
         this.logger.log(`Auto-update completed for ${employeeId}. Dates: ${updatedDateStrings.join(', ')}`);
         return { 
@@ -502,7 +512,7 @@ export class EmployeeAttendanceService {
     return await this.applyStatusBusinessRules(attendance);
   }
 
-  async update(id: number, updateDto: Partial<EmployeeAttendanceDto>, isAdmin: boolean = false, isManager: boolean = false): Promise<EmployeeAttendance | null> {
+  async update(id: number, updateDto: Partial<EmployeeAttendanceDto>, isPrivileged: boolean = false): Promise<EmployeeAttendance | null> {
     try {
       const attendance = await this.findOne(id);
       
@@ -510,10 +520,9 @@ export class EmployeeAttendanceService {
       this.logger.log(`[ATTENDANCE_UPDATE] Updating attendance ID: ${id}, EmployeeID: ${attendance.employeeId}`);
       this.logger.log(`[ATTENDANCE_UPDATE] Date: ${attendance.workingDate}, Current sourceRequestId: ${attendance.sourceRequestId}`);
       this.logger.log(`[ATTENDANCE_UPDATE] Incoming sourceRequestId in DTO: ${(updateDto as any).sourceRequestId}`);
-      this.logger.log(`[ATTENDANCE_UPDATE] isAdmin: ${isAdmin}, isManager: ${isManager}`);
       
       
-      if (!isAdmin && !isManager && !this.isEditableMonth(new Date(attendance.workingDate))) {
+      if (!isPrivileged && !this.isEditableMonth(new Date(attendance.workingDate))) {
         throw new BadRequestException('Attendance for this month is locked.');
       }
 
@@ -540,18 +549,15 @@ export class EmployeeAttendanceService {
           return null;
       }
 
-      if (!isAdmin && !isManager) {
-        const blocker = await this.blockerService.isBlocked(
-          attendance.employeeId, 
-          attendance.workingDate
-        );
-        if (blocker) {
-          const blockedByName = blocker.blockedBy || 'Administrator';
-          throw new BadRequestException(`Timesheet is locked for this date by ${blockedByName}. Please contact them to unlock.`);
-        }
+      const blocker = await this.blockerService.isBlocked(
+        attendance.employeeId, 
+        attendance.workingDate
+      );
+      if (blocker) {
+        const blockedByName = blocker.blockedBy || 'Administrator';
+        throw new BadRequestException(`Timesheet is locked for this date by ${blockedByName}. Please contact them to unlock.`);
       }
 
-      const isOverride = isAdmin || isManager;
       const isHalfDayStatus = attendance.status === AttendanceStatus.HALF_DAY || String(attendance.status).toLowerCase() === 'half day';
       const isLocked = !!attendance.sourceRequestId && isHalfDayStatus;
 
@@ -563,17 +569,12 @@ export class EmployeeAttendanceService {
       const isLeave = existingStatus === AttendanceStatus.LEAVE;
       Object.assign(attendance, updateDto);
       attendance.workLocation = null; // Force null again after assign
-
-      // CRITICAL: Clear sourceRequestId on manual updates
-      // This field should ONLY be set when a Half Day request is approved (via leave-requests.service.ts)
-      // All other updates should unlink the record from the original request
-      if (!updateDto.hasOwnProperty('sourceRequestId')) {
-          this.logger.log(`[ATTENDANCE_UPDATE] Clearing sourceRequestId (manual update)`);
-          attendance.sourceRequestId = null;
-      } else {
-          this.logger.log(`[ATTENDANCE_UPDATE] Preserving sourceRequestId from updateDto: ${(updateDto as any).sourceRequestId}`);
-      }
       
+      // Preserve sourceRequestId if not explicitly provided in updateDto
+      if (updateDto.hasOwnProperty('sourceRequestId')) {
+        attendance.sourceRequestId = (updateDto as any).sourceRequestId;
+      }
+
       // CRITICAL FIX: Synchronize splits and status with the new totalHours
       if (updateDto.totalHours !== undefined) {
         const hours = Number(updateDto.totalHours);
@@ -594,27 +595,39 @@ export class EmployeeAttendanceService {
         } 
         // If hours is <= 4.5 and > 0, it's ALWAYS a Half Day.
         else if (hours > 0 && hours <= 4.5) {
-          // Rule: First Half = Office, Second Half = Leave
-          attendance.firstHalf = "Office";
-          attendance.secondHalf = "Leave";
+          // Relaxed enforcement: Only set defaults if no source request is linked
+          if (!attendance.sourceRequestId && (!attendance.firstHalf || !attendance.secondHalf)) {
+            attendance.firstHalf = "Office";
+            attendance.secondHalf = "Leave";
+            updateDto.firstHalf = "Office";
+            updateDto.secondHalf = "Leave";
+            this.logger.log(`[ATTENDANCE_UPDATE] Enforced default Half Day splits (no sourceRequestId)`);
+          }
           attendance.status = AttendanceStatus.HALF_DAY;
-          
-          // Sync updateDto for TypeORM
-          updateDto.firstHalf = "Office";
-          updateDto.secondHalf = "Leave";
           updateDto.status = AttendanceStatus.HALF_DAY;
           
-          this.logger.log(`[ATTENDANCE_UPDATE] Synchronized Half Day (${hours}h) - Set splits to: Office, Leave`);
+          this.logger.log(`[ATTENDANCE_UPDATE] Synchronized Half Day (${hours}h) status`);
         }
         else if (hours === 0) {
-          attendance.firstHalf = null;
-          attendance.secondHalf = null;
-          updateDto.firstHalf = null as any;
-          updateDto.secondHalf = null as any;
-          
-          const newStatus = await this.determineStatus(0, attendance.workingDate);
+          const newStatus = updateDto.status && Object.values(AttendanceStatus).includes(updateDto.status as any)
+            ? (updateDto.status as AttendanceStatus)
+            : await this.determineStatus(0, attendance.workingDate, updateDto.firstHalf);
+            
           attendance.status = newStatus;
           updateDto.status = newStatus;
+
+          if (newStatus === AttendanceStatus.ABSENT) {
+            attendance.firstHalf = 'Absent';
+            attendance.secondHalf = 'Absent';
+            updateDto.firstHalf = 'Absent' as any;
+            updateDto.secondHalf = 'Absent' as any;
+          } else {
+            attendance.firstHalf = newStatus === AttendanceStatus.NOT_UPDATED ? 'Not Updated' : null;
+            attendance.secondHalf = null;
+            updateDto.firstHalf = attendance.firstHalf as any;
+            updateDto.secondHalf = null as any;
+          }
+          
           this.logger.log(`[ATTENDANCE_UPDATE] Reset to 0 hours: ${newStatus}`);
         }
       }
@@ -710,7 +723,7 @@ export class EmployeeAttendanceService {
       today.setHours(0, 0, 0, 0);
       dateObj.setHours(0, 0, 0, 0);
       
-      return dateObj <= today ? AttendanceStatus.ABSENT : AttendanceStatus.NOT_UPDATED;
+      return dateObj > today ? AttendanceStatus.UPCOMING : (firstHalf === 'Not Updated' ? AttendanceStatus.NOT_UPDATED : AttendanceStatus.ABSENT);
     } else if (hours > 4.5) {
       // Hours > 4.5 is FULL_DAY
       return AttendanceStatus.FULL_DAY;
@@ -782,9 +795,9 @@ export class EmployeeAttendanceService {
     return results;
   }
 
-  async remove(id: number, isAdmin: boolean = false, isManager: boolean = false): Promise<void> {
+  async remove(id: number): Promise<void> {
     const attendance = await this.employeeAttendanceRepository.findOne({ where: { id } });
-    if (attendance && !isAdmin && !isManager && !this.isEditableMonth(new Date(attendance.workingDate))) {
+    if (attendance && !this.isEditableMonth(new Date(attendance.workingDate))) {
          throw new BadRequestException('Cannot delete locked attendance records.');
     }
     const result = await this.employeeAttendanceRepository.delete(id);
@@ -912,8 +925,7 @@ export class EmployeeAttendanceService {
 
         const stats = monthlyStatsMap.get(key);
         const status = (record.status || '').toLowerCase();
-        const location = (record.workLocation || '').toLowerCase();
-
+        
         // Check for Full Leaves (1.0) and Half Days (0.5)
         if (status === 'leave' || status === 'absent') {
             stats.totalLeaves += 1;
@@ -922,12 +934,14 @@ export class EmployeeAttendanceService {
             stats.totalLeaves += 0.5;
         }
 
-        // Check for WFH
-        if (location.includes('home') || location.includes('wfh')) {
+        // Check for WFH in either split
+        if (this.isActivity(record.firstHalf, 'home') || this.isActivity(record.firstHalf, 'wfh') ||
+            this.isActivity(record.secondHalf, 'home') || this.isActivity(record.secondHalf, 'wfh')) {
             stats.workFromHome++;
         } 
-        // Check for Client Visit
-        else if (location.includes('client') || location.includes('visit') || location.includes('cv')) {
+        // Check for Client Visit in either split
+        else if (this.isActivity(record.firstHalf, 'client') || this.isActivity(record.firstHalf, 'visit') || this.isActivity(record.firstHalf, 'cv') ||
+                 this.isActivity(record.secondHalf, 'client') || this.isActivity(record.secondHalf, 'visit') || this.isActivity(record.secondHalf, 'cv')) {
             stats.clientVisits++;
         }
     });
@@ -1554,14 +1568,16 @@ export class EmployeeAttendanceService {
                     text = 'Half day';
                     fontColor = 'FFA500'; // Orange
                 } 
-                // 2. Then check Work Location (Client Visit / WFH / Office)
-                else if (record.workLocation === WorkLocation.CLIENT_VISIT) {
+                // 2. Then check activities in splits (Client Visit / WFH / Office)
+                else if (this.isActivity(record.firstHalf, 'client') || this.isActivity(record.firstHalf, 'visit') || this.isActivity(record.firstHalf, 'cv') ||
+                         this.isActivity(record.secondHalf, 'client') || this.isActivity(record.secondHalf, 'visit') || this.isActivity(record.secondHalf, 'cv')) {
                     text = 'Client Visit';
                     fontColor = '0000FF'; // Blue
-                } else if (record.workLocation === WorkLocation.WFH || record.workLocation === WorkLocation.WORK_FROM_HOME) {
+                } else if (this.isActivity(record.firstHalf, 'home') || this.isActivity(record.firstHalf, 'wfh') ||
+                           this.isActivity(record.secondHalf, 'home') || this.isActivity(record.secondHalf, 'wfh')) {
                     text = 'WFH';
                     fontColor = '000000'; 
-                } else if (record.workLocation === WorkLocation.OFFICE) {
+                } else if (this.isActivity(record.firstHalf, 'office') || this.isActivity(record.secondHalf, 'office')) {
                     text = 'Office';
                     fontColor = '008000'; // Green 
                 } 
