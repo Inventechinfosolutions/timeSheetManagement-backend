@@ -956,6 +956,103 @@ export class EmployeeAttendanceService {
     return Array.from(monthlyStatsMap.values());
   }
 
+  async getTrendsDetailed(employeeId: string, endDateStr: string, startDateStr?: string): Promise<any[]> {
+    const endInput = new Date(endDateStr);
+    let start: Date;
+    
+    if (startDateStr) {
+        start = new Date(startDateStr);
+    } else {
+        // Default: last 5 months including current month
+        start = new Date(endInput.getFullYear(), endInput.getMonth() - 4, 1);
+    }
+    
+    start.setHours(0, 0, 0, 0);
+    const end = new Date(endInput.getFullYear(), endInput.getMonth(), endInput.getDate(), 23, 59, 59);
+
+    const attendances = await this.employeeAttendanceRepository.find({
+        where: {
+            employeeId,
+            workingDate: Between(start, end),
+        },
+        order: { workingDate: 'ASC' }
+    });
+
+    const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    const monthlyStatsMap = new Map<string, any>();
+
+    attendances.forEach(record => {
+        // Use a robust way to get local YYYY-MM from the workingDate
+        const date = record.workingDate instanceof Date ? record.workingDate : new Date(record.workingDate);
+        const m = date.getMonth();
+        const y = date.getFullYear();
+        const key = `${monthNames[m]} ${y}`;
+        
+        if (!monthlyStatsMap.has(key)) {
+            monthlyStatsMap.set(key, {
+                month: monthNames[m],
+                year: y,
+                totalLeaves: 0,
+                workFromHome: 0,
+                clientVisits: 0,
+                office: 0
+            });
+        }
+
+        const stats = monthlyStatsMap.get(key);
+        
+        // 1. If splits exist, use them (most accurate for half-days)
+        if (record.firstHalf || record.secondHalf) {
+            const processHalf = (half: string | null) => {
+                if (!half) return;
+                const h = half.toLowerCase();
+                if (h.includes('leave') || h.includes('absent')) {
+                    stats.totalLeaves += 0.5;
+                } else if (h.includes('wfh') || h.includes('home') || h.includes('work from home')) {
+                    stats.workFromHome += 0.5;
+                } else if (h.includes('client') || h.includes('visit') || h.includes('client place')) {
+                    stats.clientVisits += 0.5;
+                } else if (h.includes('office')) {
+                    stats.office += 0.5;
+                }
+            };
+
+            processHalf(record.firstHalf);
+            processHalf(record.secondHalf);
+        } 
+        // 2. Fallback to status and totalHours if splits are missing
+        else {
+            const status = (record.status || '').toLowerCase();
+            const hours = Number(record.totalHours || 0);
+
+            if (status === 'leave' || status === 'absent') {
+                stats.totalLeaves += 1;
+            } else if (status === 'half day') {
+                // If it's a half day but splits are missing, assume 0.5 Leave and 0.5 Office
+                stats.totalLeaves += 0.5;
+                stats.office += 0.5;
+            } else if (hours === 9 || status.includes('present') || status.includes('full')) {
+                // Default to Office if it's a full day without specific splits
+                stats.office += 1;
+            } else if (hours > 0) {
+                // Any other partial work without splits
+                stats.office += (hours / 9);
+            }
+        }
+    });
+
+    // Ensure values are rounded to 2 decimal places to avoid floating point issues
+    const results = Array.from(monthlyStatsMap.values()).map(item => ({
+        ...item,
+        totalLeaves: Math.round(item.totalLeaves * 10) / 10,
+        workFromHome: Math.round(item.workFromHome * 10) / 10,
+        clientVisits: Math.round(item.clientVisits * 10) / 10,
+        office: Math.round(item.office * 10) / 10
+    }));
+
+    return results;
+  }
+
   async findAllMonthlyDetails(month: string, year: string, managerName?: string, managerId?: string): Promise<EmployeeAttendance[]> {
     const start = new Date(`${year}-${month.padStart(2, '0')}-01T00:00:00`);
     const end = new Date(start.getFullYear(), start.getMonth() + 1, 0, 23, 59, 59);

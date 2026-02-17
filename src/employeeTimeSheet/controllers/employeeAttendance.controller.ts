@@ -180,6 +180,29 @@ export class EmployeeAttendanceController {
     return this.employeeAttendanceService.getTrends(employeeId, endDate, startDate);
   }
 
+  @Get('work-trends-detailed/:employeeId')
+  @ApiOperation({ summary: 'Get detailed work trends based on half-day activities' })
+  @ApiParam({ name: 'employeeId', type: String })
+  @ApiQuery({ name: 'endDate', type: String, required: false })
+  @ApiQuery({ name: 'startDate', type: String, required: false })
+  async getTrendsDetailed(
+    @Param('employeeId') employeeId: string,
+    @Query() query: any,
+  ) {
+    let { endDate, startDate } = query;
+
+    // Support custom format ?From<Start>To<End>
+    if (!endDate) {
+        const rangeKey = Object.keys(query).find(k => k.startsWith('From') && k.includes('To'));
+        if (rangeKey) {
+            startDate = rangeKey.substring(4, rangeKey.indexOf('To'));
+            endDate = rangeKey.substring(rangeKey.indexOf('To') + 2);
+        }
+    }
+
+    return this.employeeAttendanceService.getTrendsDetailed(employeeId, endDate, startDate);
+  }
+
   @Get('monthly-details/:employeeId/:month/:year')
   @ApiOperation({ summary: 'Get monthly attendance for employee' })
   @ApiParam({ name: 'employeeId', type: String })
