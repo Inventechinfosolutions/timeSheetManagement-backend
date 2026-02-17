@@ -96,6 +96,42 @@ export class NotificationsService {
     this.logger.log(`Month-end reminders sent to ${count} employees.`);
     return count;
   }
+
+  async sendWeekendReminder(): Promise<number> {
+    this.logger.log('Starting Weekend Attendance Reminder broadcast...');
+    const employees = await this.employeeRepo.find();
+    let count = 0;
+
+    for (const emp of employees) {
+      if (emp.email) {
+        const title = 'Weekend Attendance Reminder';
+        const message =
+          'Please make sure to fill in your Friday hours and any pending work from the week before the weekend starts.\n\nRegards,\nAdmin Team';
+        const html = getGeneralNotificationTemplate({
+          recipientName: emp.fullName || 'Employee',
+          title: title,
+          message: message,
+        });
+
+        await this.mailService.sendMail(emp.email, title, message, html);
+        count++;
+        // Create Notification
+        await this.notificationRepo.save({
+          employeeId: emp.employeeId,
+          title: title,
+          message:
+            'Please make sure to fill in your Friday hours and any pending work from the week.',
+          type: 'alert',
+        });
+
+        // Add delay to respect mailtrap rate limits
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+      }
+    }
+
+    this.logger.log(`Weekend reminders sent to ${count} employees.`);
+    return count;
+  }
   async getUnreadNotifications(employeeId: string): Promise<Notification[]> {
     return await this.notificationRepo.find({
       where: { employeeId: employeeId, isRead: false },
