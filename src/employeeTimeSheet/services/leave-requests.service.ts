@@ -2412,4 +2412,149 @@ export class LeaveRequestsService {
 
     return { success: true, message: 'Modification request undone successfully' };
   }
+
+  async getMonthlyLeaveBalance(employeeId: string, month: number, year: number) {
+    const employee = await this.employeeDetailsRepository.findOne({
+      where: { employeeId },
+      select: ['id', 'employeeId', 'designation', 'employmentType', 'joiningDate'],
+    });
+
+    if (!employee) {
+      throw new NotFoundException(`Employee ${employeeId} not found`);
+    }
+
+    const isIntern =
+      employee.employmentType === EmploymentType.INTERN ||
+      (employee.designation || '').toLowerCase().includes('intern');
+    const monthlyAccrual = isIntern ? 1.0 : 1.5;
+
+    let runningBalance = 0;
+    let ytdUsed = 0;
+    let ytdLop = 0;
+
+    const targetMonthStats = {
+      carryOver: 0,
+      monthlyAccrual: monthlyAccrual,
+      leavesTaken: 0,
+      lop: 0,
+      balance: 0,
+      ytdUsed: 0,
+      ytdLop: 0,
+    };
+
+    // Calculate accurate starting point for carryover
+    const joinDate = dayjs(employee.joiningDate);
+    const joinMonth = joinDate.isValid() ? joinDate.month() + 1 : 1;
+    const joinYear = joinDate.isValid() ? joinDate.year() : year;
+
+    // Start calculation from joining year or 2024 (baseline)
+    const calculationStartYear = Math.max(joinYear, 2024);
+
+    // Fetch ALL attendance records for the entire period once
+    const attendanceRecords = await this.employeeAttendanceRepository.find({
+      where: {
+        employeeId,
+        workingDate: Between(
+          new Date(`${calculationStartYear}-01-01T00:00:00`),
+          new Date(`${year}-12-31T23:59:59`),
+        ),
+      },
+      order: { workingDate: 'ASC' },
+    });
+
+    // Group attendance by YYYY-M for efficient lookup
+    const attendanceMap = new Map<string, EmployeeAttendance[]>();
+    attendanceRecords.forEach((rec) => {
+      // Use YYYY-MM-DD string to avoid timezone shifts
+      const dateStr = rec.workingDate instanceof Date 
+        ? rec.workingDate.toISOString().split('T')[0] 
+        : String(rec.workingDate).split('T')[0];
+      
+      const [y, mStr] = dateStr.split('-');
+      const key = `${y}-${parseInt(mStr)}`; // "2026-3"
+      
+      let list = attendanceMap.get(key);
+      if (!list) {
+        list = [];
+        attendanceMap.set(key, list);
+      }
+      list.push(rec);
+    });
+
+    for (let curYear = calculationStartYear; curYear <= year; curYear++) {
+      // Reset YTD stats for each year
+      ytdUsed = 0;
+      ytdLop = 0;
+
+      const startM = curYear === calculationStartYear ? joinMonth : 1;
+      const endM = curYear === year ? month : 12;
+
+      for (let m = startM; m <= endM; m++) {
+        // interns do not have carry over between months or years
+        if (isIntern) {
+          runningBalance = 0;
+        }
+
+        if (curYear === year && m === month) {
+          targetMonthStats.carryOver = runningBalance;
+        }
+
+        runningBalance += monthlyAccrual;
+
+        // Use grouped attendance
+        const attendance = (attendanceMap && attendanceMap.get(`${curYear}-${m}`)) || [];
+
+        const monthlyUsage = attendance.reduce((acc, rec) => {
+          let dailyUsage = 0;
+          const status = (rec.status || '').toLowerCase();
+          
+          if (rec.firstHalf || rec.secondHalf) {
+            const processHalf = (half: string | null) => {
+              if (!half) return 0;
+              const h = half.toLowerCase();
+              if (h.includes('leave') || h.includes('absent')) {
+                return 0.5;
+              }
+              return 0;
+            };
+            dailyUsage = processHalf(rec.firstHalf) + processHalf(rec.secondHalf);
+          } else {
+            if (status.includes('leave') || status.includes('absent')) {
+              dailyUsage = 1;
+            } else if (status.includes('half day')) {
+              dailyUsage = 0.5;
+            }
+          }
+          return acc + dailyUsage;
+        }, 0);
+
+        const roundedUsage = Math.round(monthlyUsage * 10) / 10;
+        runningBalance -= roundedUsage;
+        
+        if (curYear === year) {
+          ytdUsed += roundedUsage;
+        }
+
+        let lop = 0;
+        if (runningBalance < 0) {
+          lop = Math.abs(runningBalance);
+          runningBalance = 0;
+        }
+        
+        if (curYear === year) {
+          ytdLop += lop;
+        }
+
+        if (curYear === year && m === month) {
+          targetMonthStats.leavesTaken = roundedUsage;
+          targetMonthStats.lop = lop;
+          targetMonthStats.balance = runningBalance;
+          targetMonthStats.ytdUsed = ytdUsed;
+          targetMonthStats.ytdLop = ytdLop;
+        }
+      }
+    }
+
+    return targetMonthStats;
+  }
 }
