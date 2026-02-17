@@ -87,13 +87,9 @@ export class EmployeeAttendanceController {
   })
   async create(@Body() createEmployeeAttendanceDto: EmployeeAttendanceDto, @Req() req: any) {
     const user = req.user;
-    const isAdmin = user?.userType === UserType.ADMIN;
-    
-    // Check for Manager Role
     const roleUpper = (user?.role || '').toUpperCase();
-    const isManager = user && (user.userType === 'MANAGER' || roleUpper.includes('MNG') || roleUpper.includes('MANAGER'));
-
-    return this.employeeAttendanceService.create(createEmployeeAttendanceDto, isAdmin, isManager);
+    const isPrivileged = user && (user.userType === 'ADMIN' || user.userType === 'MANAGER' || roleUpper.includes('MNG') || roleUpper.includes('MANAGER'));
+    return this.employeeAttendanceService.create(createEmployeeAttendanceDto, isPrivileged);
   }
 
  
@@ -145,6 +141,7 @@ export class EmployeeAttendanceController {
     return this.employeeAttendanceService.findOne(id);
   }
 
+  @UseGuards(JwtAuthGuard)
   @Get('check-entry-block')
   @ApiOperation({ summary: 'Check if an attendance entry is blocked' })
   @ApiQuery({ name: 'employeeId', type: String })
@@ -293,31 +290,20 @@ export class EmployeeAttendanceController {
     @Req() req: any
   ) {
     const user = req.user;
-    const isAdmin = user?.userType === UserType.ADMIN;
-    
-    // Check for Manager Role
     const roleUpper = (user?.role || '').toUpperCase();
-    const isManager = user && (user.userType === 'MANAGER' || roleUpper.includes('MNG') || roleUpper.includes('MANAGER'));
-
+    const isPrivileged = user && (user.userType === 'ADMIN' || user.userType === 'MANAGER' || roleUpper.includes('MNG') || roleUpper.includes('MANAGER'));
     return this.employeeAttendanceService.update(
       id,
       updateEmployeeAttendanceDto,
-      isAdmin,
-      isManager
+      isPrivileged
     );
   }
 
   @UseGuards(JwtAuthGuard)
   @Delete(':id')
   @ApiOperation({ summary: 'Delete an employee attendance record by ID' })
-  async remove(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
-    const user = req.user;
-    const isAdmin = user?.userType === UserType.ADMIN;
-    
-    const roleUpper = (user?.role || '').toUpperCase();
-    const isManager = user && (user.userType === 'MANAGER' || roleUpper.includes('MNG') || roleUpper.includes('MANAGER'));
-
-    return this.employeeAttendanceService.remove(id, isAdmin, isManager);
+  async remove(@Param('id', ParseIntPipe) id: number) {
+    return this.employeeAttendanceService.remove(id);
   }
 
 
@@ -328,13 +314,9 @@ export class EmployeeAttendanceController {
   @ApiBody({ type: [EmployeeAttendanceDto] })
   async createBulk(@Body() createDtos: EmployeeAttendanceDto[], @Req() req: any) {
     const user = req.user;
-    const isAdmin = user?.userType === UserType.ADMIN;
-    
-    // Check for Manager Role  
     const roleUpper = (user?.role || '').toUpperCase();
-    const isManager = user && (user.userType === 'MANAGER' || roleUpper.includes('MNG') || roleUpper.includes('MANAGER'));
-    
-    return this.employeeAttendanceService.createBulk(createDtos, isAdmin, isManager);
+    const isPrivileged = user && (user.userType === 'ADMIN' || user.userType === 'MANAGER' || roleUpper.includes('MNG') || roleUpper.includes('MANAGER'));
+    return this.employeeAttendanceService.createBulk(createDtos, isPrivileged);
   }
 
   @UseGuards(JwtAuthGuard)

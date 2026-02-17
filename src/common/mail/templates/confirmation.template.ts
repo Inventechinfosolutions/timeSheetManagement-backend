@@ -46,8 +46,49 @@ interface CancellationApprovalConfirmationParams {
   secondHalf?: string | null;
 }
 
+// Helper to generate consistent Day Details HTML
+const getDayDetailsHtml = (firstHalf?: string | null, secondHalf?: string | null) => {
+  const fHalf = firstHalf || 'Office';
+  const sHalf = secondHalf || 'Office';
+
+  if (fHalf === sHalf) {
+    return `
+    <div class="day-details-container" style="background-color: #f8fafc; border: 1px solid #e2e8f0;">
+      <div class="day-details-header">
+        <span style="font-size: 16px; margin-right: 8px;">🕒</span> DAY DETAILS
+      </div>
+      <div style="background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px; display: flex; justify-content: space-between; align-items: center;">
+          <span style="font-size: 14px; font-weight: 700; color: #1d4ed8;">Full Day : </span>
+          <span style="background-color: #f1f5f9; color: #475569; font-size: 12px; font-weight: 700; padding: 4px 12px; border-radius: 6px;">
+              ${fHalf}
+          </span>
+      </div>
+    </div>`;
+  } else {
+    return `
+    <div class="day-details-container" style="background-color: #f8fafc; border: 1px solid #e2e8f0;">
+      <div class="day-details-header">
+        <span style="font-size: 16px; margin-right: 8px;">🕒</span> DAY DETAILS
+      </div>
+      <table class="half-card-table" width="100%" border="0" cellspacing="0" cellpadding="0">
+        <tr>
+          <td class="half-card">
+            <div class="half-label">FIRST HALF</div>
+            <div class="half-value">${fHalf}</div>
+          </td>
+          <td class="half-card">
+            <div class="half-label">SECOND HALF</div>
+            <div class="half-value">${sHalf}</div>
+          </td>
+        </tr>
+      </table>
+    </div>`;
+  }
+};
+
 export const getRejectionConfirmationTemplate = (data: RejectionConfirmationParams) => {
   const reasonText = data.reason ? `<br><strong>Reason for Rejection:</strong> ${data.reason}` : '';
+  const dayDetailsHtml = getDayDetailsHtml(data.firstHalf, data.secondHalf);
 
   const content = `
     <p>Dear ${data.reviewerName},</p>
@@ -62,23 +103,7 @@ export const getRejectionConfirmationTemplate = (data: RejectionConfirmationPara
         ${reasonText}
       </div>
 
-      <div class="day-details-container">
-        <div class="day-details-header">
-          <span style="font-size: 16px; margin-right: 8px;">🕒</span> DAY DETAILS
-        </div>
-        <table class="half-card-table" width="100%" border="0" cellspacing="0" cellpadding="0">
-          <tr>
-            <td class="half-card">
-              <div class="half-label">FIRST HALF</div>
-              <div class="half-value">${data.firstHalf || 'Office'}</div>
-            </td>
-            <td class="half-card">
-              <div class="half-label">SECOND HALF</div>
-              <div class="half-value">${data.secondHalf || 'Office'}</div>
-            </td>
-          </tr>
-        </table>
-      </div>
+      ${dayDetailsHtml}
     
     <p>The employee has been notified that this request was not approved. Their attendance record for these dates will remain unchanged (or marked as Absent/Upcoming).</p>
   `;
@@ -87,6 +112,8 @@ export const getRejectionConfirmationTemplate = (data: RejectionConfirmationPara
 };
 
 export const getCancellationRejectionConfirmationTemplate = (data: CancellationRejectionConfirmationParams) => {
+  const dayDetailsHtml = getDayDetailsHtml(data.firstHalf, data.secondHalf);
+
   const content = `
     <p>Dear ${data.reviewerName},</p>
     
@@ -97,23 +124,7 @@ export const getCancellationRejectionConfirmationTemplate = (data: CancellationR
       <p style="margin: 5px 0;"><strong>Original Request:</strong> ${data.requestType} on ${data.dates}</p>
     </div>
 
-    <div class="day-details-container">
-      <div class="day-details-header">
-        <span style="font-size: 16px; margin-right: 8px;">🕒</span> DAY DETAILS
-      </div>
-      <table class="half-card-table" width="100%" border="0" cellspacing="0" cellpadding="0">
-        <tr>
-          <td class="half-card">
-            <div class="half-label">FIRST HALF</div>
-            <div class="half-value">${data.firstHalf || 'Office'}</div>
-          </td>
-          <td class="half-card">
-            <div class="half-label">SECOND HALF</div>
-            <div class="half-value">${data.secondHalf || 'Office'}</div>
-          </td>
-        </tr>
-      </table>
-    </div>
+    ${dayDetailsHtml}
     
     <p>This means the Original Approval remains in effect. The employee's attendance status for these dates will not be reverted and will stay as <strong>${data.requestType}</strong>.</p>
     <p>The employee has been notified of this decision.</p>
@@ -124,6 +135,7 @@ export const getCancellationRejectionConfirmationTemplate = (data: CancellationR
 
 export const getApprovalConfirmationTemplate = (data: ApprovalConfirmationParams) => {
     const reasonText = data.reason ? `<br><strong>Note:</strong> ${data.reason}` : '';
+    const dayDetailsHtml = getDayDetailsHtml(data.firstHalf, data.secondHalf);
 
     const content = `
       <p>Dear ${data.reviewerName},</p>
@@ -138,23 +150,7 @@ export const getApprovalConfirmationTemplate = (data: ApprovalConfirmationParams
         ${reasonText}
       </div>
 
-      <div class="day-details-container">
-        <div class="day-details-header">
-          <span style="font-size: 16px; margin-right: 8px;">🕒</span> DAY DETAILS
-        </div>
-        <table class="half-card-table" width="100%" border="0" cellspacing="0" cellpadding="0">
-          <tr>
-            <td class="half-card">
-              <div class="half-label">FIRST HALF</div>
-              <div class="half-value">${data.firstHalf || 'Office'}</div>
-            </td>
-            <td class="half-card">
-              <div class="half-label">SECOND HALF</div>
-              <div class="half-value">${data.secondHalf || 'Office'}</div>
-            </td>
-          </tr>
-        </table>
-      </div>
+      ${dayDetailsHtml}
       
       <p>The employee has been notified that this request was approved. Their attendance record for these dates will be updated to reflect this approval.</p>
     `;
@@ -163,6 +159,8 @@ export const getApprovalConfirmationTemplate = (data: ApprovalConfirmationParams
   };
   
 export const getCancellationApprovalConfirmationTemplate = (data: CancellationApprovalConfirmationParams) => {
+    const dayDetailsHtml = getDayDetailsHtml(data.firstHalf, data.secondHalf);
+
     const content = `
       <p>Dear ${data.reviewerName},</p>
       
@@ -173,23 +171,7 @@ export const getCancellationApprovalConfirmationTemplate = (data: CancellationAp
         <p style="margin: 5px 0;"><strong>Original Request:</strong> ${data.requestType} on ${data.dates}</p>
       </div>
 
-      <div class="day-details-container">
-        <div class="day-details-header">
-          <span style="font-size: 16px; margin-right: 8px;">🕒</span> DAY DETAILS
-        </div>
-        <table class="half-card-table" width="100%" border="0" cellspacing="0" cellpadding="0">
-          <tr>
-            <td class="half-card">
-              <div class="half-label">FIRST HALF</div>
-              <div class="half-value">${data.firstHalf || 'Office'}</div>
-            </td>
-            <td class="half-card">
-              <div class="half-label">SECOND HALF</div>
-              <div class="half-value">${data.secondHalf || 'Office'}</div>
-            </td>
-          </tr>
-        </table>
-      </div>
+      ${dayDetailsHtml}
       
       <p>This means the Original Approval has been revoked. The employee's attendance status for these dates will be reverted to its original state.</p>
       <p>The employee has been notified of this decision.</p>
