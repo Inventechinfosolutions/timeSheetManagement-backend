@@ -263,6 +263,19 @@ export class LeaveRequestsController {
     return this.leaveRequestsService.getLeaveBalance(employeeId, y);
   }
 
+  @Get('monthly-balance/:employeeId')
+  getMonthlyLeaveBalance(
+    @Param('employeeId') employeeId: string,
+    @Query('month') month: number,
+    @Query('year') year: number,
+  ) {
+    return this.leaveRequestsService.getMonthlyLeaveBalance(
+      employeeId,
+      Number(month),
+      Number(year),
+    );
+  }
+
   @Get('stats/:employeeId')
   getStats(
     @Param('employeeId') employeeId: string,
