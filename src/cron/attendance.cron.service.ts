@@ -148,28 +148,20 @@ export class AttendanceCronService {
         this.logger.log(`Successfully marked ${newRecords.length} records as NOT_UPDATED.`);
     }
   }
-  // Run at 11:00 PM on the last day of the month
-  @Cron('0 23 28-31 * *')
+  // Run at 11:00 AM on the 1st day of every month to process the previous month's cleanup.
+  @Cron('0 11 1 * *')
   async handleMonthlyLeaveUpdate() {
       const today = new Date();
-      
-      // Check if today is the last day of the month
-      const tomorrow = new Date(today);
-      tomorrow.setDate(today.getDate() + 1);
-      
-      if (tomorrow.getMonth() === today.getMonth()) {
-          return; // Not the last day yet
-      }
-
-      this.logger.debug('Running Monthly Leave Update...');
-
-      // Get start and end of the current month
-      const year = today.getFullYear();
-      const month = today.getMonth();
+      // Calculate start and end of the PREVIOUS month
+      const prevMonthDate = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+      const year = prevMonthDate.getFullYear();
+      const month = prevMonthDate.getMonth();
       const startOfMonth = new Date(year, month, 1, 0, 0, 0);
       const endOfMonth = new Date(year, month + 1, 0, 23, 59, 59);
 
-      // Find all records with status 'Not Updated' or 'Pending' for this month
+      this.logger.debug(`Running Monthly Leave Update for past month ${month + 1}-${year}...`);
+
+      // Find all records with status 'Not Updated' or 'Pending' for the past month
       const recordsToUpdate = await this.attendanceRepo.find({
           where: [
               { 
@@ -183,16 +175,26 @@ export class AttendanceCronService {
           ]
       });
 
-      this.logger.log(`Found ${recordsToUpdate.length} records to mark as ABSENT for month ${month + 1}-${year}`);
+      this.logger.log(`Found ${recordsToUpdate.length} records to mark as ABSENT for past month ${month + 1}-${year}`);
 
       if (recordsToUpdate.length === 0) return;
 
-      // Update status to ABSENT (instead of LEAVE per user request)
+      // Update status and split fields to ABSENT
       for (const record of recordsToUpdate) {
           record.status = AttendanceStatus.ABSENT;
+          record.firstHalf = AttendanceStatus.ABSENT;
+          record.secondHalf = AttendanceStatus.ABSENT;
+          record.totalHours = 0;
       }
 
       await this.attendanceRepo.save(recordsToUpdate);
-      this.logger.log(`Successfully updated ${recordsToUpdate.length} records to ABSENT.`);
+      this.logger.log(`Successfully updated ${recordsToUpdate.length} records to ABSENT with split field resets.`);
+  }
+
+  // Run at 6:00 PM every Friday (Weekend Reminder)
+  @Cron('0 18 * * 5')
+  async weekendReminder() {
+    this.logger.debug('Running Weekend Reminder...');
+    await this.notificationsService.sendWeekendReminder();
   }
 }

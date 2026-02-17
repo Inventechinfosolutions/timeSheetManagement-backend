@@ -34,5 +34,5 @@ export const getReturnTemplate = (data: ReturnData) => {
     </div>
   `;
 
-  return baseLayout(content, `${data.requestType} Returned`, `${data.requestType} RETURNED`, 'white');
+  return baseLayout(content, `${data.requestType} Returned`, `${data.requestType} RETURNED`);
 };
