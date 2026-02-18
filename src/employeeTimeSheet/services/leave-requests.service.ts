@@ -2063,6 +2063,8 @@ export class LeaveRequestsService {
 
         if (manager) {
           const actionText = request.status === 'Requesting for Cancellation' ? 'Cancellation' : request.status === 'Cancelled' ? 'Reverted' : 'New';
+          // Use "Modification" for email subject if applicable, but keep bell-icon as "New" per user preference
+          const emailActionText = request.status === 'Requesting for Modification' ? 'Modification' : actionText;
           
           // 1. Bell Icon Notification
           await this.notificationsService.createNotification({
@@ -2102,8 +2104,8 @@ export class LeaveRequestsService {
 
             await this.emailService.sendEmail(
               managerEmail,
-              `${actionText} Request: ${request.requestType} - ${mapping.employeeName}`,
-              `${actionText} request submitted by ${mapping.employeeName}`,
+              `${emailActionText} Request: ${request.requestType} - ${mapping.employeeName}`,
+              `${emailActionText} request submitted by ${mapping.employeeName}`,
               htmlContent
             );
           }
@@ -2255,22 +2257,20 @@ export class LeaveRequestsService {
              try {
                 const employee = await this.employeeDetailsRepository.findOne({ where: { employeeId } });
                 if (employee?.email) {
-                    const htmlContent = getRequestNotificationTemplate({
+                    const htmlContent = getEmployeeReceiptTemplate({
                         employeeName: employee.fullName,
-                        employeeId: employee.employeeId,
                         requestType: fullReq.requestType,
                         title: fullReq.title,
                         fromDate: dayjs(fullReq.fromDate).format('YYYY-MM-DD'),
                         toDate: dayjs(fullReq.toDate).format('YYYY-MM-DD'),
                         duration: fullReq.duration,
                         status: fullReq.status,
-                        recipientName: employee.fullName,
                         firstHalf: fullReq.firstHalf,
                         secondHalf: fullReq.secondHalf
                     });
                     await this.emailService.sendEmail(
                         employee.email,
-                        `Notification: Your Modification Request (${fullReq.requestType})`,
+                        `Submission Received: Modification Request (${fullReq.requestType})`,
                         'Modification Request Notification',
                         htmlContent
                     );

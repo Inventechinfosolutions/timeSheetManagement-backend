@@ -101,15 +101,15 @@ export const getStatusUpdateTemplate = (data: StatusUpdateData) => {
       Your request for ${requestText} titled "<strong>${data.title}</strong>" has been${reviewedByText} <strong>${displayStatus}</strong>.
     </p>
 
-    <div class="details-box">
-      <div class="detail-row">
-        <span class="detail-label">From:</span> ${data.fromDate}
+    <div class="details-box" style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 20px; margin: 25px 0;">
+      <div class="detail-row" style="margin-bottom: 12px; font-size: 14px;">
+        <span class="detail-label" style="font-weight: 700; color: #1e40af; min-width: 140px; display: inline-block;">From:</span> ${data.fromDate}
       </div>
-      <div class="detail-row">
-        <span class="detail-label">To:</span> ${data.toDate}
+      <div class="detail-row" style="margin-bottom: 12px; font-size: 14px;">
+        <span class="detail-label" style="font-weight: 700; color: #1e40af; min-width: 140px; display: inline-block;">To:</span> ${data.toDate}
       </div>
-      <div class="detail-row">
-        <span class="detail-label">Duration:</span> ${data.duration} Day(s)
+      <div class="detail-row" style="margin-bottom: 0; font-size: 14px;">
+        <span class="detail-label" style="font-weight: 700; color: #1e40af; min-width: 140px; display: inline-block;">Duration:</span> ${data.duration} Day(s)
       </div>
     </div>
 
