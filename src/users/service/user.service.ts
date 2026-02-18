@@ -217,7 +217,22 @@ export class UsersService {
     const salt = await bcrypt.genSalt(10);
     user.password = await bcrypt.hash(changePasswordDto.newPassword, salt);
     user.resetRequired = false;
+    user.status = UserStatus.ACTIVE;
     await this.usersRepository.save(user);
+
+    // Sync status with EmployeeDetails
+    try {
+      const employee = await this.employeeDetailsRepository.findOne({
+        where: { employeeId: user.loginId },
+      });
+      if (employee) {
+        employee.userStatus = UserStatus.ACTIVE;
+        await this.employeeDetailsRepository.save(employee);
+        this.logger.log(`Employee status synchronized to ACTIVE for: ${user.loginId}`);
+      }
+    } catch (error) {
+      this.logger.error(`Failed to sync employee status for ${user.loginId}`, error);
+    }
 
     return { message: 'Password changed successfully' };
   }

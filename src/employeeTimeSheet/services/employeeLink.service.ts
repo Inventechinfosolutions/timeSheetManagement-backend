@@ -74,6 +74,7 @@ export class EmployeeLinkService {
       const hashedPassword = await bcrypt.hash(resetPasswordDto.password, salt);
 
       employee.password = hashedPassword;
+      employee.userStatus = UserStatus.ACTIVE;
       await this.employeeDetailsRepository.save(employee);
 
       const user = await this.userRepository.findOne({ where: { loginId: employee.employeeId.toLowerCase() } });
@@ -145,7 +146,12 @@ export class EmployeeLinkService {
         }
         user.lastLoggedIn = new Date();
         await this.userRepository.save(user);
-        this.logger.log(`User ${employee.employeeId} activated via token`);
+
+        // Sync with EmployeeDetails
+        employee.userStatus = UserStatus.ACTIVE;
+        await this.employeeDetailsRepository.save(employee);
+        
+        this.logger.log(`User ${employee.employeeId} activated via token and employee status synced`);
       }
 
       const authPayload = { sub: user?.id || employee.employeeId, loginId: employee.employeeId };
