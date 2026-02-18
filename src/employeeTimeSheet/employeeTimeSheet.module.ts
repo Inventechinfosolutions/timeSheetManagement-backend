@@ -25,6 +25,7 @@ import { LeaveRequestsController } from './controllers/leave-requests.controller
 import { LeaveRequestsService } from './services/leave-requests.service';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { FileService } from '../common/core/utils/fileType.utils';
+import { Notification } from '../notifications/entities/notification.entity';
 
 @Module({
   imports: [
