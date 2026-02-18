@@ -37,6 +37,7 @@ import { FileService } from '../common/core/utils/fileType.utils';
       DocumentMetaInfo,
       ManagerMapping,
       MasterHolidays,
+      Notification,
     ]),
     UsersModule,
     AuthModule,
