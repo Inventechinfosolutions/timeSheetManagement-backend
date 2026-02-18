@@ -19,6 +19,9 @@ import { TimesheetBlockerService } from './timesheetBlocker.service';
 import { EmployeeDetails } from '../entities/employeeDetails.entity';
 import { ManagerMapping } from '../../managerMapping/entities/managerMapping.entity';
 import * as ExcelJS from 'exceljs';
+import PDFDocument from 'pdfkit';
+import * as fs from 'fs';
+import * as path from 'path';
 
 @Injectable()
 export class EmployeeAttendanceService {
@@ -1500,25 +1503,61 @@ export class EmployeeAttendanceService {
     const headerFill: ExcelJS.Fill = {
         type: 'pattern',
         pattern: 'solid',
-        fgColor: { argb: '92D050' } // Light Green from screenshot
+        fgColor: { argb: '92D050' } // Light Green for Headers
     };
     
     const weekendFill: ExcelJS.Fill = {
         type: 'pattern',
         pattern: 'solid',
-        fgColor: { argb: 'FF0000' } // Red
+        fgColor: { argb: 'ED3E3E' } // Red for Weekends
+    };
+
+    const leaveFill: ExcelJS.Fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'ED3E3E' } // Light Red for Leave
+    };
+
+    const fullDayFill: ExcelJS.Fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: '90EE90' } // Light Green for Full Day Office
+    };
+
+    const wfhFill: ExcelJS.Fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'ADD8E6' } // Light Blue for WFH
+    };
+
+    const cvFill: ExcelJS.Fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FFA07A' } // Orange for Client Visit
+    };
+
+    const halfDayFill: ExcelJS.Fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FFFFE0' } // Light Yellow for Half Day
+    };
+
+    const absentFill: ExcelJS.Fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'ED3E3E' } // red
     };
 
     const yellowFill: ExcelJS.Fill = {
         type: 'pattern',
         pattern: 'solid',
-        fgColor: { argb: 'FFFF00' } // Yellow
+        fgColor: { argb: 'FFFF00' } // Yellow for Not Updated
     };
 
     const blueFill: ExcelJS.Fill = {
       type: 'pattern',
       pattern: 'solid',
-      fgColor: { argb: 'ADD8E6' } // Light Blue
+      fgColor: { argb: 'ADD8E6' } // Light Blue for Holiday
     };
     
     // Construct columns
@@ -1658,50 +1697,67 @@ export class EmployeeAttendanceService {
             // Handles Weekdays AND worked Saturdays
             if (record) {
                 let text = '';
-                let fontColor = '000000'; // Black
-                
-                // 1. Check specific statuses first (Leave, Half Day, Absent)
-                if (record.status === AttendanceStatus.ABSENT) {
-                    text = 'Absent';
-                    fontColor = '8B0000'; // Dark Red
-                } else if (record.status === AttendanceStatus.LEAVE) {
-                    text = 'Leave';
-                    fontColor = 'FF6666'; // Light Red (User asked for light red)
-                } else if (record.status === AttendanceStatus.HALF_DAY) {
-                    text = 'Half day';
-                    fontColor = 'FFA500'; // Orange
-                } 
-                // 2. Then check activities in splits (Client Visit / WFH / Office)
-                else if (this.isActivity(record.firstHalf, 'client') || this.isActivity(record.firstHalf, 'visit') || this.isActivity(record.firstHalf, 'cv') ||
-                         this.isActivity(record.secondHalf, 'client') || this.isActivity(record.secondHalf, 'visit') || this.isActivity(record.secondHalf, 'cv')) {
-                    text = 'Client Visit';
-                    fontColor = '0000FF'; // Blue
-                } else if (this.isActivity(record.firstHalf, 'home') || this.isActivity(record.firstHalf, 'wfh') ||
-                           this.isActivity(record.secondHalf, 'home') || this.isActivity(record.secondHalf, 'wfh')) {
-                    text = 'WFH';
-                    fontColor = '000000'; 
-                } else if (this.isActivity(record.firstHalf, 'office') || this.isActivity(record.secondHalf, 'office')) {
-                    text = 'Office';
-                    fontColor = '008000'; // Green 
-                } 
-                // 3. Finally standard Present
-                else if (record.status === AttendanceStatus.FULL_DAY) {
-                    text = 'Present';
-                } else {
-                    // Fallback
-                    if (record.totalHours !== null && record.totalHours !== undefined) {
-                        if (record.totalHours >= 6) text = 'Present';
-                        else if (record.totalHours > 0) text = 'Half day';
-                        else text = 'Absent'; // 0 hours fallback to Absent now logic
+                let cellFill: ExcelJS.Fill | undefined;
+                let fontColor = '000000'; // Black default
+
+                const getHalfText = (half: string | null): string => {
+                    if (!half) return 'Absent';
+                    if (this.isActivity(half, 'client') || this.isActivity(half, 'visit') || this.isActivity(half, 'cv')) return 'CV';
+                    if (this.isActivity(half, 'home') || this.isActivity(half, 'wfh')) return 'WFH';
+                    if (this.isActivity(half, 'office')) return 'Office';
+                    if (half === AttendanceStatus.LEAVE) return 'Leave';
+                    if (half === AttendanceStatus.ABSENT) return 'Absent';
+                    return half;
+                };
+
+                // 1. Handle Full Day statuses
+                if (record.status === AttendanceStatus.FULL_DAY) {
+                    const h1 = getHalfText(record.firstHalf);
+                    const h2 = getHalfText(record.secondHalf);
+                    
+                    if (h1 === h2) {
+                        if (h1 === 'WFH') {
+                            text = 'WFH';
+                            cellFill = wfhFill;
+                        } else if (h1 === 'CV') {
+                            text = 'CV';
+                            cellFill = cvFill;
+                        } else {
+                            text = 'Full Day';
+                            cellFill = fullDayFill;
+                        }
                     } else {
-                        text = 'Present'; 
+                        // Mixed Full Day (e.g., CV / WFH)
+                        text = `${h1} / ${h2}`;
+                        cellFill = halfDayFill;
                     }
+                } 
+                // 2. Handle Half Day combinations
+                else if (record.status === AttendanceStatus.HALF_DAY) {
+                    const h1 = getHalfText(record.firstHalf);
+                    const h2 = getHalfText(record.secondHalf);
+                    text = `${h1} / ${h2}`;
+                    cellFill = halfDayFill;
                 }
-                
+                // 3. Handle specific single statuses
+                else if (record.status === AttendanceStatus.LEAVE) {
+                    text = 'Leave';
+                    cellFill = leaveFill;
+                } else if (record.status === AttendanceStatus.ABSENT) {
+                    text = 'Absent';
+                    cellFill = absentFill;
+                    fontColor = 'FFFFFF'; // White text on red background
+                } else {
+                    // Fallback for other statuses or edge cases
+                    text = record.status || 'Present';
+                    cellFill = fullDayFill;
+                }
+
                 cell.value = text;
+                if (cellFill) cell.fill = cellFill;
                 cell.font = { color: { argb: fontColor } };
                 cell.alignment = { horizontal: 'center' };
-                continue; // Done for this cell
+                continue;
             }
 
             // PRIORITY 4: Future / Past Logic - for weekdays with no record
@@ -1729,5 +1785,185 @@ export class EmployeeAttendanceService {
 
     const buffer = await workbook.xlsx.writeBuffer();
     return Buffer.from(buffer);
+  }
+
+  async generateIndividualPdfReport(employeeId: string, startDate: Date, endDate: Date): Promise<Buffer> {
+    // 1. Fetch Employee Details
+    const employee = await this.employeeDetailsRepository.findOne({ where: { employeeId } });
+    if (!employee) throw new NotFoundException(`Employee with ID ${employeeId} not found`);
+
+    // 2. Fetch Attendance Records for the range
+    const attendanceRecords = await this.employeeAttendanceRepository.find({
+      where: {
+        employeeId,
+        workingDate: Between(startDate, endDate)
+      },
+      order: { workingDate: 'ASC' }
+    });
+
+    // 3. Fetch Holidays
+    const holidays = await this.masterHolidayService.findAll();
+    const holidayMap = new Map<string, string>();
+    holidays.forEach(h => {
+      const d = h.holidayDate || (h as any).date;
+      if (d) {
+        const dateKey = new Date(d).toISOString().split('T')[0];
+        holidayMap.set(dateKey, (h as any).name || (h as any).holidayName || 'Holiday');
+      }
+    });
+
+    if (!(startDate instanceof Date) || isNaN(startDate.getTime())) {
+      throw new BadRequestException('Invalid start date provided for PDF report');
+    }
+    if (!(endDate instanceof Date) || isNaN(endDate.getTime())) {
+      throw new BadRequestException('Invalid end date provided for PDF report');
+    }
+
+    // 4. Generate PDF
+    return new Promise((resolve, reject) => {
+      try {
+        this.logger.log(`Starting PDF generation for employee ${employeeId}`);
+        this.logger.log(`Period: ${startDate.toISOString()} to ${endDate.toISOString()}`);
+        this.logger.log(`Found ${attendanceRecords.length} attendance records and ${holidayMap.size} holidays`);
+        
+        const doc = new PDFDocument({ margin: 50 });
+        const buffers: Buffer[] = [];
+        
+        doc.on('data', (chunk) => buffers.push(chunk));
+        doc.on('end', () => {
+          this.logger.log(`PDF generation stream ended for employee ${employeeId}`);
+          resolve(Buffer.concat(buffers));
+        });
+        
+        doc.on('error', (err) => {
+          this.logger.error(`Stream error during PDF generation for ${employeeId}: ${err.message}`, err.stack);
+          reject(err);
+        });
+
+      const blueColor = "#2B3674";
+
+      // Header Area (Blue Banner)
+      doc.fillColor(blueColor).rect(0, 0, 612, 100).fill();
+
+      // Logo
+      const logoPath = path.join(__dirname, '..', '..', 'assets', 'inventech-logo.jpg');
+      if (fs.existsSync(logoPath)) {
+        doc.image(logoPath, 50, 25, { width: 120 });
+      } else {
+        doc.fillColor('white').fontSize(20).text('INVENTECH', 50, 30);
+        doc.fontSize(10).text('Info Solutions Pvt. Ltd.', 50, 55);
+      }
+
+      // Report Title
+      doc.fillColor('white').fontSize(16).text('TIMESHEET REPORT', 400, 40, { align: 'right' });
+
+      // Employee Details
+      doc.fillColor(blueColor).fontSize(12).text('EMPLOYEE DETAILS', 50, 120);
+      doc.strokeColor('#CCCCCC').lineWidth(1).moveTo(50, 135).lineTo(550, 135).stroke();
+
+      doc.fillColor('#505050').fontSize(10).text('Name:', 50, 150);
+      doc.fillColor(blueColor).text(employee.fullName || 'N/A', 150, 150);
+      doc.fillColor('#505050').text('Department:', 350, 150);
+      doc.fillColor(blueColor).text(employee.department || 'N/A', 450, 150);
+
+      doc.fillColor('#505050').text('Employee ID:', 50, 165);
+      doc.fillColor(blueColor).text(employeeId, 150, 165);
+      doc.fillColor('#505050').text('Designation:', 350, 165);
+      doc.fillColor(blueColor).text(employee.designation || 'N/A', 140, 165, { align: 'right', width: 410 }); // Hacky alignment
+
+      doc.fillColor(blueColor).fontSize(11).text(`Period: ${startDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })} to ${endDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`, 50, 190);
+
+      // Table Header
+      const tableTop = 220;
+      doc.fillColor('#2B3674').rect(50, tableTop, 500, 20).fill();
+      doc.fillColor('white').fontSize(10).text('Date', 60, tableTop + 5);
+      doc.text('Day', 150, tableTop + 5);
+      doc.text('Total Hours', 250, tableTop + 5);
+      doc.text('Status', 350, tableTop + 5);
+
+      let currentY = tableTop + 25;
+      let totalHours = 0;
+
+      // Generate days for the range
+      const daysCount = Math.floor((endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24)) + 1;
+      for (let i = 0; i < daysCount; i++) {
+        const currentDate = new Date(startDate);
+        currentDate.setDate(startDate.getDate() + i);
+        const dateKey = currentDate.toISOString().split('T')[0];
+        const record = attendanceRecords.find(r => new Date(r.workingDate).toISOString().split('T')[0] === dateKey);
+        
+        const dayName = currentDate.toLocaleDateString('en-US', { weekday: 'short' });
+        const holiday = holidayMap.get(dateKey);
+        
+        let status = '';
+        let hours = 0;
+
+        if (record) {
+          // Custom Status Logic for PDF
+          const getHalfCode = (half: string | null) => {
+              if (!half) return '';
+              if (this.isActivity(half, 'office')) return 'Office';
+              if (this.isActivity(half, 'home') || this.isActivity(half, 'wfh')) return 'WFH';
+              if (this.isActivity(half, 'client') || this.isActivity(half, 'visit') || this.isActivity(half, 'cv')) return 'CV';
+              if (half === AttendanceStatus.LEAVE || half === 'Leave') return 'Leave';
+              if (half === AttendanceStatus.ABSENT || half === 'Absent') return 'Absent';
+              return half; 
+          };
+
+          const h1 = getHalfCode(record.firstHalf);
+          const h2 = getHalfCode(record.secondHalf);
+
+          if (h1 && h2) {
+             if (h1 === 'Office' && h2 === 'Office') {
+                 status = 'Full Day';
+             } else if (h1 === h2) {
+                 status = h1; // e.g. WFH, CV, Leave
+             } else {
+                 status = `${h1} / ${h2}`;
+             }
+          } else {
+             // Fallback if halves are missing (e.g. legacy data or specific statuses)
+             status = record.status || '';
+          }
+
+          hours = Number(record.totalHours || 0);
+        } else if (holiday) {
+          status = holiday.toUpperCase();
+        } else if (currentDate.getDay() === 0 || currentDate.getDay() === 6) {
+          status = 'WEEKEND';
+        } else if (currentDate > new Date()) {
+          status = 'UPCOMING';
+        } else {
+          status = 'NOT UPDATED';
+        }
+
+        totalHours += hours;
+
+        // Draw Row
+        if (currentY > 700) {
+          doc.addPage();
+          currentY = 50;
+        }
+
+        doc.fillColor('#333333').fontSize(10);
+        doc.text(currentDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }), 60, currentY);
+        doc.text(dayName, 150, currentY);
+        doc.text(hours > 0 ? hours.toFixed(2) : '--', 250, currentY);
+        doc.text(status, 350, currentY);
+
+        currentY += 20;
+        doc.strokeColor('#EEEEEE').lineWidth(0.5).moveTo(50, currentY - 2).lineTo(550, currentY - 2).stroke();
+      }
+
+      // Grand Total
+      currentY += 10;
+      doc.fillColor(blueColor).fontSize(10).text(`GRAND TOTAL HOURS: ${totalHours.toFixed(1)}`, 50, currentY);
+
+      doc.end();
+      } catch (err) {
+        this.logger.error(`Synchronous error during PDF setup for employee ${employeeId}: ${err.message}`, err.stack);
+        reject(err);
+      }
+    });
   }
 }

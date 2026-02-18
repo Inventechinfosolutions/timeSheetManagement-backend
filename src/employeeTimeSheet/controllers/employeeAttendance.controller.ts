@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -67,6 +68,46 @@ export class EmployeeAttendanceController {
     res.set({
       'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       'Content-Disposition': `attachment; filename=Attendance_${query.month}_${query.year}.xlsx`,
+      'Content-Length': buffer.length,
+    });
+    
+    res.send(buffer);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Get('download-pdf')
+  @ApiOperation({ summary: 'Download monthly attendance PDF report' })
+  @ApiQuery({ name: 'month', type: Number })
+  @ApiQuery({ name: 'year', type: Number })
+  @ApiQuery({ name: 'employeeId', type: String, required: false })
+  async downloadPdf(
+    @Query() query: DownloadAttendanceDto,
+    @Req() req: any,
+    @Res() res: Response,
+  ) {
+    const user = req.user;
+    
+    // Determine which employee's report to download
+    // If employeeId is provided in query, use it (typically for Admin/Manager viewing someone else)
+    // Otherwise, use the current user's employeeId
+    const targetEmployeeId = query.employeeId || user.loginId || user.employeeId;
+
+    if (!targetEmployeeId) {
+        throw new BadRequestException('Employee ID is required for PDF report');
+    }
+
+    const startDate = query.startDate ? new Date(query.startDate) : new Date(query.year, query.month - 1, 1);
+    const endDate = query.endDate ? new Date(query.endDate) : new Date(query.year, query.month, 0);
+
+    const buffer = await this.employeeAttendanceService.generateIndividualPdfReport(
+      targetEmployeeId,
+      startDate,
+      endDate
+    );
+    
+    res.set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `attachment; filename=Attendance_${targetEmployeeId}_${query.month}_${query.year}.pdf`,
       'Content-Length': buffer.length,
     });
     
