@@ -33,20 +33,9 @@ export class LeaveRequestsService {
   // Helper to check if weekend based on department
   private async _isWeekend(date: dayjs.Dayjs, employeeId: string): Promise<boolean> {
     
-    // Always block Sunday (0)
-    if (date.day() === 0) return true;
-
-    // If Saturday (6), check department
-    if (date.day() === 6) {
-       const emp = await this.employeeDetailsRepository.findOne({
-          where: { employeeId },
-          select: ['department']
-       });
-       if (emp && emp.department === 'Information Technology') {
-           return true; 
-       }
-       return false;
-    }
+    // Always block Sunday (0) and Saturday (6)
+    const day = date.day();
+    if (day === 0 || day === 6) return true;
 
     return false;
   }
@@ -86,34 +75,35 @@ export class LeaveRequestsService {
    * Calculate total working hours based on firstHalf and secondHalf values
    * @param firstHalf - Activity for first half ('Work From Home', 'Client Visit', 'Office', 'Leave', etc.)
    * @param secondHalf - Activity for second half
-   * @returns Total working hours (0, 4.5, or 9)
+   * @returns Total working hours (0, 6, or 9)
    * 
    * Logic:
-   * - Work activity (WFH, CV, Office) = 4.5 hours per half
+   * - Work activity (WFH, CV, Office) = 6 hours per half
    * - Leave = 0 hours per half
    * - Total = firstHalf hours + secondHalf hours
    * 
    * Examples:
-   * - WFH + Leave = 4.5 + 0 = 4.5 hours
-   * - WFH + Client Visit = 4.5 + 4.5 = 9 hours
+   * - WFH + Leave = 6 + 0 = 6 hours
+   * - WFH + Client Visit = 6 + 6 = 9 hours
    * - Leave + Leave = 0 + 0 = 0 hours
    */
   private calculateTotalHours(firstHalf: string | null, secondHalf: string | null): number {
-    const getHalfHours = (half: string | null): number => {
-      if (!half || half === 'Leave') return 0;
-      
+    const isWork = (half: string | null): boolean => {
+      if (!half || half === 'Leave' || half === 'Absent') return false;
       const normalized = half.toLowerCase();
-      if (normalized.includes('office') || 
-          normalized.includes('wfh') || 
-          normalized.includes('work from home') || 
-          normalized.includes('client visit')) {
-        return 4.5;
-      }
-      
-      return 0; // Default for unknown values
+      return normalized.includes('office') || 
+             normalized.includes('wfh') || 
+             normalized.includes('work from home') || 
+             normalized.includes('client visit') ||
+             normalized.includes('present');
     };
-    
-    return getHalfHours(firstHalf) + getHalfHours(secondHalf);
+
+    const h1Work = isWork(firstHalf);
+    const h2Work = isWork(secondHalf);
+
+    if (h1Work && h2Work) return 9;
+    if (h1Work || h2Work) return 6;
+    return 0;
   }
 
 
@@ -177,15 +167,29 @@ export class LeaveRequestsService {
       }
 
       // Calculate duration
+      // Calculate duration (Exclude Weekends and Holidays)
       if (data.fromDate && data.toDate) {
         const start = dayjs(data.fromDate);
         const end = dayjs(data.toDate);
-        const days = end.diff(start, 'day') + 1;
+        
+        let workingDays = 0;
+        const diff = end.diff(start, 'day');
+        
+        for (let i = 0; i <= diff; i++) {
+            const current = start.add(i, 'day');
+            // Check for Weekend and Holiday using existing helper methods
+            const isWeekend = await this._isWeekend(current, data.employeeId);
+            const isHoliday = await this._isHoliday(current);
+            
+            if (!isWeekend && !isHoliday) {
+                workingDays++;
+            }
+        }
         
         if (data.isHalfDay) {
-          data.duration = days * 0.5;
+          data.duration = workingDays * 0.5;
         } else {
-          data.duration = days;
+          data.duration = workingDays;
         }
       }
 
@@ -1343,7 +1347,7 @@ export class LeaveRequestsService {
                    let derivedStatus = fullDayStatus;
                    if (calculatedHours === 9) {
                        derivedStatus = fullDayStatus; // Both halves are work
-                   } else if (calculatedHours === 4.5) {
+                   } else if (calculatedHours === 6) {
                        derivedStatus = halfDayStatus; // One half work, one half leave
                    } else if (calculatedHours === 0) {
                        derivedStatus = 'Leave'; // Both halves are leave
@@ -2059,6 +2063,8 @@ export class LeaveRequestsService {
 
         if (manager) {
           const actionText = request.status === 'Requesting for Cancellation' ? 'Cancellation' : request.status === 'Cancelled' ? 'Reverted' : 'New';
+          // Use "Modification" for email subject if applicable, but keep bell-icon as "New" per user preference
+          const emailActionText = request.status === 'Requesting for Modification' ? 'Modification' : actionText;
           
           // 1. Bell Icon Notification
           await this.notificationsService.createNotification({
@@ -2098,8 +2104,8 @@ export class LeaveRequestsService {
 
             await this.emailService.sendEmail(
               managerEmail,
-              `${actionText} Request: ${request.requestType} - ${mapping.employeeName}`,
-              `${actionText} request submitted by ${mapping.employeeName}`,
+              `${emailActionText} Request: ${request.requestType} - ${mapping.employeeName}`,
+              `${emailActionText} request submitted by ${mapping.employeeName}`,
               htmlContent
             );
           }
@@ -2251,22 +2257,20 @@ export class LeaveRequestsService {
              try {
                 const employee = await this.employeeDetailsRepository.findOne({ where: { employeeId } });
                 if (employee?.email) {
-                    const htmlContent = getRequestNotificationTemplate({
+                    const htmlContent = getEmployeeReceiptTemplate({
                         employeeName: employee.fullName,
-                        employeeId: employee.employeeId,
                         requestType: fullReq.requestType,
                         title: fullReq.title,
                         fromDate: dayjs(fullReq.fromDate).format('YYYY-MM-DD'),
                         toDate: dayjs(fullReq.toDate).format('YYYY-MM-DD'),
                         duration: fullReq.duration,
                         status: fullReq.status,
-                        recipientName: employee.fullName,
                         firstHalf: fullReq.firstHalf,
                         secondHalf: fullReq.secondHalf
                     });
                     await this.emailService.sendEmail(
                         employee.email,
-                        `Notification: Your Modification Request (${fullReq.requestType})`,
+                        `Submission Received: Modification Request (${fullReq.requestType})`,
                         'Modification Request Notification',
                         htmlContent
                     );
