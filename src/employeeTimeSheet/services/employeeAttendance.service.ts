@@ -664,6 +664,12 @@ export class EmployeeAttendanceService {
       const isHalfDayStatus = attendance.status === AttendanceStatus.HALF_DAY || String(attendance.status).toLowerCase() === 'half day';
       const isLocked = !!attendance.sourceRequestId && isHalfDayStatus;
 
+      // GUARD: Protect Approved Leaves for non-privileged users
+      if (!isPrivileged && attendance.sourceRequestId && !(updateDto as any).sourceRequestId) {
+        this.logger.warn(`[ATTENDANCE_RESTRICTION] Blocking manual single-record update for record ${attendance.id} because it is linked to Leave Request ${attendance.sourceRequestId} (Locked State: ${isLocked})`);
+        return attendance; // Skip update and return existing record
+      }
+
       // Always null out work_location - use splits instead
       updateDto.workLocation = null;
       attendance.workLocation = null;
