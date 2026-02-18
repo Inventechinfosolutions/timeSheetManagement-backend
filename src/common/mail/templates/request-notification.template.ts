@@ -41,7 +41,7 @@ export const getRequestNotificationTemplate = (data: RequestNotificationData) =>
 
   let actionWord = 'has submitted a new';
   let headerLabel = `NEW ${requestDisplayName.toUpperCase()} REQUEST`;
-  let mailSubject = `New ${requestDisplayName} Request`;
+  let mailSubject = `New ${requestDisplayName} `;
 
   if (statusLower === 'cancelled' || statusLower === 'reverted') {
     actionWord = 'has REVERTED their';
@@ -52,10 +52,13 @@ export const getRequestNotificationTemplate = (data: RequestNotificationData) =>
     headerLabel = `${requestDisplayName.toUpperCase()} CANCELLATION`;
     mailSubject = `${requestDisplayName} Cancellation Request`;
   } else if (statusLower.includes('modification')) {
-    actionWord = 'has submitted a modification request for';
-    headerLabel = `${requestDisplayName.toUpperCase()} MODIFICATION`;
+    actionWord = 'has submitted a modification request:';
+    headerLabel = `MODIFICATION REQUEST: ${requestDisplayName.toUpperCase()}`;
     mailSubject = `${requestDisplayName} Modification Request`;
   }
+
+  const isModification = statusLower.includes('modification');
+  const labelPrefix = isModification ? 'Revised ' : '';
 
   const displayStatus = (statusLower === 'cancelled' || statusLower === 'reverted') ? 'REVERTED' : data.status;
 
@@ -63,7 +66,7 @@ export const getRequestNotificationTemplate = (data: RequestNotificationData) =>
     ? `
     <div class="day-details-container" style="background-color: #f8fafc; border: 1px solid #e2e8f0;">
       <div class="day-details-header">
-        <span style="font-size: 16px; margin-right: 8px;">🕒</span> DAY DETAILS
+        <span style="font-size: 16px; margin-right: 8px;">🕒</span> ${isModification ? 'MODIFIED ' : ''}DAY DETAILS
       </div>
       <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px; display: flex; justify-content: space-between; align-items: center;">
           <span style="font-size: 14px; font-weight: 700; color: #1d4ed8;">Full Day : </span>
@@ -75,7 +78,7 @@ export const getRequestNotificationTemplate = (data: RequestNotificationData) =>
     : `
     <div class="day-details-container" style="background-color: #f8fafc; border: 1px solid #e2e8f0;">
       <div class="day-details-header">
-        <span style="font-size: 16px; margin-right: 8px;">🕒</span> DAY DETAILS
+        <span style="font-size: 16px; margin-right: 8px;">🕒</span> ${isModification ? 'MODIFIED ' : ''}DAY DETAILS
       </div>
       <table class="half-card-table" width="100%" border="0" cellspacing="0" cellpadding="0">
         <tr>
@@ -94,21 +97,21 @@ export const getRequestNotificationTemplate = (data: RequestNotificationData) =>
   const content = `
     <p style="font-size: 16px; color: #1f2937;">Hello ${data.recipientName || 'Admin'},</p>
     <p style="font-size: 14px; color: #4b5563; line-height: 1.6;">
-      <strong>${data.employeeName}</strong> (EMP-${data.employeeId}) ${actionWord} <strong>${requestDisplayName}</strong> request.
+      <strong>${data.employeeName}</strong> (EMP-${data.employeeId}) ${actionWord} <strong>${requestDisplayName}</strong>.
     </p>
 
-    <div class="details-box">
-      <div class="detail-row">
-        <span class="detail-label">Title:</span> ${data.title}
+    <div class="details-box" style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 20px; margin: 25px 0;">
+      <div class="detail-row" style="margin-bottom: 12px; font-size: 14px;">
+        <span class="detail-label" style="font-weight: 700; color: #1e40af; min-width: 140px; display: inline-block;">Title:</span> ${data.title}
       </div>
-      <div class="detail-row">
-        <span class="detail-label">From:</span> ${data.fromDate}
+      <div class="detail-row" style="margin-bottom: 12px; font-size: 14px;">
+        <span class="detail-label" style="font-weight: 700; color: #1e40af; min-width: 140px; display: inline-block;">${labelPrefix}From:</span> ${data.fromDate}
       </div>
-      <div class="detail-row">
-        <span class="detail-label">To:</span> ${data.toDate}
+      <div class="detail-row" style="margin-bottom: 12px; font-size: 14px;">
+        <span class="detail-label" style="font-weight: 700; color: #1e40af; min-width: 140px; display: inline-block;">${labelPrefix}To:</span> ${data.toDate}
       </div>
-      <div class="detail-row">
-        <span class="detail-label">Duration:</span> ${data.duration} Day(s)
+      <div class="detail-row" style="margin-bottom: 0; font-size: 14px;">
+        <span class="detail-label" style="font-weight: 700; color: #1e40af; min-width: 140px; display: inline-block;">${labelPrefix}Duration:</span> ${data.duration} Day(s)
       </div>
     </div>
 

@@ -95,11 +95,11 @@ export const getRejectionConfirmationTemplate = (data: RejectionConfirmationPara
     
     <p>This is a confirmation that you have <strong>Rejected</strong> the following request:</p>
     
-      <div style="background-color: #f8fafc; padding: 15px; border-radius: 8px; margin: 20px 0;">
-        <p style="margin: 5px 0;"><strong>Employee:</strong> ${data.employeeName} (${data.employeeId})</p>
-        <p style="margin: 5px 0;"><strong>Type:</strong> ${data.requestType}</p>
-        <p style="margin: 5px 0;"><strong>Dates:</strong> ${data.startDate} to ${data.endDate}</p>
-        <p style="margin: 5px 0;"><strong>Duration:</strong> ${data.duration} Day(s)</p>
+      <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 20px; margin: 25px 0;">
+        <p style="margin: 0 0 12px 0; font-size: 14px;"><strong style="color: #1e40af; min-width: 100px; display: inline-block;">Employee:</strong> ${data.employeeName} (${data.employeeId})</p>
+        <p style="margin: 0 0 12px 0; font-size: 14px;"><strong style="color: #1e40af; min-width: 100px; display: inline-block;">Type:</strong> ${data.requestType}</p>
+        <p style="margin: 0 0 12px 0; font-size: 14px;"><strong style="color: #1e40af; min-width: 100px; display: inline-block;">Dates:</strong> ${data.startDate} to ${data.endDate}</p>
+        <p style="margin: 0; font-size: 14px;"><strong style="color: #1e40af; min-width: 100px; display: inline-block;">Duration:</strong> ${data.duration} Day(s)</p>
         ${reasonText}
       </div>
 
@@ -119,9 +119,9 @@ export const getCancellationRejectionConfirmationTemplate = (data: CancellationR
     
     <p>You have <strong>Rejected</strong> the Cancellation Request for the following:</p>
     
-    <div style="background-color: #f8fafc; padding: 15px; border-radius: 8px; margin: 20px 0;">
-      <p style="margin: 5px 0;"><strong>Employee:</strong> ${data.employeeName}</p>
-      <p style="margin: 5px 0;"><strong>Original Request:</strong> ${data.requestType} on ${data.dates}</p>
+    <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 20px; margin: 25px 0;">
+      <p style="margin: 0 0 12px 0; font-size: 14px;"><strong style="color: #1e40af; min-width: 140px; display: inline-block;">Employee:</strong> ${data.employeeName}</p>
+      <p style="margin: 0; font-size: 14px;"><strong style="color: #1e40af; min-width: 140px; display: inline-block;">Original Request:</strong> ${data.requestType} on ${data.dates}</p>
     </div>
 
     ${dayDetailsHtml}
@@ -142,11 +142,11 @@ export const getApprovalConfirmationTemplate = (data: ApprovalConfirmationParams
       
       <p>This is a confirmation that you have <strong>Approved</strong> the following ${data.requestType} request:</p>
       
-      <div style="background-color: #f8fafc; padding: 15px; border-radius: 8px; margin: 20px 0;">
-        <p style="margin: 5px 0;"><strong>Employee:</strong> ${data.employeeName} (${data.employeeId})</p>
-        <p style="margin: 5px 0;"><strong>Type:</strong> ${data.requestType}</p>
-        <p style="margin: 5px 0;"><strong>Dates:</strong> ${data.startDate} to ${data.endDate}</p>
-        <p style="margin: 5px 0;"><strong>Duration:</strong> ${data.duration} Day(s)</p>
+      <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 20px; margin: 25px 0;">
+        <p style="margin: 0 0 12px 0; font-size: 14px;"><strong style="color: #1e40af; min-width: 100px; display: inline-block;">Employee:</strong> ${data.employeeName} (${data.employeeId})</p>
+        <p style="margin: 0 0 12px 0; font-size: 14px;"><strong style="color: #1e40af; min-width: 100px; display: inline-block;">Type:</strong> ${data.requestType}</p>
+        <p style="margin: 0 0 12px 0; font-size: 14px;"><strong style="color: #1e40af; min-width: 100px; display: inline-block;">Dates:</strong> ${data.startDate} to ${data.endDate}</p>
+        <p style="margin: 0; font-size: 14px;"><strong style="color: #1e40af; min-width: 100px; display: inline-block;">Duration:</strong> ${data.duration} Day(s)</p>
         ${reasonText}
       </div>
 
@@ -166,9 +166,9 @@ export const getCancellationApprovalConfirmationTemplate = (data: CancellationAp
       
       <p>You have <strong>Approved</strong> the Cancellation Request for the following:</p>
       
-      <div style="background-color: #f8fafc; padding: 15px; border-radius: 8px; margin: 20px 0;">
-        <p style="margin: 5px 0;"><strong>Employee:</strong> ${data.employeeName}</p>
-        <p style="margin: 5px 0;"><strong>Original Request:</strong> ${data.requestType} on ${data.dates}</p>
+      <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 20px; margin: 25px 0;">
+        <p style="margin: 0 0 12px 0; font-size: 14px;"><strong style="color: #1e40af; min-width: 140px; display: inline-block;">Employee:</strong> ${data.employeeName}</p>
+        <p style="margin: 0; font-size: 14px;"><strong style="color: #1e40af; min-width: 140px; display: inline-block;">Original Request:</strong> ${data.requestType} on ${data.dates}</p>
       </div>
 
       ${dayDetailsHtml}
