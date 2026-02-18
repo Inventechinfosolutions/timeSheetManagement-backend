@@ -24,6 +24,10 @@ import * as XLSX from 'xlsx';
 import { BulkUploadResultDto, BulkUploadErrorDto } from '../dto/bulk-upload-result.dto';
 import { EmployeeAttendanceService } from './employeeAttendance.service';
 import { ManagerMapping } from '../../managerMapping/entities/managerMapping.entity';
+import { EmployeeAttendance } from '../entities/employeeAttendance.entity';
+import { LeaveRequest } from '../entities/leave-request.entity';
+import { TimesheetBlocker } from '../entities/timesheetBlocker.entity';
+import { Notification } from '../../notifications/entities/notification.entity';
 
 
 
@@ -36,6 +40,16 @@ export class EmployeeDetailsService {
     private readonly employeeDetailsRepository: Repository<EmployeeDetails>,
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
+    @InjectRepository(ManagerMapping)
+    private readonly managerMappingRepository: Repository<ManagerMapping>,
+    @InjectRepository(EmployeeAttendance)
+    private readonly employeeAttendanceRepository: Repository<EmployeeAttendance>,
+    @InjectRepository(LeaveRequest)
+    private readonly leaveRequestRepository: Repository<LeaveRequest>,
+    @InjectRepository(TimesheetBlocker)
+    private readonly timesheetBlockerRepository: Repository<TimesheetBlocker>,
+    @InjectRepository(Notification)
+    private readonly notificationRepository: Repository<Notification>,
     private readonly usersService: UsersService,
     private readonly employeeLinkService: EmployeeLinkService,
     private readonly documentUploaderService: DocumentUploaderService,
@@ -600,6 +614,44 @@ export class EmployeeDetailsService {
         role: updateFields.role as UserType,
       });
       const result = await this.employeeDetailsRepository.save(employee);
+
+      // --- Synchronize related tables if employeeId or fullName changed ---
+      const employeeIdChanged = updatedEmployeeId !== originalEmployeeId;
+      const fullNameChanged = updateData.fullName && updateData.fullName !== employee.fullName;
+
+      if (employeeIdChanged) {
+        this.logger.log(`EmployeeId changed from ${originalEmployeeId} to ${updatedEmployeeId}. Synchronizing related tables.`);
+        
+        // Update ManagerMapping
+        await this.managerMappingRepository.update({ employeeId: originalEmployeeId }, { employeeId: updatedEmployeeId });
+        
+        // Update EmployeeAttendance
+        await this.employeeAttendanceRepository.update({ employeeId: originalEmployeeId }, { employeeId: updatedEmployeeId });
+        
+        // Update LeaveRequest
+        await this.leaveRequestRepository.update({ employeeId: originalEmployeeId }, { employeeId: updatedEmployeeId });
+        
+        // Update TimesheetBlocker
+        await this.timesheetBlockerRepository.update({ employeeId: originalEmployeeId }, { employeeId: updatedEmployeeId });
+        
+        // Update Notification
+        await this.notificationRepository.update({ employeeId: originalEmployeeId }, { employeeId: updatedEmployeeId });
+        
+        this.logger.log(`Synchronization for employeeId ${updatedEmployeeId} completed.`);
+      }
+
+      if (fullNameChanged) {
+        this.logger.log(`FullName changed for ${updatedEmployeeId}. Synchronizing ManagerMapping.`);
+        
+        // Update ManagerMapping where this employee is a subordinate
+        await this.managerMappingRepository.update({ employeeId: updatedEmployeeId }, { employeeName: updateData.fullName });
+        
+        // Update ManagerMapping where this employee is a manager
+        await this.managerMappingRepository.update({ managerName: employee.fullName }, { managerName: updateData.fullName });
+        
+        this.logger.log(`Synchronization for fullName ${updateData.fullName} completed.`);
+      }
+      // --------------------------------------------------------------------
 
       // Check if employeeId or email changed - if so, handle activation link
       const employeeIdChanged = updatedEmployeeId !== originalEmployeeId;
