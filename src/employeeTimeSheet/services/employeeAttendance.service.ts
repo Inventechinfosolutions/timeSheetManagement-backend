@@ -37,26 +37,34 @@ export class EmployeeAttendanceService {
 
   /**
    * Calculate total working hours based on firstHalf and secondHalf values
-   * @param firstHalf - Activity for first half ('Work From Home', 'Client Visit', 'Office', 'Leave', etc.)
+   * @param firstHalf - Activity for first half
    * @param secondHalf - Activity for second half
-   * @returns Total working hours (0, 4.5, or 9)
+   * @param providedHours - Optional hours provided by user
+   * @returns Total working hours
    */
-  private calculateTotalHours(firstHalf: string | null, secondHalf: string | null): number {
-    const getHalfHours = (half: string | null): number => {
-      if (!half || half === 'Leave') return 0;
-      
+  private calculateTotalHours(firstHalf: string | null, secondHalf: string | null, providedHours?: number | null): number {
+    // 1. If user provided a specific value, respect it
+    if (providedHours !== undefined && providedHours !== null && providedHours > 0) {
+      return Number(providedHours);
+    }
+
+    // 2. Otherwise use system defaults based on activities
+    const isWork = (half: string | null): boolean => {
+      if (!half || half === 'Leave' || half === 'Absent') return false;
       const normalized = half.toLowerCase();
-      if (normalized.includes('office') || 
-          normalized.includes('wfh') || 
-          normalized.includes('work from home') || 
-          normalized.includes('client visit')) {
-        return 4.5;
-      }
-      
-      return 0; // Default for unknown values
+      return normalized.includes('office') || 
+             normalized.includes('wfh') || 
+             normalized.includes('work from home') || 
+             normalized.includes('client visit') ||
+             normalized.includes('present');
     };
-    
-    return getHalfHours(firstHalf) + getHalfHours(secondHalf);
+
+    const h1Work = isWork(firstHalf);
+    const h2Work = isWork(secondHalf);
+
+    if (h1Work && h2Work) return 9; // Full Day default
+    if (h1Work || h2Work) return 6; // Half Day default
+    return 0;
   }
 
   private determineDefaultActivity(firstHalf: string | null, secondHalf: string | null): string {
@@ -175,7 +183,11 @@ export class EmployeeAttendanceService {
 
         // CRITICAL: Synchronize splits and status for UPDATED existing records in create branch
         const hours = Number(existingRecord.totalHours || 0);
-        if (hours > 0 && hours <= 4.5) {
+        const isSat = new Date(existingRecord.workingDate).getDay() === 6;
+
+        if (isSat && hours > 3) {
+            existingRecord.status = AttendanceStatus.FULL_DAY;
+        } else if (hours > 0 && hours <= 6) {
           // Relaxed enforcement: Only set defaults if no source request is linked and splits are empty
           if (!existingRecord.sourceRequestId && (!existingRecord.firstHalf || !existingRecord.secondHalf)) {
             existingRecord.firstHalf = 'Office';
@@ -183,15 +195,53 @@ export class EmployeeAttendanceService {
             this.logger.log(`[ATTENDANCE_CREATE] Enforced default Half Day splits for Record ${existingRecord.id}`);
           }
           existingRecord.status = AttendanceStatus.HALF_DAY;
-          this.logger.log(`[ATTENDANCE_CREATE] Synchronized Half Day status (<= 4.5h)`);
-        } else if (hours === 9) {
-          const defaultActivity = this.determineDefaultActivity(existingRecord.firstHalf, existingRecord.secondHalf);
-          if (!existingRecord.firstHalf || existingRecord.firstHalf === 'Leave') existingRecord.firstHalf = defaultActivity;
-          if (!existingRecord.secondHalf || existingRecord.secondHalf === 'Leave') existingRecord.secondHalf = defaultActivity;
+          this.logger.log(`[ATTENDANCE_CREATE] Synchronized Half Day status (<= 6h)`);
+        } else if (hours === 9 || (isSat && hours > 3 && hours <= 6) || hours > 6) {
+          // STRICT OVERWRITE: Any entry considered "Full Day" must have "Office" splits
+          existingRecord.firstHalf = 'Office';
+          existingRecord.secondHalf = 'Office';
+          createEmployeeAttendanceDto.firstHalf = 'Office' as any;
+          createEmployeeAttendanceDto.secondHalf = 'Office' as any;
           existingRecord.status = AttendanceStatus.FULL_DAY;
-          this.logger.log(`[ATTENDANCE_CREATE] Enforced Full Day synchronization for existing record (9h)`);
-        } else if (hours === 0) {
-          existingRecord.status = await this.determineStatus(0, existingRecord.workingDate);
+          this.logger.log(`[ATTENDANCE_OVERWRITE] Enforced Full Day synchronization for existing record (${hours}h) with Office splits`);
+        } else if (existingRecord.totalHours === 0 || existingRecord.totalHours === null) {
+          const isClear = existingRecord.totalHours === null;
+          
+          
+          let newStatus = isClear 
+            ? (workingDateObj > today ? null : AttendanceStatus.NOT_UPDATED)
+            : (existingRecord.status && 
+               Object.values(AttendanceStatus).includes(existingRecord.status as any) &&
+               existingRecord.status !== AttendanceStatus.WEEKEND &&
+               existingRecord.status !== AttendanceStatus.HOLIDAY
+                ? (existingRecord.status as AttendanceStatus)
+                : AttendanceStatus.ABSENT); // Explicit 0 hours defaults to ABSENT, overriding Weekend/Holiday
+
+          if (isClear) {
+              const dateStr = existingRecord.workingDate instanceof Date 
+                  ? existingRecord.workingDate.toISOString().split('T')[0] 
+                  : (existingRecord.workingDate as string).split('T')[0];
+              
+              const holiday = await this.masterHolidayService.findByDate(dateStr);
+              if (holiday) {
+                  newStatus = AttendanceStatus.HOLIDAY;
+              } else if (this.masterHolidayService.isWeekend(new Date(existingRecord.workingDate))) {
+                  newStatus = AttendanceStatus.WEEKEND;
+              }
+          }
+
+          existingRecord.status = newStatus;
+          
+          if (newStatus === AttendanceStatus.ABSENT) {
+            existingRecord.firstHalf = 'Absent';
+            existingRecord.secondHalf = 'Absent';
+            existingRecord.totalHours = 0; // Ensure 0 is saved
+          } else {
+            existingRecord.firstHalf = null;
+            existingRecord.secondHalf = null;
+            existingRecord.totalHours = null; // Explicitly set to null
+          }
+          this.logger.log(`[ATTENDANCE_CREATE] Synchronized ${isClear ? 'NULL' : '0'} hours status: ${existingRecord.status}`);
         }
         
         const saved = await this.employeeAttendanceRepository.save(existingRecord);
@@ -202,14 +252,15 @@ export class EmployeeAttendanceService {
       this.logger.log(`[ATTENDANCE_CREATE] Creating NEW attendance record for ${createEmployeeAttendanceDto.employeeId} on ${createEmployeeAttendanceDto.workingDate}`);
       this.logger.log(`[ATTENDANCE_CREATE] sourceRequestId being set to: ${createEmployeeAttendanceDto.sourceRequestId}`);
       
-      // Calculate totalHours if firstHalf and secondHalf are provided
-      if (createEmployeeAttendanceDto.firstHalf || createEmployeeAttendanceDto.secondHalf) {
+      // Calculate totalHours if firstHalf and secondHalf are provided, or if totalHours is provided
+      if (createEmployeeAttendanceDto.firstHalf || createEmployeeAttendanceDto.secondHalf || createEmployeeAttendanceDto.totalHours) {
         const calculatedHours = this.calculateTotalHours(
           createEmployeeAttendanceDto.firstHalf || null, 
-          createEmployeeAttendanceDto.secondHalf || null
+          createEmployeeAttendanceDto.secondHalf || null,
+          createEmployeeAttendanceDto.totalHours
         );
         createEmployeeAttendanceDto.totalHours = calculatedHours;
-        this.logger.log(`[ATTENDANCE_CREATE] Calculated totalHours: ${calculatedHours} from firstHalf: ${createEmployeeAttendanceDto.firstHalf}, secondHalf: ${createEmployeeAttendanceDto.secondHalf}`);
+        this.logger.log(`[ATTENDANCE_CREATE] Final totalHours for new record: ${calculatedHours}`);
       }
       
       const newAttendance = this.employeeAttendanceRepository.create(createEmployeeAttendanceDto);
@@ -231,8 +282,11 @@ export class EmployeeAttendanceService {
 
       // CRITICAL: Strictly enforce synchronization rules for BOTH branches (Create/Update)
       const hours = Number(newAttendance.totalHours || 0);
+      const isSat = new Date(newAttendance.workingDate).getDay() === 6;
 
-      if (hours > 0 && hours <= 4.5) {
+      if (isSat && hours > 3) {
+             newAttendance.status = AttendanceStatus.FULL_DAY;
+      } else if (hours > 0 && hours <= 6) {
         // Relaxed enforcement: Only set defaults if no source request is linked and splits are empty
         if (!newAttendance.sourceRequestId && (!newAttendance.firstHalf || !newAttendance.secondHalf)) {
           newAttendance.firstHalf = 'Office';
@@ -240,17 +294,51 @@ export class EmployeeAttendanceService {
           this.logger.log(`[ATTENDANCE_CREATE] Enforced default Half Day splits for NEW record`);
         }
         newAttendance.status = AttendanceStatus.HALF_DAY;
-        this.logger.log(`[ATTENDANCE_CREATE] Synchronized Half Day status (<= 4.5h)`);
-      } else if (hours === 9) {
-        // Enforce Full Day splits if missing or inconsistent
-        const defaultActivity = this.determineDefaultActivity(newAttendance.firstHalf, newAttendance.secondHalf);
-        if (!newAttendance.firstHalf || newAttendance.firstHalf === 'Leave') newAttendance.firstHalf = defaultActivity;
-        if (!newAttendance.secondHalf || newAttendance.secondHalf === 'Leave') newAttendance.secondHalf = defaultActivity;
+        this.logger.log(`[ATTENDANCE_CREATE] Synchronized Half Day status (<= 6h)`);
+      } else if (hours === 9 || (isSat && hours > 3 && hours <= 6) || hours > 6) {
+        // STRICT OVERWRITE: Any entry considered "Full Day" must have "Office" splits
+        newAttendance.firstHalf = 'Office';
+        newAttendance.secondHalf = 'Office';
+        createEmployeeAttendanceDto.firstHalf = 'Office' as any;
+        createEmployeeAttendanceDto.secondHalf = 'Office' as any;
         newAttendance.status = AttendanceStatus.FULL_DAY;
-        this.logger.log(`[ATTENDANCE_CREATE] Enforced Full Day synchronization (9h)`);
-      } else if (hours === 0) {
-        newAttendance.status = await this.determineStatus(0, newAttendance.workingDate);
-        this.logger.log(`[ATTENDANCE_CREATE] Synchronized 0 hours status: ${newAttendance.status}`);
+        this.logger.log(`[ATTENDANCE_OVERWRITE] Enforced Full Day synchronization for NEW record (${hours}h) with Office splits`);
+      } else if (newAttendance.totalHours === 0 || newAttendance.totalHours === null) {
+        const isClear = newAttendance.totalHours === null;
+        let newStatus = isClear 
+          ? (workingDateObj > today ? null : AttendanceStatus.NOT_UPDATED)
+          : (newAttendance.status && 
+             Object.values(AttendanceStatus).includes(newAttendance.status as any) &&
+             newAttendance.status !== AttendanceStatus.WEEKEND &&
+             newAttendance.status !== AttendanceStatus.HOLIDAY
+              ? (newAttendance.status as AttendanceStatus)
+              : AttendanceStatus.ABSENT); // Explicit 0 hours defaults to ABSENT, overriding Weekend/Holiday
+
+        if (isClear) {
+            const dateStr = newAttendance.workingDate instanceof Date 
+                ? newAttendance.workingDate.toISOString().split('T')[0] 
+                : (newAttendance.workingDate as string).split('T')[0];
+            
+            const holiday = await this.masterHolidayService.findByDate(dateStr);
+            if (holiday) {
+                newStatus = AttendanceStatus.HOLIDAY;
+            } else if (this.masterHolidayService.isWeekend(new Date(newAttendance.workingDate))) {
+                newStatus = AttendanceStatus.WEEKEND;
+            }
+        }
+
+        newAttendance.status = newStatus;
+
+        if (newAttendance.status === AttendanceStatus.ABSENT) {
+          newAttendance.firstHalf = 'Absent';
+          newAttendance.secondHalf = 'Absent';
+          newAttendance.totalHours = 0; // Ensure 0 is saved
+        } else {
+          newAttendance.firstHalf = null;
+          newAttendance.secondHalf = null;
+          newAttendance.totalHours = null; // Explicitly set to null
+        }
+        this.logger.log(`[ATTENDANCE_CREATE] Synchronized ${isClear ? 'NULL' : '0'} hours status: ${newAttendance.status}`);
       }
 
       const saved = await this.employeeAttendanceRepository.save(newAttendance);
@@ -302,7 +390,13 @@ export class EmployeeAttendanceService {
 
         // If either half has a value that is NOT 'office', it is a restricted entry (Leave, WFH, Client Visit, etc.)
         // This effectively blocks editing for: Leave, WFH, Client Visit, and any split containing them.
-        const isRestricted = (val: string) => val && !val.includes('office');
+        const isRestricted = (val: string) => 
+          val && 
+          !val.toLowerCase().includes('office') && 
+          !val.toLowerCase().includes('not updated') && 
+          !val.toLowerCase().includes('upcoming') &&
+          !val.toLowerCase().includes('holiday') &&
+          !val.toLowerCase().includes('weekend');
 
         if (isRestricted(h1) || isRestricted(h2)) {
              return { isBlocked: true, reason: 'Restricted Activity' };
@@ -573,6 +667,8 @@ export class EmployeeAttendanceService {
 
       const existingStatus = attendance.status;
       const isLeave = existingStatus === AttendanceStatus.LEAVE;
+      const originalTotalHours = attendance.totalHours; // Capture original hours 
+
       Object.assign(attendance, updateDto);
       attendance.workLocation = null; // Force null again after assign
       
@@ -585,57 +681,78 @@ export class EmployeeAttendanceService {
       if (updateDto.totalHours !== undefined) {
         const hours = Number(updateDto.totalHours);
         
-        // If hours is 9, it's ALWAYS a Full Day. Force splits to match.
-        if (hours === 9) {
-          const defaultActivity = this.determineDefaultActivity(attendance.firstHalf, attendance.secondHalf);
-          attendance.firstHalf = defaultActivity;
-          attendance.secondHalf = defaultActivity;
+        // STRICT OVERWRITE: If hours > 6 (or Sat > 3), it's ALWAYS a Full Day with Office splits.
+        const isSat = new Date(attendance.workingDate).getDay() === 6;
+        if (hours > 6 || (isSat && hours > 3)) {
           attendance.status = AttendanceStatus.FULL_DAY;
-          
-          // Also update updateDto to ensure consistency in TypeORM save
-          updateDto.firstHalf = defaultActivity;
-          updateDto.secondHalf = defaultActivity;
           updateDto.status = AttendanceStatus.FULL_DAY;
           
-          this.logger.log(`[ATTENDANCE_UPDATE] Force Full Day (9h) synchronization: ${defaultActivity}, ${defaultActivity}`);
-        } 
-        // If hours is <= 4.5 and > 0, it's ALWAYS a Half Day.
-        else if (hours > 0 && hours <= 4.5) {
-          // Relaxed enforcement: Only set defaults if no source request is linked
-          if (!attendance.sourceRequestId && (!attendance.firstHalf || !attendance.secondHalf)) {
-            attendance.firstHalf = "Office";
-            attendance.secondHalf = "Leave";
-            updateDto.firstHalf = "Office";
-            updateDto.secondHalf = "Leave";
-            this.logger.log(`[ATTENDANCE_UPDATE] Enforced default Half Day splits (no sourceRequestId)`);
-          }
-          attendance.status = AttendanceStatus.HALF_DAY;
-          updateDto.status = AttendanceStatus.HALF_DAY;
+          attendance.firstHalf = 'Office';
+          attendance.secondHalf = 'Office';
+          updateDto.firstHalf = 'Office' as any;
+          updateDto.secondHalf = 'Office' as any;
           
-          this.logger.log(`[ATTENDANCE_UPDATE] Synchronized Half Day (${hours}h) status`);
+          this.logger.log(`[ATTENDANCE_OVERWRITE] Synchronized Full Day (${hours}h) with Office splits`);
         }
-        else if (hours === 0) {
-          const newStatus = updateDto.status && Object.values(AttendanceStatus).includes(updateDto.status as any)
-            ? (updateDto.status as AttendanceStatus)
-            : await this.determineStatus(0, attendance.workingDate, updateDto.firstHalf);
+        // If hours is <= 6 and > 0 (and not a Full Day Saturday), it's Half Day.
+        else if (hours > 0 && hours <= 6) {
+          const isSat = new Date(attendance.workingDate).getDay() === 6;
+          
+          if (isSat && hours > 3) {
+             attendance.status = AttendanceStatus.FULL_DAY;
+             updateDto.status = AttendanceStatus.FULL_DAY;
+          } else {
+              attendance.status = AttendanceStatus.HALF_DAY;
+              updateDto.status = AttendanceStatus.HALF_DAY;
+              this.logger.log(`[ATTENDANCE_UPDATE] Synchronized Half Day (${hours}h) status`);
+          }
+        }
+        else if (updateDto.totalHours === 0 || updateDto.totalHours === null) {
+          const isClear = updateDto.totalHours === null;
+          let newStatus = isClear 
+            ? (workingDateObj > today ? null : AttendanceStatus.NOT_UPDATED)
+            : (updateDto.status && Object.values(AttendanceStatus).includes(updateDto.status as any)
+                ? (updateDto.status as AttendanceStatus)
+                : AttendanceStatus.ABSENT); // Explicit 0 hours defaults to ABSENT, skipping Weekend/Holiday check
             
+          if (isClear) {
+              const dateStr = attendance.workingDate instanceof Date 
+                  ? attendance.workingDate.toISOString().split('T')[0] 
+                  : (attendance.workingDate as string).split('T')[0];
+              
+              const holiday = await this.masterHolidayService.findByDate(dateStr);
+              if (holiday) {
+                  newStatus = AttendanceStatus.HOLIDAY;
+              } else if (this.masterHolidayService.isWeekend(new Date(attendance.workingDate))) {
+                  newStatus = AttendanceStatus.WEEKEND;
+              }
+          }
+
           attendance.status = newStatus;
           updateDto.status = newStatus;
 
           if (newStatus === AttendanceStatus.ABSENT) {
             attendance.firstHalf = 'Absent';
             attendance.secondHalf = 'Absent';
+            // Ensure 0 is saved, not null
+            attendance.totalHours = 0; 
             updateDto.firstHalf = 'Absent' as any;
             updateDto.secondHalf = 'Absent' as any;
+            updateDto.totalHours = 0;
           } else {
-            attendance.firstHalf = newStatus === AttendanceStatus.NOT_UPDATED ? 'Not Updated' : null;
+            // For UPCOMING or NOT_UPDATED (Cleared) or WEEKEND/HOLIDAY
+            attendance.firstHalf = null;
             attendance.secondHalf = null;
+            attendance.totalHours = null; // Explicitly set to null in DB
             updateDto.firstHalf = attendance.firstHalf as any;
             updateDto.secondHalf = null as any;
+            updateDto.totalHours = null as any;
           }
+
           
-          this.logger.log(`[ATTENDANCE_UPDATE] Reset to 0 hours: ${newStatus}`);
+          this.logger.log(`[ATTENDANCE_UPDATE] Reset to ${isClear ? 'NULL' : '0'} hours: ${newStatus}`);
         }
+
       }
       
       // If ONLY splits were updated (unlikely from frontend but possible from API), 
@@ -689,7 +806,7 @@ export class EmployeeAttendanceService {
     workingDate: Date, 
     firstHalf?: string | null,
     secondHalf?: string | null
-  ): Promise<AttendanceStatus> {
+  ): Promise<AttendanceStatus | null> {
     const dateObj = new Date(workingDate);
     const year = dateObj.getFullYear();
     const month = String(dateObj.getMonth() + 1).padStart(2, '0');
@@ -697,10 +814,10 @@ export class EmployeeAttendanceService {
     const dateStr = `${year}-${month}-${day}`;
 
     // 0. Primary Rule: Hours strictly dictate status if available
-    if (hours > 0 && hours <= 4.5) {
+    if (hours > 0 && hours <= 6) {
       return AttendanceStatus.HALF_DAY;
     }
-    if (hours === 9) {
+    if (hours > 6) {
       return AttendanceStatus.FULL_DAY;
     }
 
@@ -729,14 +846,12 @@ export class EmployeeAttendanceService {
       today.setHours(0, 0, 0, 0);
       dateObj.setHours(0, 0, 0, 0);
       
-      return dateObj > today ? AttendanceStatus.UPCOMING : (firstHalf === 'Not Updated' ? AttendanceStatus.NOT_UPDATED : AttendanceStatus.ABSENT);
-    } else if (hours > 4.5) {
-      // Hours > 4.5 is FULL_DAY
-      return AttendanceStatus.FULL_DAY;
-    } else {
-      // Hours > 0 and <= 4.5 is HALF_DAY
+      return dateObj > today ? null : (firstHalf === 'Not Updated' ? AttendanceStatus.NOT_UPDATED : AttendanceStatus.ABSENT);
+    } else if (hours > 0) {
+      // Hours > 0 and <= 6 is HALF_DAY
       return AttendanceStatus.HALF_DAY;
     }
+    return null;
   }
 
   async findByMonth(month: string, year: string, employeeId: string): Promise<EmployeeAttendance[]> {
@@ -818,18 +933,34 @@ export class EmployeeAttendanceService {
     const workingDate = workingDateObj.toISOString().split('T')[0];
     
     if (workingDate <= today) {
+      // User Request: Force Unlock Weekends/Holidays even if status is set
+      if (attendance.status === AttendanceStatus.WEEKEND || attendance.status === AttendanceStatus.HOLIDAY) {
+          attendance.status = AttendanceStatus.NOT_UPDATED;
+      }
+
       if (!attendance.status || attendance.status === AttendanceStatus.NOT_UPDATED) {
         // Priority 1: Check Holiday
         const holiday = await this.masterHolidayService.findByDate(workingDate);
         if (holiday) {
-           attendance.status = AttendanceStatus.HOLIDAY;
-           return attendance;
+           // attendance.status = AttendanceStatus.HOLIDAY;
+           // return attendance;
+           // User Request: Unlock Holidays (do not force status)
         }
 
         // Priority 2: Check Weekend
+        // But respect explicit status if it exists (e.g. Absent, Leave)
         if (this.masterHolidayService.isWeekend(workingDateObj)) {
-          attendance.status = AttendanceStatus.WEEKEND;
-          return attendance;
+            const hasExplicitStatus = attendance.status && 
+                (attendance.status === AttendanceStatus.ABSENT || 
+                 attendance.status === AttendanceStatus.LEAVE || 
+                 attendance.status === AttendanceStatus.HALF_DAY ||
+                 attendance.status === AttendanceStatus.FULL_DAY);
+
+            if (!hasExplicitStatus) {
+                // attendance.status = AttendanceStatus.WEEKEND;
+                // return attendance;
+                // User Request: Unlock Weekends (do not force status)
+            }
         }
 
         // Priority 3: Check for approved Client Visit or Work From Home request
