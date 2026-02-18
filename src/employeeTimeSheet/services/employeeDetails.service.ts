@@ -654,7 +654,6 @@ export class EmployeeDetailsService {
       // --------------------------------------------------------------------
 
       // Check if employeeId or email changed - if so, handle activation link
-      const employeeIdChanged = updatedEmployeeId !== originalEmployeeId;
       const emailChanged = updatedEmail !== originalEmail;
 
       if (employeeIdChanged || emailChanged) {
