@@ -38,11 +38,16 @@ export const getEmployeeReceiptTemplate = (data: EmployeeReceiptData) => {
       }
   }
 
+  const isModification = statusLower.includes('modification');
+  const labelPrefix = isModification ? 'Revised ' : '';
+  const headerLabel = isModification ? 'MODIFICATION SUBMITTED' : 'SUBMISSION SUCCESSFUL';
+  const mailSubject = isModification ? `Modification Request Submitted: ${requestDisplayName}` : `${requestDisplayName} Submitted`;
+
   const dayDetailsSection = (fHalf === sHalf) 
     ? `
     <div class="day-details-container" style="background-color: #f8fafc; border: 1px solid #e2e8f0;">
       <div class="day-details-header">
-        <span style="font-size: 16px; margin-right: 8px;">🕒</span> DAY DETAILS
+        <span style="font-size: 16px; margin-right: 8px;">🕒</span> ${isModification ? 'MODIFIED ' : ''}DAY DETAILS
       </div>
       <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px; display: flex; justify-content: space-between; align-items: center;">
           <span style="font-size: 14px; font-weight: 700; color: #1d4ed8;">Full Day : </span>
@@ -54,7 +59,7 @@ export const getEmployeeReceiptTemplate = (data: EmployeeReceiptData) => {
     : `
     <div class="day-details-container" style="background-color: #f8fafc; border: 1px solid #e2e8f0;">
       <div class="day-details-header">
-        <span style="font-size: 16px; margin-right: 8px;">🕒</span> DAY DETAILS
+        <span style="font-size: 16px; margin-right: 8px;">🕒</span> ${isModification ? 'MODIFIED ' : ''}DAY DETAILS
       </div>
       <table class="half-card-table" width="100%" border="0" cellspacing="0" cellpadding="0">
         <tr>
@@ -73,8 +78,20 @@ export const getEmployeeReceiptTemplate = (data: EmployeeReceiptData) => {
   const content = `
     <p style="font-size: 16px; color: #1f2937;">Dear ${data.employeeName},</p>
     <p style="font-size: 14px; color: #4b5563; line-height: 1.6;">
-      Your request for <strong>${requestDisplayName}</strong> titled "<strong>${data.title}</strong>" has been successfully submitted. It is now awaiting review.
+      Your ${isModification ? '<strong>modification request</strong>' : 'request'} for <strong>${requestDisplayName}</strong> titled "<strong>${data.title}</strong>" has been successfully submitted. It is now awaiting review.
     </p>
+
+    <div class="details-box" style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 20px; margin: 25px 0;">
+      <div class="detail-row" style="margin-bottom: 12px; font-size: 14px;">
+        <span class="detail-label" style="font-weight: 700; color: #1e40af; min-width: 140px; display: inline-block;">${labelPrefix}From:</span> ${data.fromDate}
+      </div>
+      <div class="detail-row" style="margin-bottom: 12px; font-size: 14px;">
+        <span class="detail-label" style="font-weight: 700; color: #1e40af; min-width: 140px; display: inline-block;">${labelPrefix}To:</span> ${data.toDate}
+      </div>
+      <div class="detail-row" style="margin-bottom: 0; font-size: 14px;">
+        <span class="detail-label" style="font-weight: 700; color: #1e40af; min-width: 140px; display: inline-block;">${labelPrefix}Duration:</span> ${data.duration} Day(s)
+      </div>
+    </div>
 
     ${dayDetailsSection}
 
@@ -91,5 +108,5 @@ export const getEmployeeReceiptTemplate = (data: EmployeeReceiptData) => {
     </div>
   `;
 
-  return baseLayout(content, `${requestDisplayName} Submitted`, 'SUBMISSION SUCCESSFUL');
+  return baseLayout(content, mailSubject, headerLabel);
 };
