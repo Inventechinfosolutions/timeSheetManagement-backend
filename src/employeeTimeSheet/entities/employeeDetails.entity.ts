@@ -2,6 +2,7 @@ import { Entity, Column, PrimaryGeneratedColumn } from 'typeorm';
 import { BaseEntity } from '../../common/core/models/base.entity';
 import { Department } from '../enums/department.enum';
 import { EmploymentType } from '../enums/employment-type.enum';
+import { Gender } from '../enums/gender.enum';
 import { UserType } from '../../users/enums/user-type.enum';
 
 @Entity('employee_details')
@@ -41,11 +42,22 @@ export class EmployeeDetails extends BaseEntity {
   @Column({ name: 'joining_date', type: 'date', nullable: true })
   joiningDate: Date;
 
+  @Column({ name: 'conversion_date', type: 'date', nullable: true })
+  conversionDate: Date;
+
   @Column({ name: 'password', length: 255, nullable: true })
   password: string;
 
   @Column({ name: 'user_status', default: 'ACTIVE', length: 50 })
   userStatus: string;
+
+  @Column({
+    name: 'gender',
+    type: 'enum',
+    enum: Gender,
+    nullable: true,
+  })
+  gender: Gender;
 
   @Column({
     name: 'role',

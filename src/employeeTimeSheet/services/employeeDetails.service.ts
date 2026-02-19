@@ -12,6 +12,7 @@ import * as bcrypt from 'bcrypt';
 import { EmployeeDetails } from '../entities/employeeDetails.entity';
 import { EmployeeDetailsDto } from '../dto/employeeDetails.dto';
 import { Department } from '../enums/department.enum';
+import { EmploymentType } from '../enums/employment-type.enum';
 import { ResetPasswordDto } from '../dto/resetPassword.dto';
 import { UsersService } from '../../users/service/user.service';
 import { UserType } from '../../users/enums/user-type.enum';
@@ -608,6 +609,17 @@ export class EmployeeDetailsService {
       }
 
       const { confirmPassword, ...updateFields } = updateData;
+
+      // Handle intern to full-timer conversion automatic date stamping
+      if (
+        updateFields.employmentType === EmploymentType.FULL_TIMER && 
+        employee.employmentType === EmploymentType.INTERN &&
+        !employee.conversionDate
+      ) {
+        employee.conversionDate = new Date();
+        this.logger.log(`Employee ${employee.employeeId} converted to Full-Timer. Setting conversionDate to ${employee.conversionDate}`);
+      }
+
       Object.assign(employee, {
         ...updateFields,
         department: updateFields.department as Department,

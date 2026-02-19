@@ -1128,7 +1128,7 @@ export class LeaveRequestsService {
 
     const employee = await this.employeeDetailsRepository.findOne({
       where: { employeeId },
-      select: ['id', 'employeeId', 'designation', 'employmentType'],
+      select: ['id', 'employeeId', 'designation', 'employmentType', 'joiningDate', 'conversionDate'],
     });
     if (!employee) {
       throw new NotFoundException(`Employee ${employeeId} not found`);
@@ -1138,7 +1138,51 @@ export class LeaveRequestsService {
     const isIntern =
       employee.employmentType === EmploymentType.INTERN ||
       (employee.designation || '').toLowerCase().includes('intern');
-    const entitlement = isIntern ? 12 : 18;
+    
+    // Prorate entitlement for the year based on status and conversion date
+    const joinDate = dayjs(employee.joiningDate);
+    const joinMonth = joinDate.isValid() ? joinDate.month() + 1 : 1;
+    const joinYear = joinDate.isValid() ? joinDate.year() : yearNum;
+
+    const convDate = (employee as any).conversionDate ? dayjs((employee as any).conversionDate) : null;
+
+    let entitlement = 0;
+
+    if (yearNum < joinYear) {
+      entitlement = 0;
+    } else {
+      for (let m = 1; m <= 12; m++) {
+        // Skip months before joining
+        if (yearNum === joinYear && m < joinMonth) continue;
+
+        let monthlyAccrual = isIntern ? 1.0 : 1.5;
+        
+        // Use conversion date to override isIntern status for specific months
+        if (convDate && convDate.isValid()) {
+          const cMonth = convDate.month() + 1;
+          const cYear = convDate.year();
+          
+          // If we are in or after the conversion month/year
+          if (yearNum > cYear || (yearNum === cYear && m >= cMonth)) {
+            monthlyAccrual = 1.5; // Always full-timer after conversion
+            
+            // Special rule: if converted after the 10th (date > 10) of conversion month, 1.5 starts next month
+            if (yearNum === cYear && m === cMonth && convDate.date() > 10) {
+              monthlyAccrual = 1.0; // Stay intern accrual for conversion month
+            }
+          } else {
+            monthlyAccrual = 1.0; // Before conversion, they were intern
+          }
+        }
+
+        // Apply joining month rule: if joined after 10th (date > 10), first month accrual is 0
+        if (yearNum === joinYear && m === joinMonth && joinDate.date() > 10) {
+          monthlyAccrual = 0;
+        }
+
+        entitlement += monthlyAccrual;
+      }
+    }
 
     const leaveTypes = ['Apply Leave', 'Leave'];
 
@@ -2420,7 +2464,7 @@ export class LeaveRequestsService {
   async getMonthlyLeaveBalance(employeeId: string, month: number, year: number) {
     const employee = await this.employeeDetailsRepository.findOne({
       where: { employeeId },
-      select: ['id', 'employeeId', 'designation', 'employmentType', 'joiningDate'],
+      select: ['id', 'employeeId', 'designation', 'employmentType', 'joiningDate', 'conversionDate'],
     });
 
     if (!employee) {
@@ -2430,7 +2474,6 @@ export class LeaveRequestsService {
     const isIntern =
       employee.employmentType === EmploymentType.INTERN ||
       (employee.designation || '').toLowerCase().includes('intern');
-    const monthlyAccrual = isIntern ? 1.0 : 1.5;
 
     let runningBalance = 0;
     let ytdUsed = 0;
@@ -2438,7 +2481,7 @@ export class LeaveRequestsService {
 
     const targetMonthStats = {
       carryOver: 0,
-      monthlyAccrual: monthlyAccrual,
+      monthlyAccrual: 0,
       leavesTaken: 0,
       lop: 0,
       balance: 0,
@@ -2446,15 +2489,11 @@ export class LeaveRequestsService {
       ytdLop: 0,
     };
 
-    // Calculate accurate starting point for carryover
     const joinDate = dayjs(employee.joiningDate);
     const joinMonth = joinDate.isValid() ? joinDate.month() + 1 : 1;
     const joinYear = joinDate.isValid() ? joinDate.year() : year;
-
-    // Start calculation from joining year or 2024 (baseline)
     const calculationStartYear = Math.max(joinYear, 2024);
 
-    // Fetch ALL attendance records for the entire period once
     const attendanceRecords = await this.employeeAttendanceRepository.find({
       where: {
         employeeId,
@@ -2466,17 +2505,13 @@ export class LeaveRequestsService {
       order: { workingDate: 'ASC' },
     });
 
-    // Group attendance by YYYY-M for efficient lookup
     const attendanceMap = new Map<string, EmployeeAttendance[]>();
     attendanceRecords.forEach((rec) => {
-      // Use YYYY-MM-DD string to avoid timezone shifts
       const dateStr = rec.workingDate instanceof Date 
         ? rec.workingDate.toISOString().split('T')[0] 
         : String(rec.workingDate).split('T')[0];
-      
       const [y, mStr] = dateStr.split('-');
-      const key = `${y}-${parseInt(mStr)}`; // "2026-3"
-      
+      const key = `${y}-${parseInt(mStr)}`;
       let list = attendanceMap.get(key);
       if (!list) {
         list = [];
@@ -2486,7 +2521,6 @@ export class LeaveRequestsService {
     });
 
     for (let curYear = calculationStartYear; curYear <= year; curYear++) {
-      // Reset YTD stats for each year
       ytdUsed = 0;
       ytdLop = 0;
 
@@ -2494,32 +2528,46 @@ export class LeaveRequestsService {
       const endM = curYear === year ? month : 12;
 
       for (let m = startM; m <= endM; m++) {
-        // interns do not have carry over between months or years
-        if (isIntern) {
-          runningBalance = 0;
+        // Determine status for this specific month
+        let isInternThisMonth = isIntern;
+        const convDate = (employee as any).conversionDate ? dayjs((employee as any).conversionDate) : null;
+        if (convDate && convDate.isValid()) {
+            const convMonth = convDate.month() + 1;
+            const convYear = convDate.year();
+            if (curYear > convYear || (curYear === convYear && m >= convMonth)) {
+                isInternThisMonth = false;
+                if (curYear === convYear && m === convMonth && convDate.date() > 10) {
+                    isInternThisMonth = true;
+                }
+            } else {
+                isInternThisMonth = true;
+            }
         }
 
         if (curYear === year && m === month) {
           targetMonthStats.carryOver = runningBalance;
         }
 
-        runningBalance += monthlyAccrual;
+        let effectiveAccrual = isInternThisMonth ? 1.0 : 1.5;
+        if (curYear === joinYear && m === joinMonth && joinDate.date() > 10) {
+          effectiveAccrual = 0;
+        }
 
-        // Use grouped attendance
-        const attendance = (attendanceMap && attendanceMap.get(`${curYear}-${m}`)) || [];
+        runningBalance += effectiveAccrual;
 
+        if (curYear === year && m === month) {
+          targetMonthStats.monthlyAccrual = effectiveAccrual;
+        }
+
+        const attendance = attendanceMap.get(`${curYear}-${m}`) || [];
         const monthlyUsage = attendance.reduce((acc, rec) => {
           let dailyUsage = 0;
           const status = (rec.status || '').toLowerCase();
-          
           if (rec.firstHalf || rec.secondHalf) {
             const processHalf = (half: string | null) => {
               if (!half) return 0;
               const h = half.toLowerCase();
-              if (h.includes('leave') || h.includes('absent')) {
-                return 0.5;
-              }
-              return 0;
+              return (h.includes('leave') || h.includes('absent')) ? 0.5 : 0;
             };
             dailyUsage = processHalf(rec.firstHalf) + processHalf(rec.secondHalf);
           } else {
@@ -2535,9 +2583,7 @@ export class LeaveRequestsService {
         const roundedUsage = Math.round(monthlyUsage * 10) / 10;
         runningBalance -= roundedUsage;
         
-        if (curYear === year) {
-          ytdUsed += roundedUsage;
-        }
+        if (curYear === year) ytdUsed += roundedUsage;
 
         let lop = 0;
         if (runningBalance < 0) {
@@ -2545,9 +2591,7 @@ export class LeaveRequestsService {
           runningBalance = 0;
         }
         
-        if (curYear === year) {
-          ytdLop += lop;
-        }
+        if (curYear === year) ytdLop += lop;
 
         if (curYear === year && m === month) {
           targetMonthStats.leavesTaken = roundedUsage;
@@ -2555,6 +2599,11 @@ export class LeaveRequestsService {
           targetMonthStats.balance = runningBalance;
           targetMonthStats.ytdUsed = ytdUsed;
           targetMonthStats.ytdLop = ytdLop;
+        }
+
+        // Interns do not carry over unused leaves to next month or to full-timer status
+        if (isInternThisMonth) {
+          runningBalance = 0;
         }
       }
     }
