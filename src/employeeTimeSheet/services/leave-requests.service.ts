@@ -537,7 +537,7 @@ export class LeaveRequestsService {
 
   // --- Partial Cancellation Logic ---
 
-  async getCancellableDates(id: number, employeeId: string) {
+  async getCancellableDates(id: number, employeeId: string, user?: any) {
     const request = await this.leaveRequestRepository.findOne({
       where: { id, employeeId },
     });
@@ -554,6 +554,10 @@ export class LeaveRequestsService {
     const results: { date: string; isCancellable: boolean; reason: string }[] =
       [];
     const now = dayjs();
+
+    // Bypass deadline restriction for Admin/Manager
+    const roleUpper = (user?.role || '').toUpperCase();
+    const isPrivileged = user && (user.userType === 'ADMIN' || user.userType === 'MANAGER' || roleUpper.includes('ADMIN') || roleUpper.includes('MNG') || roleUpper.includes('MANAGER'));
 
     // Fetch overlapping cancellations to exclude them
     const existingCancellations = await this.leaveRequestRepository.find({
@@ -611,13 +615,13 @@ export class LeaveRequestsService {
         .minute(30)
         .second(0);
 
-      const isCancellable = now.isBefore(deadline);
+      const isCancellable = isPrivileged || now.isBefore(deadline);
 
       results.push({
         date: currentDate.format('YYYY-MM-DD'),
         isCancellable,
         reason: isCancellable
-          ? `Deadline: ${deadline.format('DD-MMM HH:mm')}`
+          ? (isPrivileged ? 'Admin/Manager Bypass' : `Deadline: ${deadline.format('DD-MMM HH:mm')}`)
           : `Deadline passed (${deadline.format('DD-MMM HH:mm')})`,
       });
     }
@@ -628,6 +632,7 @@ export class LeaveRequestsService {
     id: number,
     employeeId: string,
     datesToCancel: string[],
+    user?: any
   ) {
     const request = await this.leaveRequestRepository.findOne({
       where: { id, employeeId },
@@ -639,18 +644,23 @@ export class LeaveRequestsService {
     if (!datesToCancel || datesToCancel.length === 0)
       throw new BadRequestException('No dates provided');
 
-    // 1. Validate Timings Again
-    const now = dayjs();
-    for (const dateStr of datesToCancel) {
-      const targetDate = dayjs(dateStr);
-      const deadline = targetDate
-        .hour(18)
-        .minute(30)
-        .second(0);
-      if (now.isAfter(deadline)) {
-        throw new ForbiddenException(
-          `Cancellation deadline passed for ${dateStr}. Cutoff was ${deadline.format('YYYY-MM-DD HH:mm')}`,
-        );
+    // 1. Validate Timings (Bypass for Admin/Manager)
+    const roleUpper = (user?.role || '').toUpperCase();
+    const isPrivileged = user && (user.userType === 'ADMIN' || user.userType === 'MANAGER' || roleUpper.includes('ADMIN') || roleUpper.includes('MNG') || roleUpper.includes('MANAGER'));
+
+    if (!isPrivileged) {
+      const now = dayjs();
+      for (const dateStr of datesToCancel) {
+        const targetDate = dayjs(dateStr);
+        const deadline = targetDate
+          .hour(18)
+          .minute(30)
+          .second(0);
+        if (now.isAfter(deadline)) {
+          throw new ForbiddenException(
+            `Cancellation deadline passed for ${dateStr}. Cutoff was ${deadline.format('YYYY-MM-DD HH:mm')}`,
+          );
+        }
       }
     }
 

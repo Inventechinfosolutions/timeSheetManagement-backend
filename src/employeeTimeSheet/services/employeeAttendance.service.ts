@@ -2068,7 +2068,14 @@ export class EmployeeAttendanceService {
                  status = `${h1} / ${h2}`;
              }
           } else {
-             status = record.status || '';
+             const s = record.status;
+             if (tempDate > new Date()) {
+               status = 'UPCOMING';
+             } else if (!s || s === 'NOT_UPDATED' || s === 'Pending' || s === 'Not Updated') {
+               status = 'NOT UPDATED';
+             } else {
+               status = s;
+             }
           }
           hours = Number(record.totalHours || 0);
         } else if (holiday) {

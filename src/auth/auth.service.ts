@@ -29,10 +29,11 @@ export class AuthService {
       });
 
       const payload = { sub: user.id, loginId: user.loginId };
-      const access_token = this.jwtService.sign(payload);
+      const { accessToken, refreshToken } = await this.generateJWTTokenWithRefresh(payload);
 
       return {
-        access_token,
+        access_token: accessToken,
+        refresh_token: refreshToken,
         user: {
           id: user.id,
           name: user.aliasLoginName,
@@ -50,7 +51,6 @@ export class AuthService {
   async login(loginDto: LoginDto): Promise<AuthResponseDto> {
     const user = await this.usersService.findByLoginId(loginDto.email);
 
-    // Strict case-sensitive check
     if (!user || user.loginId !== loginDto.email) {
       throw new UnauthorizedException('Invalid credentials');
     }
@@ -65,10 +65,11 @@ export class AuthService {
     }
 
     const payload = { sub: user.id, loginId: user.loginId };
-    const access_token = this.jwtService.sign(payload);
+    const { accessToken, refreshToken } = await this.generateJWTTokenWithRefresh(payload);
 
     return {
-      access_token,
+      access_token: accessToken,
+      refresh_token: refreshToken,
       user: {
         id: user.id,
         name: user.aliasLoginName,
@@ -82,12 +83,33 @@ export class AuthService {
   }
 
   async generateJWTTokenWithRefresh(payload: any) {
-    const access_token = this.jwtService.sign(payload);
+    const access_token = this.jwtService.sign(payload, {
+      secret: process.env.JWT_ACCESS_SECRET || process.env.JWT_SECRET,
+      expiresIn: (process.env.JWT_ACCESS_EXPIRES_IN as any) || '5m',
+    });
     const refresh_token = this.jwtService.sign(payload, {
       secret: process.env.JWT_REFRESH_SECRET || 'your-refresh-secret-key',
-      expiresIn: process.env.JWT_REFRESH_EXPIRATION || '7d',
-    } as any);
+      expiresIn: (process.env.JWT_REFRESH_EXPIRES_IN as any) || '7d',
+    });
     return { accessToken: access_token, refreshToken: refresh_token };
+  }
+
+  async refreshToken(refreshTokenStr: string): Promise<any> {
+    try {
+      const payload = await this.jwtService.verifyAsync(refreshTokenStr, {
+        secret: process.env.JWT_REFRESH_SECRET || 'your-refresh-secret-key',
+      });
+      
+      const user = await this.usersService.findById(payload.sub);
+      if (!user) {
+        throw new UnauthorizedException('User not found');
+      }
+
+      const newPayload = { sub: user.id, loginId: user.loginId };
+      return this.generateJWTTokenWithRefresh(newPayload);
+    } catch (error) {
+      throw new UnauthorizedException('Invalid refresh token');
+    }
   }
 }
 

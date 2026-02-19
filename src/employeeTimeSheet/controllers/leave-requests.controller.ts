@@ -234,17 +234,28 @@ export class LeaveRequestsController {
   }
 
   @Get(':id/cancellable-dates')
-  async getCancellableDates(@Param('id') id: string, @Query('employeeId') employeeId: string) {
-    return this.leaveRequestsService.getCancellableDates(+id, employeeId);
+  @UseGuards(JwtAuthGuard)
+  async getCancellableDates(
+    @Param('id') id: string, 
+    @Query('employeeId') employeeId: string,
+    @Req() req: any
+  ) {
+    return this.leaveRequestsService.getCancellableDates(+id, employeeId, req.user);
   }
 
   @Patch(':id/cancel-dates')
-  async cancelApprovedDates(@Param('id') id: string, @Body('employeeId') employeeId: string, @Body('dates') dates: string[]) {
-
+  @UseGuards(JwtAuthGuard)
+  async cancelApprovedDates(
+    @Param('id') id: string, 
+    @Body('employeeId') employeeId: string, 
+    @Body('dates') dates: string[],
+    @Req() req: any
+  ) {
     return this.leaveRequestsService.cancelApprovedDates(
       +id,
       employeeId,
       dates,
+      req.user
     );
   }
 
