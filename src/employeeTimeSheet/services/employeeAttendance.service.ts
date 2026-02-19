@@ -1884,9 +1884,13 @@ export class EmployeeAttendanceService {
                     text = 'Absent';
                     cellFill = absentFill;
                     fontColor = 'FFFFFF'; // White text on red background
+                } else if (!record.status || record.status === AttendanceStatus.NOT_UPDATED || record.status === AttendanceStatus.PENDING) {
+                    // Null or not-yet-updated status -> show Not Updated (do not show as Present)
+                    text = 'Not Updated';
+                    cellFill = yellowFill;
                 } else {
-                    // Fallback for other statuses or edge cases
-                    text = record.status || 'Present';
+                    // Other statuses (e.g. Weekend, Holiday, or any string) show as-is; only use Present if clearly full day
+                    text = record.status;
                     cellFill = fullDayFill;
                 }
 
