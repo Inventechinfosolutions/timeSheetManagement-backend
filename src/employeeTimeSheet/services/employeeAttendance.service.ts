@@ -1982,65 +1982,70 @@ export class EmployeeAttendanceService {
         });
 
       const blueColor = "#2B3674";
+      const grayColor = "#505050";
+      const lightGrayColor = "#EEEEEE";
+      const borderColor = "#CCCCCC";
 
       // Header Area (Blue Banner)
       doc.fillColor(blueColor).rect(0, 0, 612, 100).fill();
 
-      // Logo
+      // Logo or Text Fallback
       const logoPath = path.join(__dirname, '..', '..', 'assets', 'inventech-logo.jpg');
       if (fs.existsSync(logoPath)) {
         doc.image(logoPath, 50, 25, { width: 120 });
       } else {
-        doc.fillColor('white').fontSize(20).text('INVENTECH', 50, 30);
-        doc.fontSize(10).text('Info Solutions Pvt. Ltd.', 50, 55);
+        doc.fillColor('white').fontSize(22).font('Helvetica-Bold').text('INVENTECH', 50, 30);
+        doc.fontSize(10).font('Helvetica').text('Info Solutions Pvt. Ltd.', 50, 60);
       }
 
       // Report Title
-      doc.fillColor('white').fontSize(16).text('TIMESHEET REPORT', 400, 40, { align: 'right' });
+      doc.fillColor('white').fontSize(16).font('Helvetica-Bold').text('TIMESHEET REPORT', 350, 40, { align: 'right', width: 212 });
 
       // Employee Details
-      doc.fillColor(blueColor).fontSize(12).text('EMPLOYEE DETAILS', 50, 120);
-      doc.strokeColor('#CCCCCC').lineWidth(1).moveTo(50, 135).lineTo(550, 135).stroke();
+      doc.fillColor(blueColor).fontSize(11).font('Helvetica-Bold').text('EMPLOYEE DETAILS', 50, 120);
+      doc.strokeColor(borderColor).lineWidth(1).moveTo(50, 133).lineTo(562, 133).stroke();
 
-      doc.fillColor('#505050').fontSize(10).text('Name:', 50, 150);
-      doc.fillColor(blueColor).text(employee.fullName || 'N/A', 150, 150);
-      doc.fillColor('#505050').text('Department:', 350, 150);
-      doc.fillColor(blueColor).text(employee.department || 'N/A', 450, 150);
+      doc.fillColor(grayColor).fontSize(10).font('Helvetica').text('Name:', 50, 150);
+      doc.fillColor(blueColor).font('Helvetica-Bold').text(employee.fullName || 'N/A', 130, 150);
+      
+      doc.fillColor(grayColor).font('Helvetica').text('Department:', 320, 150);
+      doc.fillColor(blueColor).font('Helvetica-Bold').text(employee.department || 'N/A', 410, 150, { width: 160 });
 
-      doc.fillColor('#505050').text('Employee ID:', 50, 165);
-      doc.fillColor(blueColor).text(employeeId, 150, 165);
-      doc.fillColor('#505050').text('Designation:', 350, 165);
-      doc.fillColor(blueColor).text(employee.designation || 'N/A', 140, 165, { align: 'right', width: 410 }); // Hacky alignment
+      doc.fillColor(grayColor).font('Helvetica').text('Employee ID:', 50, 168);
+      doc.fillColor(blueColor).font('Helvetica-Bold').text(employeeId, 130, 168);
+      
+      doc.fillColor(grayColor).font('Helvetica').text('Designation:', 320, 168);
+      doc.fillColor(blueColor).font('Helvetica-Bold').text(employee.designation || 'N/A', 410, 168, { width: 160 });
 
-      doc.fillColor(blueColor).fontSize(11).text(`Period: ${startDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })} to ${endDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`, 50, 190);
+      doc.fillColor(blueColor).fontSize(10).font('Helvetica-Bold').text(`Period: ${startDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })} to ${endDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`, 50, 195);
 
-      // Table Header
-      const tableTop = 220;
-      doc.fillColor('#2B3674').rect(50, tableTop, 500, 20).fill();
-      doc.fillColor('white').fontSize(10).text('Date', 60, tableTop + 5);
-      doc.text('Day', 150, tableTop + 5);
-      doc.text('Total Hours', 250, tableTop + 5);
-      doc.text('Status', 350, tableTop + 5);
+      let currentY = 220;
+      let totalGrandHours = 0;
 
-      let currentY = tableTop + 25;
-      let totalHours = 0;
-
-      // Generate days for the range
-      const daysCount = Math.floor((endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24)) + 1;
-      for (let i = 0; i < daysCount; i++) {
-        const currentDate = new Date(startDate);
-        currentDate.setDate(startDate.getDate() + i);
-        const dateKey = currentDate.toISOString().split('T')[0];
-        const record = attendanceRecords.find(r => new Date(r.workingDate).toISOString().split('T')[0] === dateKey);
+      // Group records by month
+      const months: { month: number, year: number, name: string, days: any[] }[] = [];
+      let tempDate = new Date(startDate);
+      while (tempDate <= endDate) {
+        const m = tempDate.getMonth();
+        const y = tempDate.getFullYear();
+        const monthName = tempDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric' }).toUpperCase();
         
-        const dayName = currentDate.toLocaleDateString('en-US', { weekday: 'short' });
+        let monthObj = months.find(item => item.month === m && item.year === y);
+        if (!monthObj) {
+          monthObj = { month: m, year: y, name: monthName, days: [] };
+          months.push(monthObj);
+        }
+        
+        const dateKey = tempDate.toISOString().split('T')[0];
+        const record = attendanceRecords.find(r => new Date(r.workingDate).toISOString().split('T')[0] === dateKey);
+        const dayName = tempDate.toLocaleDateString('en-US', { weekday: 'long' });
         const holiday = holidayMap.get(dateKey);
         
         let status = '';
         let hours = 0;
+        let originalStatus = record?.status;
 
         if (record) {
-          // Custom Status Logic for PDF
           const getHalfCode = (half: string | null) => {
               if (!half) return '';
               if (this.isActivity(half, 'office')) return 'Office';
@@ -2058,47 +2063,117 @@ export class EmployeeAttendanceService {
              if (h1 === 'Office' && h2 === 'Office') {
                  status = 'Full Day';
              } else if (h1 === h2) {
-                 status = h1; // e.g. WFH, CV, Leave
+                 status = h1;
              } else {
                  status = `${h1} / ${h2}`;
              }
           } else {
-             // Fallback if halves are missing (e.g. legacy data or specific statuses)
              status = record.status || '';
           }
-
           hours = Number(record.totalHours || 0);
         } else if (holiday) {
           status = holiday.toUpperCase();
-        } else if (currentDate.getDay() === 0 || currentDate.getDay() === 6) {
+        } else if (tempDate.getDay() === 0 || tempDate.getDay() === 6) {
           status = 'WEEKEND';
-        } else if (currentDate > new Date()) {
+        } else if (tempDate > new Date()) {
           status = 'UPCOMING';
         } else {
           status = 'NOT UPDATED';
         }
 
-        totalHours += hours;
+        monthObj.days.push({
+          date: new Date(tempDate),
+          dateStr: tempDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
+          day: dayName,
+          hours,
+          status,
+          originalStatus
+        });
 
-        // Draw Row
-        if (currentY > 700) {
+        tempDate.setDate(tempDate.getDate() + 1);
+      }
+
+      // Render each month
+      months.forEach((monthObj, mIndex) => {
+        if (mIndex > 0) {
           doc.addPage();
           currentY = 50;
         }
 
-        doc.fillColor('#333333').fontSize(10);
-        doc.text(currentDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }), 60, currentY);
-        doc.text(dayName, 150, currentY);
-        doc.text(hours > 0 ? hours.toFixed(2) : '--', 250, currentY);
-        doc.text(status, 350, currentY);
-
+        doc.fillColor(blueColor).fontSize(11).font('Helvetica-Bold').text(monthObj.name, 50, currentY);
         currentY += 20;
-        doc.strokeColor('#EEEEEE').lineWidth(0.5).moveTo(50, currentY - 2).lineTo(550, currentY - 2).stroke();
-      }
+
+        // Table Header
+        doc.fillColor(blueColor).rect(50, currentY, 512, 20).fill();
+        doc.fillColor('white').fontSize(10).font('Helvetica-Bold');
+        doc.text('Date', 60, currentY + 5);
+        doc.text('Day', 150, currentY + 5);
+        doc.text('Total Hours', 270, currentY + 5);
+        doc.text('Status', 380, currentY + 5);
+        currentY += 25;
+
+        let monthlyFullDays = 0;
+        let monthlyHalfDays = 0;
+        let monthlyLeaves = 0;
+        let monthlyNotUpdated = 0;
+        let monthlyTotalHours = 0;
+
+        monthObj.days.forEach(day => {
+          if (currentY > 720) {
+            doc.addPage();
+            currentY = 50;
+            // Redraw Header on new page if within same month? 
+            // For simplicity, just continue
+          }
+
+          doc.fillColor('#333333').fontSize(9).font('Helvetica');
+          doc.text(day.dateStr, 60, currentY);
+          doc.text(day.day, 150, currentY);
+          doc.text(day.hours > 0 ? day.hours.toFixed(1) : '--', 270, currentY);
+          doc.text(day.status, 380, currentY);
+
+          // Summarize
+          monthlyTotalHours += day.hours;
+          if (day.originalStatus === 'Full Day' || day.status === 'Full Day') monthlyFullDays++;
+          else if (day.originalStatus === 'Half Day' || day.status === 'Half Day') monthlyHalfDays++;
+          else if (day.originalStatus === 'Leave' || day.status === 'Leave' || day.status === 'Holiday') {
+              // Option to count holiday as leave? Usually not, but following user logic
+          }
+          
+          if (day.status === 'NOT UPDATED') monthlyNotUpdated++;
+          if (day.status === 'Leave' || day.originalStatus === 'Leave') monthlyLeaves++;
+
+          currentY += 18;
+          doc.strokeColor(lightGrayColor).lineWidth(0.5).moveTo(50, currentY - 2).lineTo(562, currentY - 2).stroke();
+        });
+
+        totalGrandHours += monthlyTotalHours;
+
+        // Monthly Summary Box
+        currentY += 10;
+        if (currentY > 720) {
+            doc.addPage();
+            currentY = 50;
+        }
+
+        doc.fillColor('#F8F9FA').rect(50, currentY, 512, 25).fill();
+        doc.strokeColor(borderColor).lineWidth(0.5).rect(50, currentY, 512, 25).stroke();
+        
+        doc.fillColor(blueColor).fontSize(9).font('Helvetica-Bold');
+        const summaryText = `Full Days: ${monthlyFullDays}    Half Days: ${monthlyHalfDays}    Leaves: ${monthlyLeaves}    Not Updated: ${monthlyNotUpdated}    Total Hours: ${monthlyTotalHours.toFixed(1)}`;
+        doc.text(summaryText, 60, currentY + 8);
+        
+        currentY += 45;
+      });
 
       // Grand Total
-      currentY += 10;
-      doc.fillColor(blueColor).fontSize(10).text(`GRAND TOTAL HOURS: ${totalHours.toFixed(1)}`, 50, currentY);
+      if (currentY > 750) {
+        doc.addPage();
+        currentY = 50;
+      }
+      
+      doc.fillColor('#F0F2F8').rect(50, currentY, 512, 30).fill();
+      doc.fillColor(blueColor).fontSize(11).font('Helvetica-Bold').text(`GRAND TOTAL HOURS: ${totalGrandHours.toFixed(1)}`, 60, currentY + 10);
 
       doc.end();
       } catch (err) {
