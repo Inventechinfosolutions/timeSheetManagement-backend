@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { APP_INTERCEPTOR } from '@nestjs/core';
 import { NoCacheInterceptor } from './common/interceptors/no-cache.interceptor';
+import { SlidingSessionInterceptor } from './common/interceptors/sliding-session.interceptor';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
@@ -76,6 +77,10 @@ function getEnvFiles(): string[] {
     {
       provide: APP_INTERCEPTOR,
       useClass: NoCacheInterceptor,
+    },
+    {
+      provide: APP_INTERCEPTOR,
+      useClass: SlidingSessionInterceptor,
     },
   ],
 })
