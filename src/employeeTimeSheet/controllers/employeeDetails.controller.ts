@@ -336,29 +336,35 @@ export class EmployeeDetailsController {
   async viewProfileImage(@Param('employeeId') employeeIdStr: string, @Res() res: Response) {
     let employee;
     try {
-        employee = await this.employeeDetailsService.findByEmployeeId(employeeIdStr);
-    } catch (e) {
-        // If not found by string ID, try finding by numeric ID if it's a number
-        if (!isNaN(Number(employeeIdStr))) {
-            employee = await this.employeeDetailsService.getEmployeeById(Number(employeeIdStr));
-        } else {
-            throw e;
+        try {
+            employee = await this.employeeDetailsService.findByEmployeeId(employeeIdStr);
+        } catch (e) {
+            // If not found by string ID, try finding by numeric ID if it's a number
+            if (!isNaN(Number(employeeIdStr))) {
+                employee = await this.employeeDetailsService.getEmployeeById(Number(employeeIdStr));
+            } else {
+                throw e;
+            }
         }
-    }
-    const { stream, meta } = await this.employeeDetailsService.getProfileImageStream(employee.id);
-    
-    res.set({
-      'Content-Type': meta.mimetype || 'image/jpeg',
-      'Content-Disposition': `inline; filename="${meta.filename || 'profile.jpg'}"`,
-    });
+        const { stream, meta } = await this.employeeDetailsService.getProfileImageStream(employee.id);
+        
+        res.set({
+          'Content-Type': meta.mimetype || 'image/jpeg',
+          'Content-Disposition': `inline; filename="${meta.filename || 'profile.jpg'}"`,
+        });
 
-    if (stream.Body instanceof Readable) {
-      stream.Body.pipe(res);
-    } else if (stream.Body) {
-      const buffer = await stream.Body.transformToByteArray();
-      res.send(Buffer.from(buffer));
-    } else {
-        throw new Error('Image stream not found');
+        if (stream.Body instanceof Readable) {
+          stream.Body.pipe(res);
+        } else if (stream.Body) {
+          const buffer = await stream.Body.transformToByteArray();
+          res.send(Buffer.from(buffer));
+        } else {
+            throw new Error('Image stream not found');
+        }
+    } catch (error) {
+        // Return 204 No Content so frontend doesn't show 404 error
+        // This is expected for users without a profile picture
+        return res.sendStatus(204);
     }
   }
 }

@@ -40,5 +40,11 @@ export class AuthController {
       updatedAt: req.user.updatedAt,
     };
   }
+
+  @Post('refresh')
+  @HttpCode(HttpStatus.OK)
+  async refresh(@Body('refresh_token') refreshToken: string) {
+    return await this.authService.refreshToken(refreshToken);
+  }
 }
 
