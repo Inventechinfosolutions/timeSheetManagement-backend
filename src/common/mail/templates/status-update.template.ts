@@ -21,112 +21,167 @@ export const getStatusUpdateTemplate = (data: StatusUpdateData) => {
   const isRejected = statusLower.includes('rejected');
   const isCancelled = statusLower === 'cancelled';
   const isCancellation = data.isCancellation || (statusLower.includes('cancel') && statusLower !== 'cancelled');
-  
+
   const statusColor = isApproved ? '#22c55e' : isRestored ? '#8b5cf6' : isRejected ? '#ef4444' : (isCancelled || statusLower.includes('requesting')) ? '#f97316' : '#6b7280';
-  
+
   // Custom Header/Subject Logic
   let requestDisplayName = data.requestType;
   const fHalf = data.firstHalf || 'Office';
   const sHalf = data.secondHalf || 'Office';
 
   if (fHalf !== 'Office' || sHalf !== 'Office') {
-      if (fHalf === sHalf) {
-          requestDisplayName = fHalf === 'Apply Leave' || fHalf === 'Leave' ? 'Leave' : fHalf;
-      } else if ((fHalf === 'Leave' || fHalf === 'Apply Leave') && sHalf === 'Office') {
-          requestDisplayName = 'Half Day Leave';
-      } else if (fHalf === 'Office' && (sHalf === 'Leave' || sHalf === 'Apply Leave')) {
-          requestDisplayName = 'Half Day Leave';
-      } else {
-          const parts = [fHalf, sHalf]
-              .map(h => (h === 'Apply Leave' || h === 'Leave') ? 'Leave' : h)
-              .filter(h => h && h !== 'Office');
-          requestDisplayName = parts.join(' + ');
-      }
+    if (fHalf === sHalf) {
+      requestDisplayName = fHalf === 'Apply Leave' || fHalf === 'Leave' ? 'Leave' : fHalf;
+    } else if ((fHalf === 'Leave' || fHalf === 'Apply Leave') && sHalf === 'Office') {
+      requestDisplayName = 'Half Day Leave';
+    } else if (fHalf === 'Office' && (sHalf === 'Leave' || sHalf === 'Apply Leave')) {
+      requestDisplayName = 'Half Day Leave';
+    } else {
+      const parts = [fHalf, sHalf]
+        .map(h => (h === 'Apply Leave' || h === 'Leave') ? 'Leave' : h)
+        .filter(h => h && h !== 'Office');
+      requestDisplayName = parts.join(' + ');
+    }
   }
 
   // If status is 'Cancelled' and isCancellation is true, it's a revert -> show 'REVERTED'
   // If status is 'Cancelled' and isCancellation is false/undefined, it's a pending cancellation -> show 'CANCELLED'
-  const displayStatus = statusLower === 'cancelled' 
+  const displayStatus = statusLower === 'cancelled'
     ? (isCancellation ? 'REVERTED' : 'CANCELLED')
     : data.status;
 
   const requestText = isCancellation ? `cancellation of <strong>${requestDisplayName}</strong>` : `<strong>${requestDisplayName}</strong>`;
-  
+
   // Header label logic: 
   // - If isCancellation is true -> it's about a cancellation action (either requesting or reverting)
   // - If isCancelled is true but isCancellation is false -> it's a fresh pending request being cancelled
-  const headerLabel = isCancellation 
+  const headerLabel = isCancellation
     ? (statusLower === 'cancelled' ? `${requestDisplayName.toUpperCase()} REVERTED` : `${requestDisplayName.toUpperCase()} CANCELLATION`)
-    : isCancelled 
+    : isCancelled
       ? `${requestDisplayName.toUpperCase()} CANCELLED`
       : `${requestDisplayName.toUpperCase()} UPDATE`;
 
-  const dayDetailsSection = (fHalf === sHalf) 
+  const dayDetailsSection = (fHalf === sHalf)
     ? `
-    <div class="day-details-container" style="background-color: #f8fafc; border: 1px solid #e2e8f0;">
-      <div class="day-details-header">
-        <span style="font-size: 16px; margin-right: 8px;">🕒</span> DAY DETAILS
-      </div>
-      <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px; display: flex; justify-content: space-between; align-items: center;">
-          <span style="font-size: 14px; font-weight: 700; color: #1d4ed8;">Full Day : </span>
-          <span style="background-color: #dbeafe; color: #1e40af; font-size: 12px; font-weight: 700; padding: 4px 12px; border-radius: 6px;">
-              ${fHalf}
-          </span>
-      </div>
-    </div>`
+    <table width="100%" border="0" cellspacing="0" cellpadding="0" style="background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 14px; margin: 25px 0;">
+      <tr>
+        <td style="padding: 20px;">
+          <table width="100%" border="0" cellspacing="0" cellpadding="0" style="margin-bottom: 15px;">
+            <tr>
+              <td style="font-family: sans-serif; font-size: 13px; font-weight: 800; color: #1e40af; text-transform: uppercase;">
+                <span style="font-size: 16px; margin-right: 8px;">🕒</span> DAY DETAILS
+              </td>
+            </tr>
+          </table>
+          <table width="100%" border="0" cellspacing="0" cellpadding="0" style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px;">
+            <tr>
+              <td align="left" style="padding: 12px; font-family: sans-serif; font-size: 14px; font-weight: 700; color: #1d4ed8;">
+                Full Day : 
+              </td>
+              <td align="right" style="padding: 12px;">
+                <table border="0" cellspacing="0" cellpadding="0">
+                  <tr>
+                    <td style="background-color: #dbeafe; border-radius: 6px; padding: 4px 12px;">
+                      <span style="font-family: sans-serif; color: #1e40af; font-size: 12px; font-weight: 700; text-transform: uppercase;">${fHalf}</span>
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>`
     : `
-    <div class="day-details-container" style="background-color: #f8fafc; border: 1px solid #e2e8f0;">
-      <div class="day-details-header">
-        <span style="font-size: 16px; margin-right: 8px;">🕒</span> DAY DETAILS
-      </div>
-      <table class="half-card-table" width="100%" border="0" cellspacing="0" cellpadding="0">
-        <tr>
-          <td class="half-card">
-            <div class="half-label">FIRST HALF</div>
-            <div class="half-value">${fHalf}</div>
-          </td>
-          <td class="half-card">
-            <div class="half-label">SECOND HALF</div>
-            <div class="half-value">${sHalf}</div>
-          </td>
-        </tr>
-      </table>
-    </div>`;
+    <table width="100%" border="0" cellspacing="0" cellpadding="0" style="background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 14px; margin: 25px 0;">
+      <tr>
+        <td style="padding: 20px;">
+          <table width="100%" border="0" cellspacing="0" cellpadding="0" style="margin-bottom: 15px;">
+            <tr>
+              <td style="font-family: sans-serif; font-size: 13px; font-weight: 800; color: #1e40af; text-transform: uppercase;">
+                <span style="font-size: 16px; margin-right: 8px;">🕒</span> DAY DETAILS
+              </td>
+            </tr>
+          </table>
+          <table width="100%" border="0" cellspacing="0" cellpadding="0">
+            <tr>
+              <td width="48%" style="background-color: #f1f5f9; border-radius: 10px; padding: 14px; border: 1px solid #e2e8f0;">
+                <table width="100%" border="0" cellspacing="0" cellpadding="0">
+                  <tr><td style="font-family: sans-serif; font-size: 10px; font-weight: 700; color: #64748b; text-transform: uppercase; padding-bottom: 4px;">FIRST HALF</td></tr>
+                  <tr><td style="font-family: sans-serif; font-size: 15px; font-weight: 800; color: #2563eb;">${fHalf}</td></tr>
+                </table>
+              </td>
+              <td width="4%">&nbsp;</td>
+              <td width="48%" style="background-color: #f1f5f9; border-radius: 10px; padding: 14px; border: 1px solid #e2e8f0;">
+                <table width="100%" border="0" cellspacing="0" cellpadding="0">
+                  <tr><td style="font-family: sans-serif; font-size: 10px; font-weight: 700; color: #64748b; text-transform: uppercase; padding-bottom: 4px;">SECOND HALF</td></tr>
+                  <tr><td style="font-family: sans-serif; font-size: 15px; font-weight: 800; color: #2563eb;">${sHalf}</td></tr>
+                </table>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>`;
 
   const reviewedByText = (data.reviewedBy && data.reviewedBy.trim()) ? ` reviewed by <strong>${data.reviewedBy}</strong> and` : "";
 
   const content = `
-    <p style="font-size: 16px; color: #1f2937;">Dear ${data.employeeName},</p>
-    <p style="font-size: 14px; color: #4b5563; line-height: 1.6;">
+    <p style="font-family: sans-serif; font-size: 16px; color: #1f2937;">Dear ${data.employeeName},</p>
+    <p style="font-family: sans-serif; font-size: 14px; color: #4b5563; line-height: 1.6;">
       Your request for ${requestText} titled "<strong>${data.title}</strong>" has been${reviewedByText} <strong>${displayStatus}</strong>.
     </p>
 
-    <div class="details-box" style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 20px; margin: 25px 0;">
-      <div class="detail-row" style="margin-bottom: 12px; font-size: 14px;">
-        <span class="detail-label" style="font-weight: 700; color: #1e40af; min-width: 140px; display: inline-block;">From:</span> ${data.fromDate}
-      </div>
-      <div class="detail-row" style="margin-bottom: 12px; font-size: 14px;">
-        <span class="detail-label" style="font-weight: 700; color: #1e40af; min-width: 140px; display: inline-block;">To:</span> ${data.toDate}
-      </div>
-      <div class="detail-row" style="margin-bottom: 0; font-size: 14px;">
-        <span class="detail-label" style="font-weight: 700; color: #1e40af; min-width: 140px; display: inline-block;">Duration:</span> ${data.duration} Day(s)
-      </div>
-    </div>
+    <table width="100%" border="0" cellspacing="0" cellpadding="0" style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; margin: 25px 0;">
+      <tr>
+        <td style="padding: 20px;">
+          <table width="100%" border="0" cellspacing="0" cellpadding="0">
+            <tr>
+              <td width="140" style="padding-bottom: 12px; font-family: sans-serif; font-size: 14px; font-weight: 700; color: #1e40af;">From:</td>
+              <td style="padding-bottom: 12px; font-family: sans-serif; font-size: 14px; color: #1f2937;">${data.fromDate}</td>
+            </tr>
+            <tr>
+              <td width="140" style="padding-bottom: 12px; font-family: sans-serif; font-size: 14px; font-weight: 700; color: #1e40af;">To:</td>
+              <td style="padding-bottom: 12px; font-family: sans-serif; font-size: 14px; color: #1f2937;">${data.toDate}</td>
+            </tr>
+            <tr>
+              <td width="140" style="font-family: sans-serif; font-size: 14px; font-weight: 700; color: #1e40af;">Duration:</td>
+              <td style="font-family: sans-serif; font-size: 14px; color: #1f2937;">${data.duration} Day(s)</td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
 
     ${dayDetailsSection}
 
-    <p style="font-size: 16px; font-weight: 700; margin-top: 20px;">
+    <p style="font-family: sans-serif; font-size: 16px; font-weight: 700; margin-top: 20px;">
       Status: <span style="color: ${statusColor}; text-transform: uppercase;">${displayStatus}</span>
     </p>
 
-    <p style="font-size: 14px; color: #4b5563; line-height: 1.6; margin-top: 20px;">
+    <p style="font-family: sans-serif; font-size: 14px; color: #4b5563; line-height: 1.6; margin-top: 20px;">
       Please log in to the portal for more details.
     </p>
 
-    <div style="text-align: center; margin-top: 40px;">
-      <a href="https://timesheet.inventech-developer.in" class="btn">LOGIN TO PORTAL →</a>
-    </div>
+    <table width="100%" border="0" cellspacing="0" cellpadding="0" style="margin-top: 40px;">
+      <tr>
+        <td align="center">
+          <!--[if mso]>
+          <v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w="urn:schemas-microsoft-com:office:word" href="https://timesheet.inventech-developer.in" style="height:50px;v-text-anchor:middle;width:200px;" arcsize="16%" stroke="f" fillcolor="#2563eb">
+            <w:anchorlock/>
+            <center>
+          <![endif]-->
+          <a href="https://timesheet.inventech-developer.in" class="btn" style="background-color:#2563eb;border-radius:8px;color:#ffffff;display:inline-block;font-family:sans-serif;font-size:14px;font-weight:bold;line-height:50px;text-align:center;text-decoration:none;width:200px;-webkit-text-size-adjust:none;">LOGIN TO PORTAL →</a>
+          <!--[if mso]>
+            </center>
+          </v:roundrect>
+          <![endif]-->
+        </td>
+      </tr>
+    </table>
   `;
 
   return baseLayout(content, `${requestDisplayName} Update`, headerLabel);
 };
+
+
