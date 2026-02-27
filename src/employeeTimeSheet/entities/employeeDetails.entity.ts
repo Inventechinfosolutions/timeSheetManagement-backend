@@ -66,4 +66,7 @@ export class EmployeeDetails extends BaseEntity {
     nullable: true,
   })
   role: UserType;
+
+  @Column({ name: 'month_status', length: 50, default: 'Pending' })
+  monthStatus: string;
 }

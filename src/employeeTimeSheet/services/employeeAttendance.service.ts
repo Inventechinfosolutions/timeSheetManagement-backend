@@ -1359,12 +1359,20 @@ export class EmployeeAttendanceService {
       }
 
       const isFutureMonth = monthStart.getTime() > today.getTime();
+      const monthStatus = (!isFutureMonth && pendingUpdates === 0) ? 'Completed' : 'Pending';
+
+      // Persist monthStatus to EmployeeDetails
+      try {
+          await this.employeeDetailsRepository.update({ employeeId }, { monthStatus });
+      } catch (dbError) {
+          this.logger.warn(`Failed to persist monthStatus for employee ${employeeId}: ${dbError.message}`);
+      }
 
       return {
         totalWeekHours: parseFloat(Number(totalWeekHours).toFixed(2)),
         totalMonthlyHours: parseFloat(Number(totalMonthlyHours).toFixed(2)),
         pendingUpdates,
-        monthStatus: (!isFutureMonth && pendingUpdates === 0) ? 'Completed' : 'Pending',
+        monthStatus,
       };
     } catch (error) {
       this.logger.error(`Error calculating dashboard stats for employee ${employeeId}:`, error);
@@ -1526,12 +1534,21 @@ export class EmployeeAttendanceService {
             loopDate.setDate(loopDate.getDate() + 1);
         }
 
+        const monthStatus = (!isFutureMonth && pendingUpdates === 0) ? 'Completed' : 'Pending';
+
         results[empId] = {
             totalWeekHours: parseFloat(Number(totalWeekHours).toFixed(2)),
             totalMonthlyHours: parseFloat(Number(totalMonthlyHours).toFixed(2)),
             pendingUpdates,
-            monthStatus: (!isFutureMonth && pendingUpdates === 0) ? 'Completed' : 'Pending',
+            monthStatus,
         };
+
+        // Persist monthStatus to EmployeeDetails
+        try {
+            await this.employeeDetailsRepository.update({ employeeId: empId }, { monthStatus });
+        } catch (dbError) {
+            this.logger.warn(`Failed to persist monthStatus for employee ${empId}: ${dbError.message}`);
+        }
     }
     return results;
   }
