@@ -130,7 +130,7 @@ export class EmployeeAttendanceController {
     const user = req.user;
     const roleUpper = (user?.role || '').toUpperCase();
     const isPrivileged = user && (user.userType === 'ADMIN' || user.userType === 'MANAGER' || roleUpper.includes('MNG') || roleUpper.includes('MANAGER'));
-    return this.employeeAttendanceService.create(createEmployeeAttendanceDto, isPrivileged);
+    return await this.employeeAttendanceService.create(createEmployeeAttendanceDto, isPrivileged);
   }
 
  
@@ -333,7 +333,7 @@ export class EmployeeAttendanceController {
     const user = req.user;
     const roleUpper = (user?.role || '').toUpperCase();
     const isPrivileged = user && (user.userType === 'ADMIN' || user.userType === 'MANAGER' || roleUpper.includes('MNG') || roleUpper.includes('MANAGER'));
-    return this.employeeAttendanceService.update(
+    return await this.employeeAttendanceService.update(
       id,
       updateEmployeeAttendanceDto,
       isPrivileged
@@ -357,7 +357,7 @@ export class EmployeeAttendanceController {
     const user = req.user;
     const roleUpper = (user?.role || '').toUpperCase();
     const isPrivileged = user && (user.userType === 'ADMIN' || user.userType === 'MANAGER' || roleUpper.includes('MNG') || roleUpper.includes('MANAGER'));
-    return this.employeeAttendanceService.createBulk(createDtos, isPrivileged);
+    return await this.employeeAttendanceService.createBulk(createDtos, isPrivileged);
   }
 
   @UseGuards(JwtAuthGuard)
@@ -368,7 +368,7 @@ export class EmployeeAttendanceController {
     @Body() body: { employeeId: string; month: string; year: string; dryRun?: boolean },
     @Req() req: any
   ) {
-    return this.employeeAttendanceService.autoUpdateTimesheet(body.employeeId, body.month, body.year, body.dryRun);
+    return await this.employeeAttendanceService.autoUpdateTimesheet(body.employeeId, body.month, body.year, body.dryRun);
   }
 
   @Get('monthly-details-all/:month/:year')

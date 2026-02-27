@@ -1,4 +1,4 @@
-import { Controller, Post, Get, Patch, Param, Body } from '@nestjs/common';
+import { Controller, Post, Get, Patch, Param } from '@nestjs/common';
 import { NotificationsService } from '../Services/notifications.service';
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
 
@@ -11,20 +11,30 @@ export class AttendanceNotificationController {
   @ApiOperation({ summary: 'Trigger Weekly Attendance Reminder' })
   async weeklyReminder() {
     const count = await this.notificationService.sendWeeklyReminder();
-    return {
-      message: 'Weekly attendance reminder sent successfully',
-      totalEmployees: count,
-    };
+    return { message: 'Weekly attendance reminder sent successfully', totalEmployees: count };
   }
 
-  @Post('month-end')
-  @ApiOperation({ summary: 'Trigger Month-End Attendance Reminder' })
-  async monthEndReminder() {
-    const count = await this.notificationService.sendMonthEndReminder();
-    return {
-      message: 'Month-end attendance reminder sent successfully',
-      totalEmployees: count,
-    };
+  // ─── Manual triggers for last-working-day cron jobs ─────────────────────────
+
+  @Post('month-end-10am')
+  @ApiOperation({ summary: 'Manually trigger 10AM month-end general reminder (all employees)' })
+  async monthEnd10AM() {
+    const count = await this.notificationService.sendMonthEndGeneralReminder();
+    return { message: 'Month-end 10AM general reminder sent', totalEmployees: count };
+  }
+
+  @Post('month-end-12pm')
+  @ApiOperation({ summary: 'Manually trigger 12PM last-call to pending employees' })
+  async monthEnd12PM() {
+    const count = await this.notificationService.sendMonthEndLastCallByPending();
+    return { message: 'Month-end 12PM last-call reminder sent', totalEmployees: count };
+  }
+
+  @Post('month-end-1pm')
+  @ApiOperation({ summary: 'Manually trigger 1PM manager report of pending employees' })
+  async monthEnd1PM() {
+    await this.notificationService.sendManagerPendingReportAll();
+    return { message: 'Month-end 1PM manager reports dispatched' };
   }
 
   @Get(':employeeId/inbox')

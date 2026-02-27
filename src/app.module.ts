@@ -18,6 +18,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { AttendanceCronService } from './cron/attendance.cron.service';
 import { EmployeeAttendance } from './employeeTimeSheet/entities/employeeAttendance.entity';
 import { EmployeeDetails } from './employeeTimeSheet/entities/employeeDetails.entity';
+import { ManagerMapping } from './managerMapping/entities/managerMapping.entity';
 import { MailModule } from './common/mail/mail.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { CacheModule } from '@nestjs/cache-manager';
@@ -53,7 +54,7 @@ function getEnvFiles(): string[] {
     MasterModule,
     ManagerMappingModule,
     ScheduleModule.forRoot(),
-    TypeOrmModule.forFeature([EmployeeAttendance, EmployeeDetails]),
+    TypeOrmModule.forFeature([EmployeeAttendance, EmployeeDetails, ManagerMapping]),
     MailModule,
     NotificationsModule,
     CacheModule.registerAsync({
