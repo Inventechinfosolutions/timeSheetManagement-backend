@@ -440,13 +440,13 @@ export class LeaveRequestsService {
         WHEN lr.status = 'Cancellation Rejected' THEN 5
         WHEN lr.status = 'Modification Approved' THEN 4
         WHEN lr.status = 'Modification Cancelled' THEN 5
+        WHEN lr.status = 'Cancellation Reverted' THEN 5
         WHEN lr.status = 'Request Modified' THEN 6
         WHEN lr.status = 'Rejected' THEN 6
         WHEN lr.status = 'Cancelled' THEN 7
         ELSE 8 
       END`, 'priority')
-      .orderBy('priority', 'ASC')
-      .addOrderBy('lr.id', 'DESC')
+      .orderBy('lr.id', 'DESC')
       .offset((page - 1) * limit)
       .limit(limit)
       .getRawMany();
@@ -579,6 +579,8 @@ export class LeaveRequestsService {
         status: In([
           'Requesting for Cancellation',
           'Cancellation Approved',
+          'Requesting for Modification',
+          'Modification Approved',
         ]),
       },
     });
@@ -676,51 +678,8 @@ export class LeaveRequestsService {
       }
     }
 
-    // 2. Check if Full Cancellation
-    const startDate = dayjs(request.fromDate);
-    const endDate = dayjs(request.toDate);
-    const totalDays = endDate.diff(startDate, 'day') + 1;
-
-    if (datesToCancel.length === totalDays) {
-      // FULL CANCEL
-      request.status = 'Requesting for Cancellation';
-      request.isRead = false;
-      request.isReadEmployee = true;
-      const saved = await this.leaveRequestRepository.save(request);
-      
-      // Notify Admin
-      await this.notifyAdminOfCancellationRequest(saved, employeeId);
-      
-      // Notify Manager
-      await this.notifyManagerOfRequest(saved);
-      
-      // Notify Employee (Submission Receipt)
-      await this.notifyEmployeeOfSubmission(saved);
-
-      // --- Notify Manager via App Notification ---
-      try {
-        const mapping = await this.managerMappingRepository.findOne({ where: { employeeId, status: 'ACTIVE' as any } });
-        if (mapping) {
-            const manager = await this.userRepository.findOne({ where: { aliasLoginName: mapping.managerName } });
-             if (manager && manager.loginId) {
-                await this.notificationsService.createNotification({
-                    employeeId: manager.loginId,
-                    title: 'Cancellation Request',
-                    message: `${employeeId} requested to Cancel an approved Leave.`,
-                    type: 'alert'
-                });
-             }
-        }
-      } catch (e) {
-         this.logger.error(`Failed to create app notification for manager: ${e.message}`);
-      }
-      
-      // Background: Recalculate monthStatus
-      this._recalcMonthStatus(employeeId, String(request.fromDate)).catch(() => {});
-
-      return saved;
-    } else {
-      // PARTIAL CANCEL - Handle Non-Contiguous Dates by grouping them into ranges
+    // 2. Cancellation Processing
+    // ALL CANCEL TYPES (Full or Partial) - Handle Non-Contiguous Dates by grouping them into ranges
       const sortedDates = datesToCancel.sort();
       const ranges: { start: string; end: string; count: number }[] = [];
 
@@ -832,7 +791,6 @@ export class LeaveRequestsService {
       return createdRequests.length === 1
         ? createdRequests[0]
         : createdRequests;
-    }
   }
 
   private async notifyAdminOfCancellationRequest(request: LeaveRequest, employeeId: string, totalDays?: number) {
@@ -956,8 +914,8 @@ export class LeaveRequestsService {
       await this.leaveRequestRepository.save(masterRequest);
     }
 
-    // Mark this request as Cancelled (invalidated)
-    request.status = 'Cancelled';
+    // Mark this request as Cancellation Reverted
+    request.status = 'Cancellation Reverted';
     const saved = await this.leaveRequestRepository.save(request);
 
     // NOTE: Manager notification is sent in the custom email block below (not using generic notifyManagerOfRequest)
@@ -1301,7 +1259,8 @@ export class LeaveRequestsService {
       // Skip internal modification records, cancelled requests, and pending cancellation requests entirely from stats
       if (
         status === 'Request Modified' ||
-        status === 'Cancelled'
+        status === 'Cancelled' ||
+        status === 'Cancellation Reverted'
       ) {
         return;
       }

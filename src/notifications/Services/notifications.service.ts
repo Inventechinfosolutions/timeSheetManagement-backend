@@ -228,7 +228,7 @@ export class NotificationsService {
     const message =
       `The following employee(s) under your team have not yet updated their attendance for this month:\n\n` +
       `${employeeList}\n\n` +
-      `Please follow up with them and ensure their attendance is submitted before end of day.\n\n` +
+      `Please take necessary actions.\n\n` +
       `Regards,\nAdmin Team`;
     const html = getGeneralNotificationTemplate({
       recipientName: manager.fullName || 'Manager',

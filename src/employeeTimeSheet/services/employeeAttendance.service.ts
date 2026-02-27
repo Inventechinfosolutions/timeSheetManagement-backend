@@ -967,18 +967,16 @@ export class EmployeeAttendanceService {
     const workingDate = workingDateObj.toISOString().split('T')[0];
     
     if (workingDate <= today) {
-      // User Request: Force Unlock Weekends/Holidays even if status is set
-      if (attendance.status === AttendanceStatus.WEEKEND || attendance.status === AttendanceStatus.HOLIDAY) {
-          attendance.status = AttendanceStatus.NOT_UPDATED;
-      }
+      // User Request: Actual statuses should come through
+      // Removed the override that was intended to "unlock" weekends/holidays
+      // since editability is handled separately in checkEntryBlock.
 
       if (!attendance.status || attendance.status === AttendanceStatus.NOT_UPDATED) {
         // Priority 1: Check Holiday
         const holiday = await this.masterHolidayService.findByDate(workingDate);
         if (holiday) {
-           // attendance.status = AttendanceStatus.HOLIDAY;
-           // return attendance;
-           // User Request: Unlock Holidays (do not force status)
+           attendance.status = AttendanceStatus.HOLIDAY;
+           return attendance;
         }
 
         // Priority 2: Check Weekend
@@ -991,9 +989,8 @@ export class EmployeeAttendanceService {
                  attendance.status === AttendanceStatus.FULL_DAY);
 
             if (!hasExplicitStatus) {
-                // attendance.status = AttendanceStatus.WEEKEND;
-                // return attendance;
-                // User Request: Unlock Weekends (do not force status)
+                attendance.status = AttendanceStatus.WEEKEND;
+                return attendance;
             }
         }
 
