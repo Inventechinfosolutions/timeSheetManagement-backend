@@ -74,4 +74,8 @@ export class EmployeeDetailsDto {
   @IsEnum(UserType)
   @IsOptional()
   role?: UserType;
+
+  @IsString()
+  @IsOptional()
+  monthStatus?: string;
 }

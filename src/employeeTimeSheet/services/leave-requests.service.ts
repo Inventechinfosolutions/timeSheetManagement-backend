@@ -10,6 +10,7 @@ import { EmailService } from '../../email/email.service';
 import { DocumentUploaderService } from '../../common/document-uploader/services/document-uploader.service';
 import { DocumentMetaInfo, EntityType, ReferenceType } from '../../common/document-uploader/models/documentmetainfo.model';
 import dayjs from 'dayjs';
+import { EmployeeAttendanceService } from './employeeAttendance.service';
 import { 
   getRequestNotificationTemplate, 
   getStatusUpdateTemplate, 
@@ -40,6 +41,16 @@ export class LeaveRequestsService {
     return false;
   }
 
+  // Helper: recalculate and persist monthStatus for an employee based on a date in their month
+    private async _recalcMonthStatus(employeeId: string, refDate: string | Date): Promise<void> {
+      try {
+        // [DB_TRUTH]: Delegate all status recalculations to EmployeeAttendanceService.
+        await this.employeeAttendanceService.triggerMonthStatusRecalc(employeeId, refDate);
+      } catch (err) {
+        this.logger.error(`[MONTH_STATUS] Delegation failed for ${employeeId}: ${err.message}`);
+      }
+    }
+
   constructor(
     @InjectRepository(LeaveRequest)
     private leaveRequestRepository: Repository<LeaveRequest>,
@@ -58,6 +69,7 @@ export class LeaveRequestsService {
     private emailService: EmailService,
     private documentUploaderService: DocumentUploaderService,
     private notificationsService: NotificationsService,
+    private employeeAttendanceService: EmployeeAttendanceService,
   ) {}
 
   // Helper to check if holiday
@@ -428,13 +440,13 @@ export class LeaveRequestsService {
         WHEN lr.status = 'Cancellation Rejected' THEN 5
         WHEN lr.status = 'Modification Approved' THEN 4
         WHEN lr.status = 'Modification Cancelled' THEN 5
+        WHEN lr.status = 'Cancellation Reverted' THEN 5
         WHEN lr.status = 'Request Modified' THEN 6
         WHEN lr.status = 'Rejected' THEN 6
         WHEN lr.status = 'Cancelled' THEN 7
         ELSE 8 
       END`, 'priority')
-      .orderBy('priority', 'ASC')
-      .addOrderBy('lr.id', 'DESC')
+      .orderBy('lr.id', 'DESC')
       .offset((page - 1) * limit)
       .limit(limit)
       .getRawMany();
@@ -567,6 +579,8 @@ export class LeaveRequestsService {
         status: In([
           'Requesting for Cancellation',
           'Cancellation Approved',
+          'Requesting for Modification',
+          'Modification Approved',
         ]),
       },
     });
@@ -664,48 +678,8 @@ export class LeaveRequestsService {
       }
     }
 
-    // 2. Check if Full Cancellation
-    const startDate = dayjs(request.fromDate);
-    const endDate = dayjs(request.toDate);
-    const totalDays = endDate.diff(startDate, 'day') + 1;
-
-    if (datesToCancel.length === totalDays) {
-      // FULL CANCEL
-      request.status = 'Requesting for Cancellation';
-      request.isRead = false;
-      request.isReadEmployee = true;
-      const saved = await this.leaveRequestRepository.save(request);
-      
-      // Notify Admin
-      await this.notifyAdminOfCancellationRequest(saved, employeeId);
-      
-      // Notify Manager
-      await this.notifyManagerOfRequest(saved);
-      
-      // Notify Employee (Submission Receipt)
-      await this.notifyEmployeeOfSubmission(saved);
-
-      // --- Notify Manager via App Notification ---
-      try {
-        const mapping = await this.managerMappingRepository.findOne({ where: { employeeId, status: 'ACTIVE' as any } });
-        if (mapping) {
-            const manager = await this.userRepository.findOne({ where: { aliasLoginName: mapping.managerName } });
-             if (manager && manager.loginId) {
-                await this.notificationsService.createNotification({
-                    employeeId: manager.loginId,
-                    title: 'Cancellation Request',
-                    message: `${employeeId} requested to Cancel an approved Leave.`,
-                    type: 'alert'
-                });
-             }
-        }
-      } catch (e) {
-         this.logger.error(`Failed to create app notification for manager: ${e.message}`);
-      }
-      
-      return saved;
-    } else {
-      // PARTIAL CANCEL - Handle Non-Contiguous Dates by grouping them into ranges
+    // 2. Cancellation Processing
+    // ALL CANCEL TYPES (Full or Partial) - Handle Non-Contiguous Dates by grouping them into ranges
       const sortedDates = datesToCancel.sort();
       const ranges: { start: string; end: string; count: number }[] = [];
 
@@ -811,10 +785,12 @@ export class LeaveRequestsService {
       //   await this.leaveRequestRepository.save(request);
       // }
 
+      // Background: Recalculate monthStatus for partial cancellation
+      this._recalcMonthStatus(employeeId, request.fromDate.toString()).catch(() => {});
+
       return createdRequests.length === 1
         ? createdRequests[0]
         : createdRequests;
-    }
   }
 
   private async notifyAdminOfCancellationRequest(request: LeaveRequest, employeeId: string, totalDays?: number) {
@@ -938,8 +914,8 @@ export class LeaveRequestsService {
       await this.leaveRequestRepository.save(masterRequest);
     }
 
-    // Mark this request as Cancelled (invalidated)
-    request.status = 'Cancelled';
+    // Mark this request as Cancellation Reverted
+    request.status = 'Cancellation Reverted';
     const saved = await this.leaveRequestRepository.save(request);
 
     // NOTE: Manager notification is sent in the custom email block below (not using generic notifyManagerOfRequest)
@@ -1048,6 +1024,9 @@ export class LeaveRequestsService {
     } catch (error) {
       this.logger.error('Failed to send undo cancellation emails:', error);
     }
+
+    // Trigger monthStatus recalculation
+    this._recalcMonthStatus(request.employeeId, request.fromDate.toString()).catch(() => {});
 
     return saved;
   }
@@ -1280,7 +1259,8 @@ export class LeaveRequestsService {
       // Skip internal modification records, cancelled requests, and pending cancellation requests entirely from stats
       if (
         status === 'Request Modified' ||
-        status === 'Cancelled'
+        status === 'Cancelled' ||
+        status === 'Cancellation Reverted'
       ) {
         return;
       }
@@ -1629,6 +1609,10 @@ export class LeaveRequestsService {
       };
 
       this.logger.log(`[STATUS_UPDATE_SUCCESS] Request ${id} ${status}. Attendance updates: ${attendanceUpdates.length}`);
+
+      // Background: Recalculate monthStatus for the affected employee
+      this._recalcMonthStatus(request.employeeId, String(request.fromDate)).catch(() => {});
+
       return response;
     } catch (error) {
       this.logger.error(`Error updating leave request status for ID ${id}:`, error);
@@ -1688,6 +1672,10 @@ export class LeaveRequestsService {
 
       const result = await query.execute();
       this.logger.log(`[CLEAR_ATTENDANCE] Result: ${result.affected} records affected.`);
+
+      // Trigger monthStatus recalculation
+      this._recalcMonthStatus(request.employeeId, request.fromDate.toString()).catch(() => {});
+
       return { 
         success: true, 
         affected: result.affected,
@@ -1884,6 +1872,9 @@ export class LeaveRequestsService {
         }
     }
 
+    // Background: Recalculate monthStatus for the affected employee
+    this._recalcMonthStatus(request.employeeId, String(request.fromDate)).catch(() => {});
+
     return request;
   }
 
@@ -2046,6 +2037,9 @@ export class LeaveRequestsService {
 
     // 5. Notify Employee (Submission Receipt)
     await this.notifyEmployeeOfSubmission(request);
+
+    // 6. Recalculate Month Status
+    this._recalcMonthStatus(employeeId, request.fromDate.toString()).catch(() => {});
 
     return request;
   }
@@ -2336,6 +2330,10 @@ export class LeaveRequestsService {
     }
 
     this.logger.log(`[MODIFY_REQUEST] Successfully modified request ${id}. Modification count: ${modifiedRequest?.modificationCount}`);
+    
+    // Trigger monthStatus recalculation
+    this._recalcMonthStatus(employeeId, request.fromDate.toString()).catch(() => {});
+
     return { success: true, modifiedRequest, message: 'Request modified successfully' };
   }
 
@@ -2451,6 +2449,9 @@ export class LeaveRequestsService {
     // We do NOT modify the original request duration/dates yet. 
     // It stays as 'Approved' overlapping until the modification is approved.
     
+    // Background: Recalculate monthStatus for modification
+    this._recalcMonthStatus(employeeId, datesToModify[0]).catch(() => {});
+
     return { success: true, modifiedRequests: createdRequests, message: 'Modification requests created successfully' };
   }
 
@@ -2467,6 +2468,9 @@ export class LeaveRequestsService {
     // We might want to track who cancelled it, but for undo it's the employee
     
     await this.leaveRequestRepository.save(request);
+
+    // Background: Recalculate monthStatus when modification is undone
+    this._recalcMonthStatus(employeeId, String(request.fromDate)).catch(() => {});
 
     return { success: true, message: 'Modification request undone successfully' };
   }

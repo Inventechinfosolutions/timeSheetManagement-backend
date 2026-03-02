@@ -22,6 +22,7 @@ import * as ExcelJS from 'exceljs';
 import PDFDocument from 'pdfkit';
 import * as fs from 'fs';
 import * as path from 'path';
+import dayjs from 'dayjs';
 
 @Injectable()
 export class EmployeeAttendanceService {
@@ -346,19 +347,23 @@ export class EmployeeAttendanceService {
 
       const saved = await this.employeeAttendanceRepository.save(newAttendance);
       this.logger.log(`[ATTENDANCE_CREATE] Created attendance ID: ${saved.id}, sourceRequestId after save: ${saved.sourceRequestId}`);
+      
+      // Trigger monthStatus recalculation
+      this.triggerMonthStatusRecalc(saved.employeeId, saved.workingDate).catch(() => {});
+      
       return saved;
-    } catch (error) {
-      this.logger.error(`[ATTENDANCE_CREATE] Error creating attendance for ${createEmployeeAttendanceDto.employeeId}: ${error.message}`, error.stack);
-      if (error instanceof BadRequestException) throw error;
-      if (error instanceof ForbiddenException) throw error;
-      if (error instanceof NotFoundException) throw error;
-      if (error instanceof HttpException) throw error;
-      throw new HttpException(
-        `Failed to create attendance: ${error.message}`, 
-        HttpStatus.INTERNAL_SERVER_ERROR
-      );
+      } catch (error) {
+        this.logger.error(`[ATTENDANCE_CREATE] Error creating attendance for ${createEmployeeAttendanceDto.employeeId}: ${error.message}`, error.stack);
+        if (error instanceof BadRequestException) throw error;
+        if (error instanceof ForbiddenException) throw error;
+        if (error instanceof NotFoundException) throw error;
+        if (error instanceof HttpException) throw error;
+        throw new HttpException(
+          `Failed to create attendance: ${error.message}`, 
+          HttpStatus.INTERNAL_SERVER_ERROR
+        );
+      }
     }
-  }
 
   async checkEntryBlock(employeeId: string, date: string): Promise<{ isBlocked: boolean; reason: string | null }> {
     const workingDate = new Date(date);
@@ -429,6 +434,12 @@ export class EmployeeAttendanceService {
             this.logger.error(`Failed to process bulk item for ${dto.workingDate}: ${error.message}`);
         }
     }
+
+    // Trigger monthStatus recalculation if any records were processed
+    if (attendanceDtos.length > 0) {
+        this.triggerMonthStatusRecalc(attendanceDtos[0].employeeId, attendanceDtos[0].workingDate).catch(() => {});
+    }
+
     return results;
   }
 
@@ -589,6 +600,10 @@ export class EmployeeAttendanceService {
 
         this.logger.log(`Updating ${recordsToCreate.length} records for ${employeeId}...`);
         await this.createBulk(recordsToCreate);
+
+        if (!dryRun) {
+            this.triggerMonthStatusRecalc(employeeId, startDate).catch(() => {});
+        }
 
         this.logger.log(`Auto-update completed for ${employeeId}. Dates: ${updatedDateStrings.join(', ')}`);
         return { 
@@ -796,7 +811,12 @@ export class EmployeeAttendanceService {
         this.logger.log(`[ATTENDANCE_UPDATE] Auto-filled missing splits for Full Day: ${attendance.firstHalf}, ${attendance.secondHalf}`);
       }
       
-      return await this.employeeAttendanceRepository.save(attendance);
+      const saved = await this.employeeAttendanceRepository.save(attendance);
+      
+      // Trigger monthStatus recalculation
+      this.triggerMonthStatusRecalc(saved.employeeId, saved.workingDate).catch(() => {});
+      
+      return saved;
     } catch (error) {
       this.logger.error(`[ATTENDANCE_UPDATE] Error updating attendance ID ${id}: ${error.message}`, error.stack);
       if (error instanceof BadRequestException) throw error;
@@ -932,6 +952,11 @@ export class EmployeeAttendanceService {
     }
     const result = await this.employeeAttendanceRepository.delete(id);
     if (result.affected === 0) throw new NotFoundException(`Record with ID ${id} not found`);
+    
+    // [RECALC]: Trigger MonthStatus recalculation from DB truth
+    if (attendance) {
+        this.triggerMonthStatusRecalc(attendance.employeeId, attendance.workingDate).catch(() => {});
+    }
   }
 
 
@@ -942,18 +967,16 @@ export class EmployeeAttendanceService {
     const workingDate = workingDateObj.toISOString().split('T')[0];
     
     if (workingDate <= today) {
-      // User Request: Force Unlock Weekends/Holidays even if status is set
-      if (attendance.status === AttendanceStatus.WEEKEND || attendance.status === AttendanceStatus.HOLIDAY) {
-          attendance.status = AttendanceStatus.NOT_UPDATED;
-      }
+      // User Request: Actual statuses should come through
+      // Removed the override that was intended to "unlock" weekends/holidays
+      // since editability is handled separately in checkEntryBlock.
 
       if (!attendance.status || attendance.status === AttendanceStatus.NOT_UPDATED) {
         // Priority 1: Check Holiday
         const holiday = await this.masterHolidayService.findByDate(workingDate);
         if (holiday) {
-           // attendance.status = AttendanceStatus.HOLIDAY;
-           // return attendance;
-           // User Request: Unlock Holidays (do not force status)
+           attendance.status = AttendanceStatus.HOLIDAY;
+           return attendance;
         }
 
         // Priority 2: Check Weekend
@@ -966,27 +989,30 @@ export class EmployeeAttendanceService {
                  attendance.status === AttendanceStatus.FULL_DAY);
 
             if (!hasExplicitStatus) {
-                // attendance.status = AttendanceStatus.WEEKEND;
-                // return attendance;
-                // User Request: Unlock Weekends (do not force status)
+                attendance.status = AttendanceStatus.WEEKEND;
+                return attendance;
             }
         }
 
-        // Priority 3: Check for approved Client Visit or Work From Home request
-        const approvedRequest = await this.leaveRequestRepository.findOne({
-          where: {
-            employeeId: attendance.employeeId,
-            requestType: In(['Client Visit', 'Work From Home']),
-            status: 'Approved',
-            fromDate: LessThanOrEqual(workingDate),
-            toDate: MoreThanOrEqual(workingDate),
-          },
-        });
+        // Priority 3: Check for approved Client Visit or Work From Home request 
+        // ONLY if the record is explicitly linked via sourceRequestId
+        if (attendance.sourceRequestId) {
+          const approvedRequest = await this.leaveRequestRepository.findOne({
+            where: {
+              id: attendance.sourceRequestId,
+              employeeId: attendance.employeeId,
+              requestType: In(['Client Visit', 'Work From Home', 'WFH']),
+              status: 'Approved',
+              fromDate: LessThanOrEqual(workingDate),
+              toDate: MoreThanOrEqual(workingDate),
+            },
+          });
 
-        if (approvedRequest) {
-          // If approved Client Visit or WFH exists, mark as Present (Full Day)
-          attendance.status = AttendanceStatus.FULL_DAY;
-          return attendance;
+          if (approvedRequest) {
+            // If approved Client Visit or WFH exists AND it is linked, mark as Present (Full Day)
+            attendance.status = AttendanceStatus.FULL_DAY;
+            return attendance;
+          }
         }
 
         // Priority 4: Default to Absent for past weekdays with missing status (0 hours)
@@ -1027,6 +1053,25 @@ export class EmployeeAttendanceService {
     
     // 3. Any other past month -> LOCKED
     return false;
+  }
+
+  /**
+   * REFACTORED: Triggers the DB-truth recalculation for an employee's month.
+   */
+  public async triggerMonthStatusRecalc(employeeId: string, date: Date | string): Promise<void> {
+    try {
+      // Use dayjs for robust month/year extraction regardless of input format
+      const d = dayjs(date);
+      const month = String(d.month() + 1);
+      const year = String(d.year());
+      
+      // persistMonthStatus = true ensures it is saved to EmployeeDetails
+      // This is the core "DB-Truth" trigger.
+      await this.getDashboardStats(employeeId, month, year, true);
+      this.logger.log(`[MONTH_STATUS_TRIGGER] DB-Truth Recalculated for ${employeeId} (${month}/${year})`);
+    } catch (err) {
+      this.logger.error(`[MONTH_STATUS_TRIGGER] ❌ FAILED for ${employeeId}: ${err.message}`);
+    }
   }
 
   async getTrends(employeeId: string, endDateStr: string, startDateStr?: string): Promise<any[]> {
@@ -1204,10 +1249,10 @@ export class EmployeeAttendanceService {
         'ed',
         'ed.employeeId = attendance.employeeId',
       )
-      .where('attendance.workingDate BETWEEN :start AND :end', { start, end })
-      .andWhere('ed.userStatus = :userStatus', { userStatus: 'ACTIVE' });
+      .where('attendance.workingDate BETWEEN :start AND :end', { start, end });
 
     if (managerName || managerId) {
+      query.andWhere('ed.userStatus = :userStatus', { userStatus: 'ACTIVE' });
       query.innerJoin(
         ManagerMapping,
         'mm',
@@ -1230,7 +1275,7 @@ export class EmployeeAttendanceService {
       records.map((record) => this.applyStatusBusinessRules(record)),
     );
   }
-  async getDashboardStats(employeeId: string, queryMonth?: string, queryYear?: string) {
+  async getDashboardStats(employeeId: string, queryMonth?: string, queryYear?: string, persistMonthStatus: boolean = false) {
     try {
       const today = new Date();
       const currentMonth = queryMonth ? parseInt(queryMonth) : today.getMonth() + 1;
@@ -1290,14 +1335,7 @@ export class EmployeeAttendanceService {
       // We will filter or just put all in the Set, which is fine since the set key includes year.
       const holidayEntities = await this.masterHolidayService.findAll(); 
 
-      // Better: Fetch approved leaves for the range
-      const leaves = await this.leaveRequestRepository.find({
-        where: {
-          employeeId,
-          status: 'Approved',
-          fromDate: Between(monthStart.toISOString().split('T')[0], pendingLimitDate.toISOString().split('T')[0])
-        }
-      });
+      // Standard definitions
 
       // Helper to avoid timezone shifts when converting to YYYY-MM-DD
       const toLocalYMD = (dateInput: Date | string) => {
@@ -1308,9 +1346,14 @@ export class EmployeeAttendanceService {
           return `${y}-${m}-${d}`;
       };
 
-      // Optimization: Create Set of existing attendance dates (string YYYY-MM-DD)
+      // [DB_TRUTH]: Define strictly filled attendance statuses.
+      // Standardized: Approved leaves are synced to attendance with status 'Leave' or 'On Leave'.
+      const filledStatuses = ['Full Day', 'Half Day', 'Work From Home', 'Client Visit', 'On Leave', 'Leave'];
+      
       const existingAttendanceDates = new Set(
-          monthRecords.map(r => toLocalYMD(r.workingDate))
+          monthRecords
+            .filter(r => r.status && filledStatuses.includes(r.status))
+            .map(r => toLocalYMD(r.workingDate))
       );
 
       // Optimization: Set of Holidays
@@ -1322,13 +1365,7 @@ export class EmployeeAttendanceService {
           })
       );
 
-      // Optimization: Approved Leaves ranges
-      const allApprovedLeaves = await this.leaveRequestRepository.find({
-          where: {
-              employeeId,
-              status: 'Approved'
-          }
-      });
+      // Leaves are now checked via attendance table
 
 
       // Loop from monthStart to pendingLimitDate
@@ -1344,14 +1381,8 @@ export class EmployeeAttendanceService {
           const isHoliday = holidayDates.has(dateStr);
           // 3. Check existing attendance
           const hasAttendance = existingAttendanceDates.has(dateStr);
-          // 4. Check Leave
-          const hasLeave = allApprovedLeaves.some(l => {
-               const lStartStr = toLocalYMD(l.fromDate);
-               const lEndStr = toLocalYMD(l.toDate);
-               return dateStr >= lStartStr && dateStr <= lEndStr;
-          });
-
-          if (!isWeekend && !isHoliday && !hasAttendance && !hasLeave) {
+          // [DB_TRUTH_GAP]: Gap if NOT Weekend AND NOT Holiday AND No "Filled" attendance record
+          if (!isWeekend && !isHoliday && !hasAttendance) {
               pendingUpdates++;
           }
 
@@ -1359,12 +1390,26 @@ export class EmployeeAttendanceService {
       }
 
       const isFutureMonth = monthStart.getTime() > today.getTime();
+      let dbMonthStatus = 'Pending';
+      
+      if (persistMonthStatus) {
+         const calculatedStatus = (!isFutureMonth && pendingUpdates === 0) ? 'Submitted' : 'Pending';
+         dbMonthStatus = calculatedStatus;
+         try {
+             await this.employeeDetailsRepository.update({ employeeId }, { monthStatus: calculatedStatus });
+         } catch (dbError) {
+             this.logger.warn(`Failed to persist monthStatus for employee ${employeeId}: ${dbError.message}`);
+         }
+      } else {
+         const emp = await this.employeeDetailsRepository.findOne({ select: ['monthStatus'], where: { employeeId } });
+         dbMonthStatus = emp?.monthStatus || 'Pending';
+      }
 
       return {
         totalWeekHours: parseFloat(Number(totalWeekHours).toFixed(2)),
         totalMonthlyHours: parseFloat(Number(totalMonthlyHours).toFixed(2)),
         pendingUpdates,
-        monthStatus: (!isFutureMonth && pendingUpdates === 0) ? 'Completed' : 'Pending',
+        monthStatus: dbMonthStatus,
       };
     } catch (error) {
       this.logger.error(`Error calculating dashboard stats for employee ${employeeId}:`, error);
@@ -1405,11 +1450,10 @@ export class EmployeeAttendanceService {
     // 1. Fetch all employees (filtered by manager if provided)
     const query = this.employeeDetailsRepository
       .createQueryBuilder('employee')
-      .select(['employee.employeeId', 'employee.fullName']);
-
-    query.andWhere('employee.userStatus = :userStatus', { userStatus: 'ACTIVE' });
+      .select(['employee.employeeId', 'employee.fullName', 'employee.monthStatus']);
 
     if (managerName || managerId) {
+      query.andWhere('employee.userStatus = :userStatus', { userStatus: 'ACTIVE' });
       query.innerJoin(ManagerMapping, 'mm', 'mm.employeeId = employee.employeeId');
       query.andWhere(
         '(mm.managerName LIKE :managerNameQuery OR mm.managerName LIKE :managerIdQuery)',
@@ -1500,7 +1544,7 @@ export class EmployeeAttendanceService {
             empRecords
                 .filter(r => {
                     const d = new Date(r.workingDate);
-                    return d >= monthStart && d <= monthEnd;
+                    return d >= monthStart && d <= monthEnd && r.status && r.status !== 'Not Updated' && r.status !== 'Pending';
                 })
                 .map(r => toLocalYMD(r.workingDate))
         );
@@ -1530,7 +1574,7 @@ export class EmployeeAttendanceService {
             totalWeekHours: parseFloat(Number(totalWeekHours).toFixed(2)),
             totalMonthlyHours: parseFloat(Number(totalMonthlyHours).toFixed(2)),
             pendingUpdates,
-            monthStatus: (!isFutureMonth && pendingUpdates === 0) ? 'Completed' : 'Pending',
+            monthStatus: emp.monthStatus || 'Pending',
         };
     }
     return results;
@@ -1539,10 +1583,10 @@ export class EmployeeAttendanceService {
     // 1. Fetch employees (filtered by manager if provided)
     // We want all active employees for Admin, but only mapped employees (and themselves) for Manager
     const query = this.employeeDetailsRepository
-      .createQueryBuilder('employee')
-      .where('employee.userStatus = :userStatus', { userStatus: 'ACTIVE' });
+      .createQueryBuilder('employee');
 
     if (managerName || managerId) {
+      query.andWhere('employee.userStatus = :userStatus', { userStatus: 'ACTIVE' });
       query.leftJoin(
         ManagerMapping,
         'mm',
