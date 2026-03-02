@@ -202,7 +202,7 @@ export class EmployeeDetailsService {
 
       if (search) {
         query.andWhere(
-          '(employee.fullName LIKE :search OR employee.employeeId LIKE :search OR employee.email LIKE :search)',
+          '(employee.fullName LIKE :search OR employee.employeeId LIKE :search)',
           { search: `%${search}%` },
         );
       }
@@ -403,7 +403,7 @@ export class EmployeeDetailsService {
 
       if (search) {
         query.andWhere(
-          '(employee.fullName LIKE :search OR employee.employeeId LIKE :search OR employee.email LIKE :search)',
+          '(employee.fullName LIKE :search OR employee.employeeId LIKE :search)',
           { search: `%${search}%` },
         );
       }
@@ -423,12 +423,20 @@ export class EmployeeDetailsService {
              query.leftJoin(ManagerMapping, 'mm', 'mm.employeeId = employee.employeeId');
              
              query.andWhere(
-                '( (mm.managerName LIKE :managerNameQuery OR mm.managerName LIKE :managerIdQuery) AND mm.status = :activeMappingStatus ) OR employee.employeeId = :exactManagerId', 
+                `( 
+                  (mm.managerName LIKE :managerNameQuery OR mm.managerName LIKE :managerIdQuery) 
+                  AND mm.status = :activeMappingStatus 
+                ) OR (
+                  employee.employeeId = :exactManagerId
+                  AND (:searchEmpty = 1 OR employee.fullName LIKE :search OR employee.employeeId LIKE :search)
+                )`, 
                 { 
                     managerNameQuery: `%${managerName}%`, 
                     managerIdQuery: `%${managerId}%`,
                     activeMappingStatus: 'ACTIVE',
-                    exactManagerId: managerId
+                    exactManagerId: managerId,
+                    searchEmpty: search ? 0 : 1,
+                    search: `%${search}%`,
                 }
              );
         } else {
