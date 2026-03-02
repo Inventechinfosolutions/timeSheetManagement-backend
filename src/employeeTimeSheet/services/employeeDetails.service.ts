@@ -457,7 +457,7 @@ export class EmployeeDetailsService {
 
       if (status && status !== 'All' && month && year) {
         const filteredEmployeeIds = Object.keys(allStats).filter(empId => {
-          const empStatus = allStats[empId].monthStatus === 'Completed' ? 'Submitted' : 'Pending';
+          const empStatus = allStats[empId].monthStatus === 'Submitted' ? 'Submitted' : 'Pending';
           return empStatus === status;
         });
 
