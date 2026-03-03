@@ -7,7 +7,7 @@ import { UserType } from 'src/users/enums/user-type.enum';
 @Controller('timesheet-blockers')
 @UseGuards(JwtAuthGuard)
 export class TimesheetBlockerController {
-  constructor(private readonly blockerService: TimesheetBlockerService) {}
+  constructor(private readonly blockerService: TimesheetBlockerService) { }
 
   @Post()
   async create(@Body() data: Partial<TimesheetBlocker>, @Req() req: any): Promise<TimesheetBlocker> {
@@ -15,8 +15,8 @@ export class TimesheetBlockerController {
     const isAdmin = user?.userType === UserType.ADMIN;
 
     // Set the blocker's identity as strictly the role (Admin or Manager)
-    data.blockedBy = isAdmin ? 'Admin' : 'Manager';
-    
+    data.blockedBy = isAdmin ? UserType.ADMIN : UserType.MANAGER;
+
     return await this.blockerService.create(data, isAdmin);
   }
 
@@ -29,11 +29,11 @@ export class TimesheetBlockerController {
   async remove(@Param('id') id: string, @Req() req: any): Promise<void> {
     const user = req.user;
     const isAdmin = user?.userType === UserType.ADMIN;
-    
+
     // Check for Manager Role
     const roleUpper = (user?.role || '').toUpperCase();
-    const isManager = user && (user.userType === 'MANAGER' || roleUpper.includes('MNG') || roleUpper.includes('MANAGER'));
-    
+    const isManager = user && (user.userType === UserType.MANAGER || roleUpper.includes('MNG') || roleUpper.includes(UserType.MANAGER));
+
     await this.blockerService.remove(+id, isAdmin, isManager, user?.loginId, user?.aliasLoginName);
   }
 }

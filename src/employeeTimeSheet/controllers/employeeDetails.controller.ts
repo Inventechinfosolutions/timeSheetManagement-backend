@@ -18,6 +18,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
+import { UserType } from '../../users/enums/user-type.enum';
 import { Response } from 'express';
 import { Readable } from 'stream';
 import { FileInterceptor } from '@nestjs/platform-express';
@@ -46,7 +47,7 @@ export class EmployeeDetailsController {
   logger = new Logger('EmployeeDetails');
   constructor(
     private readonly employeeDetailsService: EmployeeDetailsService,
-  ) {}
+  ) { }
 
   @Get('departments')
   @ApiOperation({ summary: 'Get all departments from enum' })
@@ -86,7 +87,7 @@ export class EmployeeDetailsController {
   }
 
   @Post('bulk-upload')
-  @ApiOperation({ 
+  @ApiOperation({
     summary: 'Bulk upload employees from Excel file',
     description: 'Upload an Excel file (.xlsx or .xls) with employee data. Required columns: fullName, employeeId, department, designation, email. Optional: password'
   })
@@ -103,7 +104,7 @@ export class EmployeeDetailsController {
       }
     }
   })
-  @ApiOkResponse({ 
+  @ApiOkResponse({
     type: BulkUploadResultDto,
     description: 'Returns upload results with success/failure counts and details'
   })
@@ -160,9 +161,9 @@ export class EmployeeDetailsController {
 
     // Filter for Managers (consistent with getAllEmployees)
     const roleUpper = (user?.role || '').toUpperCase();
-    if (user && (user.userType === 'MANAGER' || roleUpper.includes('MNG') || roleUpper.includes('MANAGER'))) {
-        managerName = user.aliasLoginName;
-        managerId = user.loginId;
+    if (user && (user.userType === UserType.MANAGER || roleUpper.includes('MNG') || roleUpper.includes(UserType.MANAGER))) {
+      managerName = user.aliasLoginName;
+      managerId = user.loginId;
     }
 
     return this.employeeDetailsService.getTimesheetList(
@@ -223,18 +224,18 @@ export class EmployeeDetailsController {
   ) {
     const user = req.user;
     this.logger.log(`User in getAllEmployees: ${JSON.stringify(user)}`);
-    
+
     let managerName: string | undefined;
     let managerId: string | undefined;
 
     // Filter for Managers (check both userType and role for robustness)
     const roleUpper = (user?.role || '').toUpperCase();
-    if (user && (user.userType === 'MANAGER' || roleUpper.includes('MNG') || roleUpper.includes('MANAGER'))) {
-        managerName = user.aliasLoginName;
-        managerId = user.loginId; // Fallback or alternative match
-        this.logger.log(`Manager filter applied: Name=${managerName}, ID=${managerId}`);
+    if (user && (user.userType === UserType.MANAGER || roleUpper.includes('MNG') || roleUpper.includes(UserType.MANAGER))) {
+      managerName = user.aliasLoginName;
+      managerId = user.loginId; // Fallback or alternative match
+      this.logger.log(`Manager filter applied: Name=${managerName}, ID=${managerId}`);
     } else {
-        this.logger.log('Manager filter NOT applied');
+      this.logger.log('Manager filter NOT applied');
     }
 
     return this.employeeDetailsService.getAllEmployees(
@@ -305,10 +306,10 @@ export class EmployeeDetailsController {
     @Param('employeeId') employeeId: string,
     @Body('status') status: string,
   ) {
-      if (!status) {
-          throw new Error('Status is required');
-      }
-      return this.employeeDetailsService.updateStatus(employeeId, status);
+    if (!status) {
+      throw new Error('Status is required');
+    }
+    return this.employeeDetailsService.updateStatus(employeeId, status);
   }
 
   @Post('reset-password')
@@ -325,7 +326,7 @@ export class EmployeeDetailsController {
   @UseInterceptors(FileInterceptor('file'))
   async uploadProfileImage(
     @Param('employeeId') employeeId: string,
-    @UploadedFile() file: any, 
+    @UploadedFile() file: any,
   ) {
     const employee = await this.employeeDetailsService.findByEmployeeId(employeeId);
     return this.employeeDetailsService.uploadProfileImage(file, employee.id);
@@ -336,35 +337,35 @@ export class EmployeeDetailsController {
   async viewProfileImage(@Param('employeeId') employeeIdStr: string, @Res() res: Response) {
     let employee;
     try {
-        try {
-            employee = await this.employeeDetailsService.findByEmployeeId(employeeIdStr);
-        } catch (e) {
-            // If not found by string ID, try finding by numeric ID if it's a number
-            if (!isNaN(Number(employeeIdStr))) {
-                employee = await this.employeeDetailsService.getEmployeeById(Number(employeeIdStr));
-            } else {
-                throw e;
-            }
-        }
-        const { stream, meta } = await this.employeeDetailsService.getProfileImageStream(employee.id);
-        
-        res.set({
-          'Content-Type': meta.mimetype || 'image/jpeg',
-          'Content-Disposition': `inline; filename="${meta.filename || 'profile.jpg'}"`,
-        });
-
-        if (stream.Body instanceof Readable) {
-          stream.Body.pipe(res);
-        } else if (stream.Body) {
-          const buffer = await stream.Body.transformToByteArray();
-          res.send(Buffer.from(buffer));
+      try {
+        employee = await this.employeeDetailsService.findByEmployeeId(employeeIdStr);
+      } catch (e) {
+        // If not found by string ID, try finding by numeric ID if it's a number
+        if (!isNaN(Number(employeeIdStr))) {
+          employee = await this.employeeDetailsService.getEmployeeById(Number(employeeIdStr));
         } else {
-            throw new Error('Image stream not found');
+          throw e;
         }
+      }
+      const { stream, meta } = await this.employeeDetailsService.getProfileImageStream(employee.id);
+
+      res.set({
+        'Content-Type': meta.mimetype || 'image/jpeg',
+        'Content-Disposition': `inline; filename="${meta.filename || 'profile.jpg'}"`,
+      });
+
+      if (stream.Body instanceof Readable) {
+        stream.Body.pipe(res);
+      } else if (stream.Body) {
+        const buffer = await stream.Body.transformToByteArray();
+        res.send(Buffer.from(buffer));
+      } else {
+        throw new Error('Image stream not found');
+      }
     } catch (error) {
-        // Return 204 No Content so frontend doesn't show 404 error
-        // This is expected for users without a profile picture
-        return res.sendStatus(204);
+      // Return 204 No Content so frontend doesn't show 404 error
+      // This is expected for users without a profile picture
+      return res.sendStatus(204);
     }
   }
 }

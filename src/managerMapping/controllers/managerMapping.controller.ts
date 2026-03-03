@@ -47,7 +47,7 @@ import { JwtAuthGuard } from 'src/auth/guards/jwt-auth.guard';
 export class ManagerMappingController {
   private readonly logger = new Logger(ManagerMappingController.name);
 
-  constructor(private readonly managerMappingService: ManagerMappingService) {}
+  constructor(private readonly managerMappingService: ManagerMappingService) { }
 
   @Get('/all')
   @HttpCode(200)
@@ -103,7 +103,7 @@ export class ManagerMappingController {
       let statusEnum: ManagerMappingStatus | undefined = undefined;
       if (status && status.trim()) {
         const normalized = status.trim().toUpperCase();
-        if (normalized === 'ACTIVE' || normalized === 'INACTIVE') {
+        if (normalized === ManagerMappingStatus.ACTIVE || normalized === ManagerMappingStatus.INACTIVE) {
           statusEnum = ManagerMappingStatus[normalized as keyof typeof ManagerMappingStatus];
         } else {
           throw new HttpException('Invalid status value. Allowed: ACTIVE, INACTIVE', HttpStatus.BAD_REQUEST);
@@ -134,7 +134,7 @@ export class ManagerMappingController {
   ): Promise<any> {
     const pageNumber = page ? parseInt(page, 10) : 1;
     const limitNumber = limit ? parseInt(limit, 10) : 10;
-    
+
     return await this.managerMappingService.getMappingHistory(
       pageNumber,
       limitNumber,

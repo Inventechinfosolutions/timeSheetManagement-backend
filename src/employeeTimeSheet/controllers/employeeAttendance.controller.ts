@@ -36,7 +36,7 @@ export class EmployeeAttendanceController {
 
   constructor(
     private readonly employeeAttendanceService: EmployeeAttendanceService,
-  ) {}
+  ) { }
 
   @UseGuards(JwtAuthGuard)
   @Get('download-report')
@@ -53,9 +53,9 @@ export class EmployeeAttendanceController {
     let managerId: string | undefined;
 
     const roleUpper = (user?.role || '').toUpperCase();
-    if (user && user.userType !== UserType.ADMIN && (user.userType === 'MANAGER' || roleUpper.includes('MNG') || roleUpper.includes('MANAGER'))) {
-        managerName = user.aliasLoginName;
-        managerId = user.loginId;
+    if (user && user.userType !== UserType.ADMIN && (user.userType === UserType.MANAGER || roleUpper.includes('MNG') || roleUpper.includes(UserType.MANAGER))) {
+      managerName = user.aliasLoginName;
+      managerId = user.loginId;
     }
 
     const buffer = await this.employeeAttendanceService.generateMonthlyReport(
@@ -64,13 +64,13 @@ export class EmployeeAttendanceController {
       managerName,
       managerId
     );
-    
+
     res.set({
       'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       'Content-Disposition': `attachment; filename=Attendance_${query.month}_${query.year}.xlsx`,
       'Content-Length': buffer.length,
     });
-    
+
     res.send(buffer);
   }
 
@@ -86,14 +86,14 @@ export class EmployeeAttendanceController {
     @Res() res: Response,
   ) {
     const user = req.user;
-    
+
     // Determine which employee's report to download
     // If employeeId is provided in query, use it (typically for Admin/Manager viewing someone else)
     // Otherwise, use the current user's employeeId
     const targetEmployeeId = query.employeeId || user.loginId || user.employeeId;
 
     if (!targetEmployeeId) {
-        throw new BadRequestException('Employee ID is required for PDF report');
+      throw new BadRequestException('Employee ID is required for PDF report');
     }
 
     const startDate = query.startDate ? new Date(query.startDate) : new Date(query.year, query.month - 1, 1);
@@ -104,13 +104,13 @@ export class EmployeeAttendanceController {
       startDate,
       endDate
     );
-    
+
     res.set({
       'Content-Type': 'application/pdf',
       'Content-Disposition': `attachment; filename=Attendance_${targetEmployeeId}_${query.month}_${query.year}.pdf`,
       'Content-Length': buffer.length,
     });
-    
+
     res.send(buffer);
   }
 
@@ -129,11 +129,11 @@ export class EmployeeAttendanceController {
   async create(@Body() createEmployeeAttendanceDto: EmployeeAttendanceDto, @Req() req: any) {
     const user = req.user;
     const roleUpper = (user?.role || '').toUpperCase();
-    const isPrivileged = user && (user.userType === 'ADMIN' || user.userType === 'MANAGER' || roleUpper.includes('MNG') || roleUpper.includes('MANAGER'));
+    const isPrivileged = user && (user.userType === UserType.ADMIN || user.userType === UserType.MANAGER || roleUpper.includes('MNG') || roleUpper.includes(UserType.MANAGER));
     return await this.employeeAttendanceService.create(createEmployeeAttendanceDto, isPrivileged);
   }
 
- 
+
   @Get('/all')
   @ApiOperation({ summary: 'Get all employee attendance records' })
   @ApiResponse({
@@ -160,9 +160,9 @@ export class EmployeeAttendanceController {
 
     // Filter for Managers (consistent with other dashboard endpoints)
     const roleUpper = (user?.role || '').toUpperCase();
-    if (user && (user.userType === 'MANAGER' || roleUpper.includes('MNG') || roleUpper.includes('MANAGER'))) {
-        managerName = user.aliasLoginName;
-        managerId = user.loginId;
+    if (user && (user.userType === UserType.MANAGER || roleUpper.includes('MNG') || roleUpper.includes(UserType.MANAGER))) {
+      managerName = user.aliasLoginName;
+      managerId = user.loginId;
     }
 
     return this.employeeAttendanceService.getAllDashboardStats(month, year, managerName, managerId);
@@ -211,11 +211,11 @@ export class EmployeeAttendanceController {
 
     // Support custom format ?From<Start>To<End>
     if (!endDate) {
-        const rangeKey = Object.keys(query).find(k => k.startsWith('From') && k.includes('To'));
-        if (rangeKey) {
-            startDate = rangeKey.substring(4, rangeKey.indexOf('To'));
-            endDate = rangeKey.substring(rangeKey.indexOf('To') + 2);
-        }
+      const rangeKey = Object.keys(query).find(k => k.startsWith('From') && k.includes('To'));
+      if (rangeKey) {
+        startDate = rangeKey.substring(4, rangeKey.indexOf('To'));
+        endDate = rangeKey.substring(rangeKey.indexOf('To') + 2);
+      }
     }
 
     return this.employeeAttendanceService.getTrends(employeeId, endDate, startDate);
@@ -234,11 +234,11 @@ export class EmployeeAttendanceController {
 
     // Support custom format ?From<Start>To<End>
     if (!endDate) {
-        const rangeKey = Object.keys(query).find(k => k.startsWith('From') && k.includes('To'));
-        if (rangeKey) {
-            startDate = rangeKey.substring(4, rangeKey.indexOf('To'));
-            endDate = rangeKey.substring(rangeKey.indexOf('To') + 2);
-        }
+      const rangeKey = Object.keys(query).find(k => k.startsWith('From') && k.includes('To'));
+      if (rangeKey) {
+        startDate = rangeKey.substring(4, rangeKey.indexOf('To'));
+        endDate = rangeKey.substring(rangeKey.indexOf('To') + 2);
+      }
     }
 
     return this.employeeAttendanceService.getTrendsDetailed(employeeId, endDate, startDate);
@@ -332,7 +332,7 @@ export class EmployeeAttendanceController {
   ) {
     const user = req.user;
     const roleUpper = (user?.role || '').toUpperCase();
-    const isPrivileged = user && (user.userType === 'ADMIN' || user.userType === 'MANAGER' || roleUpper.includes('MNG') || roleUpper.includes('MANAGER'));
+    const isPrivileged = user && (user.userType === UserType.ADMIN || user.userType === UserType.MANAGER || roleUpper.includes('MNG') || roleUpper.includes(UserType.MANAGER));
     return await this.employeeAttendanceService.update(
       id,
       updateEmployeeAttendanceDto,
@@ -348,7 +348,7 @@ export class EmployeeAttendanceController {
   }
 
 
-  
+
   @UseGuards(JwtAuthGuard)
   @Post('attendance-data/:employeeId')
   @ApiOperation({ summary: 'Bulk create/update attendance records' })
@@ -356,7 +356,7 @@ export class EmployeeAttendanceController {
   async createBulk(@Body() createDtos: EmployeeAttendanceDto[], @Req() req: any) {
     const user = req.user;
     const roleUpper = (user?.role || '').toUpperCase();
-    const isPrivileged = user && (user.userType === 'ADMIN' || user.userType === 'MANAGER' || roleUpper.includes('MNG') || roleUpper.includes('MANAGER'));
+    const isPrivileged = user && (user.userType === UserType.ADMIN || user.userType === UserType.MANAGER || roleUpper.includes('MNG') || roleUpper.includes(UserType.MANAGER));
     return await this.employeeAttendanceService.createBulk(createDtos, isPrivileged);
   }
 
@@ -386,9 +386,9 @@ export class EmployeeAttendanceController {
     let managerId: string | undefined;
 
     const roleUpper = (user?.role || '').toUpperCase();
-    if (user && (user.userType === 'MANAGER' || roleUpper.includes('MNG') || roleUpper.includes('MANAGER'))) {
-        managerName = user.aliasLoginName;
-        managerId = user.loginId;
+    if (user && (user.userType === UserType.MANAGER || roleUpper.includes('MNG') || roleUpper.includes(UserType.MANAGER))) {
+      managerName = user.aliasLoginName;
+      managerId = user.loginId;
     }
 
     this.logger.log(`Fetching all employees attendance - Month: ${month}, Year: ${year}, Manager: ${managerName || 'None'}`);

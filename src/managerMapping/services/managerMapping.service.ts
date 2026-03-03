@@ -9,6 +9,7 @@ import { ManagerMapping, ManagerMappingStatus } from '../entities/managerMapping
 import { User } from '../../users/entities/user.entity';
 import { EmployeeDetails } from '../../employeeTimeSheet/entities/employeeDetails.entity';
 import { ManagerMappingMapper } from '../mappers/managerMapping.mapper';
+import { UserStatus } from '../../users/enums/user-status.enum';
 
 @Injectable()
 export class ManagerMappingService {
@@ -19,7 +20,7 @@ export class ManagerMappingService {
     public readonly managerMappingRepository: Repository<ManagerMapping>,
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
-  ) {}
+  ) { }
 
   async findAll(
     options: IPaginationOptions,
@@ -55,7 +56,7 @@ export class ManagerMappingService {
             '(managerMapping.managerName = :managerName OR user.loginId = :managerName OR manager.employee_id = :managerName)',
             { managerName },
           )
-          .andWhere('user.status = :activeStatus', { activeStatus: 'ACTIVE' });
+          .andWhere('user.status = :activeStatus', { activeStatus: UserStatus.ACTIVE });
       }
 
       // Add search functionality if searchTerm is provided
@@ -183,25 +184,25 @@ export class ManagerMappingService {
       if (mappingExists) {
         // Check if the MANAGER of this mapping is active
         const managerDetails = await this.managerMappingRepository.manager.connection
-             .createQueryBuilder()
-             .select('user.status', 'status')
-             .from('employee_details', 'ed')
-             .innerJoin('users', 'user', 'ed.employee_id = user.loginId')
-             .where('ed.full_name = :managerName', { managerName: mappingExists.managerName })
-             .getRawOne();
-             
+          .createQueryBuilder()
+          .select('user.status', 'status')
+          .from('employee_details', 'ed')
+          .innerJoin('users', 'user', 'ed.employee_id = user.loginId')
+          .where('ed.full_name = :managerName', { managerName: mappingExists.managerName })
+          .getRawOne();
+
         // If manager is ACTIVE, then block
-        if (managerDetails && managerDetails.status === 'ACTIVE') {
-           throw new HttpException(
-             `Employee ${dto.employeeId} is already mapped to ${mappingExists.managerName}`,
-             HttpStatus.BAD_REQUEST,
-           );
+        if (managerDetails && managerDetails.status === ManagerMappingStatus.ACTIVE) {
+          throw new HttpException(
+            `Employee ${dto.employeeId} is already mapped to ${mappingExists.managerName}`,
+            HttpStatus.BAD_REQUEST,
+          );
         } else {
-           // Manager is INACTIVE or not found, so we should deactivate the old mapping and allow new one
-           this.logger.log(`Deactivating old mapping for ${dto.employeeId} because manager ${mappingExists.managerName} is inactive/missing`);
-           mappingExists.status = ManagerMappingStatus.INACTIVE;
-           await this.managerMappingRepository.save(mappingExists);
-           // Proceed to create new mapping...
+          // Manager is INACTIVE or not found, so we should deactivate the old mapping and allow new one
+          this.logger.log(`Deactivating old mapping for ${dto.employeeId} because manager ${mappingExists.managerName} is inactive/missing`);
+          mappingExists.status = ManagerMappingStatus.INACTIVE;
+          await this.managerMappingRepository.save(mappingExists);
+          // Proceed to create new mapping...
         }
       }
 
@@ -257,27 +258,32 @@ export class ManagerMappingService {
 
   async partialUpdate(id: string, updateData: Partial<ManagerMappingDTO>, loginId: string): Promise<ManagerMappingDTO> {
     this.logger.log(`User ${loginId} attempting partial update for ManagerMapping id: ${id}`);
+    try {
+      const entity = await this.managerMappingRepository.findOne({ where: { id: +id } });
+      if (!entity) {
+        this.logger.warn(`ManagerMapping with id ${id} not found`);
+        throw new NotFoundException(`ManagerMapping with id ${id} not found`);
+      }
 
-    const entity = await this.managerMappingRepository.findOne({ where: { id: +id } });
-    if (!entity) {
-      this.logger.warn(`ManagerMapping with id ${id} not found`);
-      throw new HttpException(`ManagerMapping with id ${id} not found`, HttpStatus.NOT_FOUND);
+      Object.assign(entity, updateData);
+
+      // Track who updated
+      (entity as any).updatedBy = loginId;
+      (entity as any).updatedAt = new Date();
+
+      const result = await this.managerMappingRepository.save(entity);
+
+      this.logger.log(`ManagerMapping with id ${id} partially updated successfully`);
+      const updatedDTO = ManagerMappingMapper.fromEntityToDTO(result);
+      if (!updatedDTO) {
+        throw new HttpException('Failed to map partially updated entity to DTO', HttpStatus.INTERNAL_SERVER_ERROR);
+      }
+      return updatedDTO;
+    } catch (error) {
+      this.logger.error(`Error partially updating ManagerMapping id: ${id}`, error.stack);
+      if (error instanceof NotFoundException) throw error;
+      throw new HttpException(error.message, HttpStatus.BAD_REQUEST);
     }
-
-    Object.assign(entity, updateData);
-
-    // Track who updated
-    (entity as any).updatedBy = loginId;
-    (entity as any).updatedAt = new Date();
-
-    const result = await this.managerMappingRepository.save(entity);
-
-    this.logger.log(`ManagerMapping with id ${id} partially updated successfully`);
-    const updatedDTO = ManagerMappingMapper.fromEntityToDTO(result);
-    if (!updatedDTO) {
-      throw new HttpException('Failed to map partially updated entity to DTO', HttpStatus.INTERNAL_SERVER_ERROR);
-    }
-    return updatedDTO;
   }
 
   async delete(id: number): Promise<void> {
@@ -315,7 +321,7 @@ export class ManagerMappingService {
     this.logger.log(`Fetching grouped Manager Mapping history with pagination. Search: ${search || 'None'}, Status: ${status || 'All'}, Page: ${page}`);
     try {
       const queryBuilder = this.managerMappingRepository.createQueryBuilder('managerMapping');
-      
+
       queryBuilder
         .leftJoin(EmployeeDetails, 'manager', 'managerMapping.managerName = manager.fullName')
         .leftJoin(User, 'user', 'manager.employeeId = user.loginId')
@@ -323,7 +329,7 @@ export class ManagerMappingService {
         .select('managerMapping.managerName', 'managerName')
         .addSelect('managerMapping.department', 'department')
         .addSelect('MAX(user.status)', 'managerStatus')
-        .addSelect("COUNT(CASE WHEN managerMapping.status = 'ACTIVE' AND e_user.status = 'ACTIVE' AND user.status = 'ACTIVE' THEN 1 END)", 'employeeCount')
+        .addSelect(`COUNT(CASE WHEN managerMapping.status = '${ManagerMappingStatus.ACTIVE}' AND e_user.status = '${UserStatus.ACTIVE}' AND user.status = '${UserStatus.ACTIVE}' THEN 1 END)`, 'employeeCount')
         .addSelect('MAX(manager.employeeId)', 'managerEmployeeId')
         .addSelect('MAX(user.loginId)', 'loginId')
         .addSelect('MAX(managerMapping.createdAt)', 'createdAt')
@@ -345,7 +351,7 @@ export class ManagerMappingService {
         );
       }
 
-      if (status && (status === 'ACTIVE' || status === 'INACTIVE')) {
+      if (status && (status === ManagerMappingStatus.ACTIVE || status === ManagerMappingStatus.INACTIVE)) {
         queryBuilder.having('MAX(user.status) = :status', { status });
       }
 
@@ -370,7 +376,7 @@ export class ManagerMappingService {
         );
       }
 
-      if (status && (status === 'ACTIVE' || status === 'INACTIVE')) {
+      if (status && (status === ManagerMappingStatus.ACTIVE || status === ManagerMappingStatus.INACTIVE)) {
         countQuery
           .leftJoin(User, 'user', 'manager.employeeId = user.loginId')
           .having('MAX(user.status) = :status', { status });
@@ -409,7 +415,7 @@ export class ManagerMappingService {
         managerName: r.managerName,
         managerId: r.loginId || r.managerEmployeeId || r.managerName,
         department: r.department,
-        status: r.managerStatus || 'ACTIVE',
+        status: r.managerStatus || ManagerMappingStatus.ACTIVE,
         employeeCount: parseInt(r.employeeCount, 10)
       }));
 
@@ -433,15 +439,15 @@ export class ManagerMappingService {
     this.logger.log('Fetching all active mapped employee IDs (checking manager status)');
     try {
       const queryBuilder = this.managerMappingRepository.createQueryBuilder('managerMapping');
-      
+
       const mappings = await queryBuilder
         .select('managerMapping.employeeId')
         .leftJoin(EmployeeDetails, 'manager', 'managerMapping.managerName = manager.fullName') // Join to get manager details
         .leftJoin(User, 'user', 'manager.employeeId = user.loginId') // Join to get manager user status
         .leftJoin(User, 'e_user', 'managerMapping.employeeId = e_user.loginId') // Join to get employee status
         .where('managerMapping.status = :mappingStatus', { mappingStatus: ManagerMappingStatus.ACTIVE })
-        .andWhere('user.status = :managerUserStatus', { managerUserStatus: 'ACTIVE' }) // Only consider mapping active if manager is active
-        .andWhere('e_user.status = :employeeUserStatus', { employeeUserStatus: 'ACTIVE' }) // Only consider mapping active if employee is active
+        .andWhere('user.status = :managerUserStatus', { managerUserStatus: UserStatus.ACTIVE }) // Only consider mapping active if manager is active
+        .andWhere('e_user.status = :employeeUserStatus', { employeeUserStatus: UserStatus.ACTIVE }) // Only consider mapping active if employee is active
         .getMany();
 
       return mappings.map((m) => m.employeeId);

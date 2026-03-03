@@ -7,6 +7,7 @@ import { DocumentUploaderService } from '../../common/document-uploader/services
 import { FileService } from '../../common/core/utils/fileType.utils';
 import { EntityType, ReferenceType } from '../../common/document-uploader/models/documentmetainfo.model';
 import { Readable } from 'stream';
+import { UserType } from 'src/users/enums/user-type.enum';
 
 @Controller('leave-requests')
 export class LeaveRequestsController {
@@ -14,7 +15,7 @@ export class LeaveRequestsController {
     private readonly leaveRequestsService: LeaveRequestsService,
     private readonly documentUploaderService: DocumentUploaderService,
     private readonly fileService: FileService,
-  ) {}
+  ) { }
 
   @Get('duration-types')
   getLeaveDurationTypes() {
@@ -50,9 +51,9 @@ export class LeaveRequestsController {
     let managerId: string | undefined;
 
     const roleUpper = (user?.role || '').toUpperCase();
-    if (user && (user.userType === 'MANAGER' || roleUpper.includes('MNG') || roleUpper.includes('MANAGER'))) {
-        managerName = user.aliasLoginName;
-        managerId = user.loginId;
+    if (user && (user.userType === UserType.MANAGER || roleUpper.includes('MNG') || roleUpper.includes(UserType.MANAGER))) {
+      managerName = user.aliasLoginName;
+      managerId = user.loginId;
     }
 
     return this.leaveRequestsService.findUnifiedRequests({
@@ -103,19 +104,19 @@ export class LeaveRequestsController {
     let managerId: string | undefined;
 
     const roleUpper = (user?.role || '').toUpperCase();
-    if (user && (user.userType === 'MANAGER' || roleUpper.includes('MNG') || roleUpper.includes('MANAGER'))) {
-        managerName = user.aliasLoginName;
-        managerId = user.loginId;
+    if (user && (user.userType === UserType.MANAGER || roleUpper.includes(UserType.MANAGER))) {
+      managerName = user.aliasLoginName;
+      managerId = user.loginId;
     }
 
-    return this.leaveRequestsService.findUnifiedRequests({ 
-      month, 
-      year, 
-      status, 
-      page, 
-      limit, 
-      managerName, 
-      managerId 
+    return this.leaveRequestsService.findUnifiedRequests({
+      month,
+      year,
+      status,
+      page,
+      limit,
+      managerName,
+      managerId
     });
   }
 
@@ -135,7 +136,7 @@ export class LeaveRequestsController {
   @UseGuards(JwtAuthGuard)
   findUnread(@Req() req: any) {
     const user = req.user;
-    const isManager = user?.userType === 'MANAGER';
+    const isManager = user?.userType === UserType.MANAGER;
     return this.leaveRequestsService.findUnread(isManager ? user.aliasLoginName : undefined);
   }
 
@@ -158,7 +159,7 @@ export class LeaveRequestsController {
   @UseGuards(JwtAuthGuard)
   markAllAsRead(@Req() req: any) {
     const user = req.user;
-    const isManager = user?.userType === 'MANAGER';
+    const isManager = user?.userType === UserType.MANAGER;
     return this.leaveRequestsService.markAllAsRead(isManager ? user.aliasLoginName : undefined);
   }
 
@@ -176,13 +177,13 @@ export class LeaveRequestsController {
   @UseGuards(JwtAuthGuard)
   updateStatus(
     @Param('id') id: string,
-    @Body('status') status: 'Approved' | 'Rejected' | 'Cancelled' | 'Cancellation Approved',
+    @Body('status') status: string,
     @Req() req: any
   ) {
     const user = req.user;
     const reviewerName = user?.aliasLoginName || user?.fullName || 'Admin';
     const reviewerEmail = user?.loginId || user?.email;
-    return this.leaveRequestsService.updateStatus(+id, status, undefined, reviewerName, reviewerEmail);
+    return this.leaveRequestsService.updateStatus(+id, status as any, undefined, reviewerName, reviewerEmail);
   }
 
   @Patch(':id/:employeeId/clear-attendance')
@@ -218,12 +219,12 @@ export class LeaveRequestsController {
   @Patch(':id/reject-cancellation')
   @UseGuards(JwtAuthGuard)
   async rejectCancellation(
-    @Param('id') id: string, 
+    @Param('id') id: string,
     @Body('employeeId') employeeId: string,
     @Req() req: any
   ) {
     const user = req.user;
-    const reviewerName = user?.aliasLoginName || user?.fullName || 'Admin';
+    const reviewerName = user?.aliasLoginName || user?.fullName || UserType.ADMIN;
     const reviewerEmail = user?.loginId || user?.email;
     return this.leaveRequestsService.rejectCancellation(+id, employeeId, reviewerName, reviewerEmail);
   }
@@ -236,7 +237,7 @@ export class LeaveRequestsController {
   @Get(':id/cancellable-dates')
   @UseGuards(JwtAuthGuard)
   async getCancellableDates(
-    @Param('id') id: string, 
+    @Param('id') id: string,
     @Query('employeeId') employeeId: string,
     @Req() req: any
   ) {
@@ -246,8 +247,8 @@ export class LeaveRequestsController {
   @Patch(':id/cancel-dates')
   @UseGuards(JwtAuthGuard)
   async cancelApprovedDates(
-    @Param('id') id: string, 
-    @Body('employeeId') employeeId: string, 
+    @Param('id') id: string,
+    @Body('employeeId') employeeId: string,
     @Body('dates') dates: string[],
     @Req() req: any
   ) {
@@ -303,9 +304,9 @@ export class LeaveRequestsController {
 
   @Patch('parent-update')
   async updateParentRequest(
-    @Body('parentId', ParseIntPipe) parentId: number, 
-    @Body('duration', ParseIntPipe) duration: number, 
-    @Body('fromDate') fromDate: string, 
+    @Body('parentId', ParseIntPipe) parentId: number,
+    @Body('duration', ParseIntPipe) duration: number,
+    @Body('fromDate') fromDate: string,
     @Body('toDate') toDate: string
   ) {
     return this.leaveRequestsService.updateParentRequest(parentId, duration, fromDate, toDate);
