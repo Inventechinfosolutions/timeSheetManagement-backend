@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
-import { fromBuffer } from 'file-type';
+import { fileTypeFromBuffer } from 'file-type';
 
 @Injectable()
 export class FileService {
@@ -8,7 +8,7 @@ export class FileService {
       throw new BadRequestException('Invalid file');
     }
 
-    const detectedFileType = await fromBuffer(file.buffer);
+    const detectedFileType = await fileTypeFromBuffer(file.buffer);
 
     // List of allowed MIME types
     const allowedMimeTypes = [
