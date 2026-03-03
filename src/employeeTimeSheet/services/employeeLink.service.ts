@@ -15,7 +15,7 @@ import * as crypto from 'crypto';
 import { EmployeeDetails } from '../entities/employeeDetails.entity';
 import { User } from '../../users/entities/user.entity';
 import { UserStatus } from '../../users/enums/user-status.enum';
-import { JwtService } from '@nestjs/jwt'; 
+import { JwtService } from '@nestjs/jwt';
 import { ResetPasswordDto } from '../dto/resetPassword.dto';
 import { AuthService } from '../../auth/auth.service';
 import { EmailService } from '../../email/email.service';
@@ -33,7 +33,7 @@ export class EmployeeLinkService {
     @Inject(forwardRef(() => AuthService))
     private readonly authService: AuthService,
     private readonly emailService: EmailService,
-  ) {}
+  ) { }
 
   async resetPasswordWithToken(resetPasswordDto: ResetPasswordDto): Promise<{ message: string; employeeId: string }> {
     this.logger.log(`Attempting password reset with context: ${JSON.stringify({ loginId: resetPasswordDto.loginId, hasToken: !!resetPasswordDto.token })}`);
@@ -45,16 +45,16 @@ export class EmployeeLinkService {
           const payload = this.jwtService.verify(resetPasswordDto.token, {
             secret: process.env.JWT_SECRET || 'your-secret-key',
           });
-          
+
           if (payload.type !== 'activation') {
-             throw new BadRequestException('Invalid token type');
+            throw new BadRequestException('Invalid token type');
           }
-          
+
           employeeId = payload.sub;
           this.logger.log(`Token verified for employee: ${employeeId}`);
         } catch (error) {
-           this.logger.error(`Token verification failed: ${error.message}`);
-           throw new HttpException('Invalid or expired activation link', HttpStatus.UNAUTHORIZED);
+          this.logger.error(`Token verification failed: ${error.message}`);
+          throw new HttpException('Invalid or expired activation link', HttpStatus.UNAUTHORIZED);
         }
       }
 
@@ -62,8 +62,8 @@ export class EmployeeLinkService {
         throw new BadRequestException('Employee ID or Token is required');
       }
 
-      const employee = await this.employeeDetailsRepository.findOne({ 
-        where: [{ employeeId: ILike(employeeId) }, { id: !isNaN(Number(employeeId)) ? Number(employeeId) : -1 }] 
+      const employee = await this.employeeDetailsRepository.findOne({
+        where: [{ employeeId: ILike(employeeId) }, { id: !isNaN(Number(employeeId)) ? Number(employeeId) : -1 }]
       });
 
       if (!employee) {
@@ -79,12 +79,12 @@ export class EmployeeLinkService {
 
       const user = await this.userRepository.findOne({ where: { loginId: employee.employeeId.toLowerCase() } });
       if (user) {
-         user.password = hashedPassword;
-         user.resetRequired = false;
-         user.mobileVerification = true;
-         user.status = UserStatus.ACTIVE;
-         await this.userRepository.save(user);
-         this.logger.log(`User entity updated for: ${employee.employeeId}`);
+        user.password = hashedPassword;
+        user.resetRequired = false;
+        user.mobileVerification = true;
+        user.status = UserStatus.ACTIVE;
+        await this.userRepository.save(user);
+        this.logger.log(`User entity updated for: ${employee.employeeId}`);
       }
 
       return {
@@ -93,9 +93,9 @@ export class EmployeeLinkService {
       };
 
     } catch (error) {
-       this.logger.error(`Error in resetPasswordWithToken: ${error.message}`, error.stack);
-       if (error instanceof HttpException) throw error;
-       throw new HttpException('Failed to reset password', HttpStatus.INTERNAL_SERVER_ERROR);
+      this.logger.error(`Error in resetPasswordWithToken: ${error.message}`, error.stack);
+      if (error instanceof HttpException) throw error;
+      throw new HttpException('Failed to reset password', HttpStatus.INTERNAL_SERVER_ERROR);
     }
   }
 
@@ -113,7 +113,7 @@ export class EmployeeLinkService {
       const employeeId = payload.sub;
       this.logger.log(`Parsed employeeId from token: ${employeeId} (Type: ${typeof employeeId})`);
 
-      const employee = await this.employeeDetailsRepository.findOne({ 
+      const employee = await this.employeeDetailsRepository.findOne({
         where: [
           { employeeId: ILike(String(employeeId)) },
           { id: !isNaN(Number(employeeId)) ? Number(employeeId) : -1 }
@@ -129,14 +129,14 @@ export class EmployeeLinkService {
       if (!user) {
         user = await this.userRepository.findOne({ where: { loginId: employee.employeeId.toLowerCase() } });
       }
-      
+
       if (user) {
         // Allow reactivation if status is DRAFT (new activation link was sent)
         // If already ACTIVE, we still allow it but log a warning (in case of resend activation link)
         if (user.status === UserStatus.ACTIVE) {
           this.logger.warn(`User ${employee.employeeId} is already ACTIVE, but allowing reactivation via new token`);
         }
-        
+
         user.status = UserStatus.ACTIVE;
         user.mobileVerification = true;
         // Keep resetRequired as true if it was set (user needs to change password)
@@ -150,7 +150,7 @@ export class EmployeeLinkService {
         // Sync with EmployeeDetails
         employee.userStatus = UserStatus.ACTIVE;
         await this.employeeDetailsRepository.save(employee);
-        
+
         this.logger.log(`User ${employee.employeeId} activated via token and employee status synced`);
       }
 
@@ -175,7 +175,7 @@ export class EmployeeLinkService {
     this.logger.log(`Generating activation link for employee identifier: ${identifier}`);
     try {
       let employee: EmployeeDetails | null = null;
-      
+
       // Support finding by numeric ID or string employeeId
       employee = await this.employeeDetailsRepository.findOne({
         where: [{ employeeId: ILike(identifier) }, { id: !isNaN(Number(identifier)) ? Number(identifier) : -1 }]
@@ -212,18 +212,18 @@ export class EmployeeLinkService {
         this.logger.log(`User password synchronized, resetRequired set to true, and status reset to DRAFT for: ${employee.employeeId}`);
       }
 
-      const payload = { 
+      const payload = {
         sub: String(employee.employeeId),
         id: employee.id,
         email: employee.email,
-        type: 'activation' 
+        type: 'activation'
       };
-      
-      const token = this.jwtService.sign(payload, { 
+
+      const token = this.jwtService.sign(payload, {
         secret: process.env.JWT_SECRET || 'your-secret-key',
-        expiresIn: '24h' 
+        expiresIn: '24h'
       });
-      
+
       const activationLink = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/timesheet/activate?token=${token}`;
       // const networkIp = '192.168.1.31';
       // const activationLink = `http://${networkIp}:5173/timesheet/activate?token=${token}`;
@@ -277,9 +277,9 @@ export class EmployeeLinkService {
       };
 
     } catch (error) {
-       this.logger.error(`Error generating activation link: ${error.message}`, error.stack);
-       if (error instanceof HttpException) throw error;
-       throw new HttpException('Failed to generate activation link', HttpStatus.INTERNAL_SERVER_ERROR);
+      this.logger.error(`Error generating activation link: ${error.message}`, error.stack);
+      if (error instanceof HttpException) throw error;
+      throw new HttpException('Failed to generate activation link', HttpStatus.INTERNAL_SERVER_ERROR);
     }
   }
 

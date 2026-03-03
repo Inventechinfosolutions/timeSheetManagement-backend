@@ -17,7 +17,7 @@ export class EmployeeAttendance {
   totalHours: number | null;
 
   @Column({ name: 'work_location', type: 'varchar', nullable: true })
-  workLocation: string | null;
+  workLocation: WorkLocation | null;
 
   @Column({
     name: 'status',
@@ -25,13 +25,13 @@ export class EmployeeAttendance {
     enum: AttendanceStatus,
     nullable: true,
   })
-  status: AttendanceStatus | string | null;
+  status: AttendanceStatus | null;
 
   @Column({ name: 'first_half', type: 'varchar', nullable: true })
-  firstHalf: string | null;
+  firstHalf: WorkLocation | AttendanceStatus | null;
 
   @Column({ name: 'second_half', type: 'varchar', nullable: true })
-  secondHalf: string | null;
+  secondHalf: WorkLocation | AttendanceStatus | null;
 
   @Column({ name: 'source_request_id', type: 'int', nullable: true })
   sourceRequestId?: number | null;

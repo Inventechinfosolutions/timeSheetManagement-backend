@@ -5,6 +5,10 @@ import {
   CreateDateColumn,
 } from 'typeorm';
 import { BaseEntity } from '../../common/core/models/base.entity';
+import { LeaveRequestStatus } from '../enums/leave-notification-status.enum';
+import { LeaveRequestType } from '../enums/leave-request-type.enum';
+import { WorkLocation } from '../enums/work-location.enum';
+import { AttendanceStatus } from '../enums/attendance-status.enum';
 
 @Entity('leave_requests')
 export class LeaveRequest extends BaseEntity {
@@ -15,7 +19,7 @@ export class LeaveRequest extends BaseEntity {
   employeeId: string;
 
   @Column({ name: 'request_type', type: 'varchar' })
-  requestType: string;
+  requestType: LeaveRequestType | string; // string fallback for combined types e.g. 'WFH + Leave'
 
   @Column({ name: 'from_date', type: 'date' })
   fromDate: string;
@@ -29,8 +33,12 @@ export class LeaveRequest extends BaseEntity {
   @Column({ type: 'text', nullable: true })
   description: string;
 
-  @Column({ type: 'varchar', default: 'Pending' })
-  status: string;
+  @Column({
+    type: 'enum',
+    enum: LeaveRequestStatus,
+    default: LeaveRequestStatus.PENDING,
+  })
+  status: LeaveRequestStatus;
 
   @Column({ name: 'submitted_date', type: 'date', nullable: true })
   submittedDate: string;
@@ -50,12 +58,11 @@ export class LeaveRequest extends BaseEntity {
   @Column({ name: 'reviewed_by', type: 'varchar', nullable: true })
   reviewedBy: string;
 
-
   @Column({ name: 'first_half', type: 'varchar', nullable: true })
-  firstHalf: string | null;
+  firstHalf: WorkLocation | AttendanceStatus | null;
 
   @Column({ name: 'second_half', type: 'varchar', nullable: true })
-  secondHalf: string | null;
+  secondHalf: WorkLocation | AttendanceStatus | null;
 
   @Column({ name: 'is_half_day', type: 'boolean', default: false })
   isHalfDay: boolean;
@@ -68,4 +75,4 @@ export class LeaveRequest extends BaseEntity {
 
   @Column({ name: 'last_modified_date', type: 'timestamp', nullable: true })
   lastModifiedDate: Date;
-	}
+}

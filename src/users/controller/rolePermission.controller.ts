@@ -81,11 +81,17 @@ export class RolePermissionController {
     type: RolePermissionDto,
   })
   async getOne(@Param('id', ParseIntPipe) id: number): Promise<RolePermissionDto> {
-    const result = await this.rolePermissionService.findById(id);
-    if (!result) {
-      throw new HttpException('Role permission not found', HttpStatus.NOT_FOUND);
+    try {
+      this.logger.log(`Fetching role permission ID: ${id}`);
+      const result = await this.rolePermissionService.findById(id);
+      if (!result) {
+        throw new HttpException('Role permission not found', HttpStatus.NOT_FOUND);
+      }
+      return result;
+    } catch (error) {
+      this.logger.error(`Error fetching role permission ${id}: ${error.message}`, error.stack);
+      throw error;
     }
-    return result;
   }
 
   @Get('/role/:roleId')
@@ -96,7 +102,13 @@ export class RolePermissionController {
     type: [RolePermissionDto],
   })
   async getByRoleId(@Param('roleId', ParseIntPipe) roleId: number): Promise<RolePermissionDto[]> {
-    return await this.rolePermissionService.findByRoleId(roleId);
+    try {
+      this.logger.log(`Fetching permissions for role ID: ${roleId}`);
+      return await this.rolePermissionService.findByRoleId(roleId);
+    } catch (error) {
+      this.logger.error(`Error fetching permissions for role ${roleId}: ${error.message}`, error.stack);
+      throw error;
+    }
   }
 
   @Post()
@@ -113,6 +125,7 @@ export class RolePermissionController {
     @Body() rolePermissionDTO: RolePermissionDto,
   ): Promise<void> {
     try {
+      this.logger.log(`Creating role permission for role: ${rolePermissionDTO.roleId}`);
       const creator = req.user?.login || 'system';
       const created = await this.rolePermissionService.save(rolePermissionDTO, creator);
 
@@ -154,6 +167,7 @@ export class RolePermissionController {
     @Body() rolePermissionDTO: RolePermissionDto,
   ): Promise<void> {
     try {
+      this.logger.log(`Updating role permission ID: ${id}`);
       const updater = req.user?.login || 'system';
       const updatePermission = await this.rolePermissionService.update(rolePermissionDTO, updater, id);
       res.status(200).json({
@@ -186,6 +200,7 @@ export class RolePermissionController {
     @Param('id', ParseIntPipe) id: number,
   ): Promise<void> {
     try {
+      this.logger.log(`Deleting role permission ID: ${id}`);
       await this.rolePermissionService.deleteById(id);
       res.status(200).json({ message: 'Role permission deleted successfully' });
     } catch (error) {

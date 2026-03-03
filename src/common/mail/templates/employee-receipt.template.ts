@@ -1,4 +1,7 @@
 import { baseLayout } from './base.layout';
+import { WorkLocation } from '../../../employeeTimeSheet/enums/work-location.enum';
+import { LeaveRequestType } from '../../../employeeTimeSheet/enums/leave-request-type.enum';
+import { AttendanceStatus } from '../../../employeeTimeSheet/enums/attendance-status.enum';
 
 export interface EmployeeReceiptData {
   employeeName: string;
@@ -20,20 +23,20 @@ export const getEmployeeReceiptTemplate = (data: EmployeeReceiptData) => {
 
   // Custom Header/Subject Logic
   let requestDisplayName = data.requestType;
-  const fHalf = data.firstHalf || 'Office';
-  const sHalf = data.secondHalf || 'Office';
+  const fHalf = data.firstHalf || WorkLocation.OFFICE;
+  const sHalf = data.secondHalf || WorkLocation.OFFICE;
 
-  if (fHalf !== 'Office' || sHalf !== 'Office') {
+  if (fHalf !== WorkLocation.OFFICE || sHalf !== WorkLocation.OFFICE) {
     if (fHalf === sHalf) {
-      requestDisplayName = fHalf === 'Apply Leave' || fHalf === 'Leave' ? 'Leave' : fHalf;
-    } else if ((fHalf === 'Leave' || fHalf === 'Apply Leave') && sHalf === 'Office') {
+      requestDisplayName = fHalf === LeaveRequestType.APPLY_LEAVE || fHalf === AttendanceStatus.LEAVE ? 'Leave' : fHalf;
+    } else if ((fHalf === AttendanceStatus.LEAVE || fHalf === LeaveRequestType.APPLY_LEAVE) && sHalf === WorkLocation.OFFICE) {
       requestDisplayName = 'Half Day Leave';
-    } else if (fHalf === 'Office' && (sHalf === 'Leave' || sHalf === 'Apply Leave')) {
+    } else if (fHalf === WorkLocation.OFFICE && (sHalf === AttendanceStatus.LEAVE || sHalf === LeaveRequestType.APPLY_LEAVE)) {
       requestDisplayName = 'Half Day Leave';
     } else {
       const parts = [fHalf, sHalf]
-        .map(h => (h === 'Apply Leave' || h === 'Leave') ? 'Leave' : h)
-        .filter(h => h && h !== 'Office');
+        .map(h => (h === LeaveRequestType.APPLY_LEAVE || h === AttendanceStatus.LEAVE) ? 'Leave' : h)
+        .filter(h => h && h !== WorkLocation.OFFICE);
       requestDisplayName = parts.join(' + ');
     }
   }
