@@ -215,7 +215,7 @@ export class EmployeeDetailsService {
 
       if (search) {
         query.andWhere(
-          '(employee.fullName LIKE :search OR employee.employeeId LIKE :search OR employee.email LIKE :search)',
+          '(employee.fullName LIKE :search OR employee.employeeId LIKE :search)',
           { search: `%${search}%` },
         );
       }
@@ -416,7 +416,7 @@ export class EmployeeDetailsService {
 
       if (search) {
         query.andWhere(
-          '(employee.fullName LIKE :search OR employee.employeeId LIKE :search OR employee.email LIKE :search)',
+          '(employee.fullName LIKE :search OR employee.employeeId LIKE :search)',
           { search: `%${search}%` },
         );
       }
