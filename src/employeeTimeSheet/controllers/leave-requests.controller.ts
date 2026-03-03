@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Query, Delete, Param, Patch, UseInterceptors, UploadedFiles, ParseIntPipe, Req, Res, HttpException, HttpStatus, HttpCode, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Body, Query, Delete, Param, Patch, UseInterceptors, UploadedFiles, ParseIntPipe, Req, Res, HttpException, HttpStatus, HttpCode, UseGuards, Logger } from '@nestjs/common';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { FileFieldsInterceptor } from '@nestjs/platform-express';
 import { LeaveRequestsService } from '../services/leave-requests.service';
@@ -11,6 +11,8 @@ import { UserType } from 'src/users/enums/user-type.enum';
 
 @Controller('leave-requests')
 export class LeaveRequestsController {
+  private readonly logger = new Logger(LeaveRequestsController.name);
+
   constructor(
     private readonly leaveRequestsService: LeaveRequestsService,
     private readonly documentUploaderService: DocumentUploaderService,
@@ -19,18 +21,36 @@ export class LeaveRequestsController {
 
   @Get('duration-types')
   getLeaveDurationTypes() {
-    return this.leaveRequestsService.getLeaveDurationTypes();
+    try {
+      this.logger.log('Fetching leave duration types');
+      return this.leaveRequestsService.getLeaveDurationTypes();
+    } catch (error) {
+      this.logger.error(`Error fetching leave duration types: ${error.message}`, error.stack);
+      throw error;
+    }
   }
 
   @Post(':employeeId/leave-requests')
   create(@Param('employeeId') employeeId: string, @Body() body: LeaveRequestDto) {
-    body.employeeId = employeeId;
-    return this.leaveRequestsService.create(body);
+    try {
+      this.logger.log(`Creating leave request for employee: ${employeeId}`);
+      body.employeeId = employeeId;
+      return this.leaveRequestsService.create(body);
+    } catch (error) {
+      this.logger.error(`Error creating leave request for ${employeeId}: ${error.message}`, error.stack);
+      throw error;
+    }
   }
 
   @Post()
   createRoot(@Body() body: LeaveRequestDto) {
-    return this.leaveRequestsService.create(body);
+    try {
+      this.logger.log('Creating leave request from root');
+      return this.leaveRequestsService.create(body);
+    } catch (error) {
+      this.logger.error(`Error creating leave request (root): ${error.message}`, error.stack);
+      throw error;
+    }
   }
 
   @Get()
@@ -46,28 +66,34 @@ export class LeaveRequestsController {
     @Query('page') page: number = 1,
     @Query('limit') limit: number = 10,
   ) {
-    const user = req.user;
-    let managerName: string | undefined;
-    let managerId: string | undefined;
+    try {
+      this.logger.log(`Fetching all leave requests - Month: ${month}, Year: ${year}`);
+      const user = req.user;
+      let managerName: string | undefined;
+      let managerId: string | undefined;
 
-    const roleUpper = (user?.role || '').toUpperCase();
-    if (user && (user.userType === UserType.MANAGER || roleUpper.includes('MNG') || roleUpper.includes(UserType.MANAGER))) {
-      managerName = user.aliasLoginName;
-      managerId = user.loginId;
+      const roleUpper = (user?.role || '').toUpperCase();
+      if (user && (user.userType === UserType.MANAGER || roleUpper.includes('MNG') || roleUpper.includes(UserType.MANAGER))) {
+        managerName = user.aliasLoginName;
+        managerId = user.loginId;
+      }
+
+      return this.leaveRequestsService.findUnifiedRequests({
+        employeeId,
+        department,
+        status,
+        search,
+        month,
+        year,
+        page,
+        limit,
+        managerName,
+        managerId
+      });
+    } catch (error) {
+      this.logger.error(`Error fetching leave requests: ${error.message}`, error.stack);
+      throw error;
     }
-
-    return this.leaveRequestsService.findUnifiedRequests({
-      employeeId,
-      department,
-      status,
-      search,
-      month,
-      year,
-      page,
-      limit,
-      managerName,
-      managerId
-    });
   }
 
   @Get('employee/:employeeId')
@@ -79,14 +105,20 @@ export class LeaveRequestsController {
     @Query('page') page: number = 1,
     @Query('limit') limit: number = 10,
   ) {
-    return this.leaveRequestsService.findUnifiedRequests({
-      employeeId,
-      status,
-      month,
-      year,
-      page,
-      limit
-    });
+    try {
+      this.logger.log(`Fetching leave requests for employee: ${employeeId}`);
+      return this.leaveRequestsService.findUnifiedRequests({
+        employeeId,
+        status,
+        month,
+        year,
+        page,
+        limit
+      });
+    } catch (error) {
+      this.logger.error(`Error fetching leave requests for ${employeeId}: ${error.message}`, error.stack);
+      throw error;
+    }
   }
 
   @Get('monthly-details/:month/:year')
@@ -99,25 +131,31 @@ export class LeaveRequestsController {
     @Query('page') page: number = 1,
     @Query('limit') limit: number = 10,
   ) {
-    const user = req.user;
-    let managerName: string | undefined;
-    let managerId: string | undefined;
+    try {
+      this.logger.log(`Fetching all monthly leave details: ${month}/${year}`);
+      const user = req.user;
+      let managerName: string | undefined;
+      let managerId: string | undefined;
 
-    const roleUpper = (user?.role || '').toUpperCase();
-    if (user && (user.userType === UserType.MANAGER || roleUpper.includes(UserType.MANAGER))) {
-      managerName = user.aliasLoginName;
-      managerId = user.loginId;
+      const roleUpper = (user?.role || '').toUpperCase();
+      if (user && (user.userType === UserType.MANAGER || roleUpper.includes(UserType.MANAGER))) {
+        managerName = user.aliasLoginName;
+        managerId = user.loginId;
+      }
+
+      return await this.leaveRequestsService.findUnifiedRequests({
+        month,
+        year,
+        status,
+        page,
+        limit,
+        managerName,
+        managerId
+      });
+    } catch (error) {
+      this.logger.error(`Error fetching all monthly leave details: ${error.message}`, error.stack);
+      throw error;
     }
-
-    return this.leaveRequestsService.findUnifiedRequests({
-      month,
-      year,
-      status,
-      page,
-      limit,
-      managerName,
-      managerId
-    });
   }
 
   @Get('monthly-details/:employeeId/:month/:year')
@@ -129,48 +167,96 @@ export class LeaveRequestsController {
     @Query('page') page: number = 1,
     @Query('limit') limit: number = 10,
   ) {
-    return this.leaveRequestsService.findUnifiedRequests({ employeeId, month, year, status, page, limit });
+    try {
+      this.logger.log(`Fetching monthly leave details for employee ${employeeId}: ${month}/${year}`);
+      return await this.leaveRequestsService.findUnifiedRequests({ employeeId, month, year, status, page, limit });
+    } catch (error) {
+      this.logger.error(`Error fetching monthly leave details: ${error.message}`, error.stack);
+      throw error;
+    }
   }
 
   @Get('notifications/unread')
   @UseGuards(JwtAuthGuard)
   findUnread(@Req() req: any) {
-    const user = req.user;
-    const isManager = user?.userType === UserType.MANAGER;
-    return this.leaveRequestsService.findUnread(isManager ? user.aliasLoginName : undefined);
+    try {
+      const user = req.user;
+      this.logger.log(`Fetching unread notifications for user type: ${user?.userType}`);
+      const isManager = user?.userType === UserType.MANAGER;
+      return this.leaveRequestsService.findUnread(isManager ? user.aliasLoginName : undefined);
+    } catch (error) {
+      this.logger.error(`Error fetching unread notifications: ${error.message}`, error.stack);
+      throw error;
+    }
   }
 
   @Get('employee/:employeeId/updates')
   findEmployeeUpdates(@Param('employeeId') employeeId: string) {
-    return this.leaveRequestsService.findEmployeeUpdates(employeeId);
+    try {
+      this.logger.log(`Fetching leave updates for employee: ${employeeId}`);
+      return this.leaveRequestsService.findEmployeeUpdates(employeeId);
+    } catch (error) {
+      this.logger.error(`Error fetching employee updates for ${employeeId}: ${error.message}`, error.stack);
+      throw error;
+    }
   }
 
   @Patch('notifications/:id/read')
   markAsRead(@Param('id') id: string) {
-    return this.leaveRequestsService.markAsRead(+id);
+    try {
+      this.logger.log(`Marking notification as read: ${id}`);
+      return this.leaveRequestsService.markAsRead(+id);
+    } catch (error) {
+      this.logger.error(`Error marking notification ${id} as read: ${error.message}`, error.stack);
+      throw error;
+    }
   }
 
   @Patch('employee/notifications/:id/read')
   markEmployeeRead(@Param('id') id: string) {
-    return this.leaveRequestsService.markEmployeeUpdateRead(+id);
+    try {
+      this.logger.log(`Marking employee notification as read: ${id}`);
+      return this.leaveRequestsService.markEmployeeUpdateRead(+id);
+    } catch (error) {
+      this.logger.error(`Error marking employee notification ${id} as read: ${error.message}`, error.stack);
+      throw error;
+    }
   }
 
   @Post('notifications/mark-all-read')
   @UseGuards(JwtAuthGuard)
   markAllAsRead(@Req() req: any) {
-    const user = req.user;
-    const isManager = user?.userType === UserType.MANAGER;
-    return this.leaveRequestsService.markAllAsRead(isManager ? user.aliasLoginName : undefined);
+    try {
+      const user = req.user;
+      this.logger.log(`Marking all notifications as read for user: ${user?.aliasLoginName || 'system'}`);
+      const isManager = user?.userType === UserType.MANAGER;
+      return this.leaveRequestsService.markAllAsRead(isManager ? user.aliasLoginName : undefined);
+    } catch (error) {
+      this.logger.error(`Error marking all notifications as read: ${error.message}`, error.stack);
+      throw error;
+    }
   }
 
   @Post('employee/:employeeId/notifications/mark-all-read')
   markAllEmployeeUpdatesRead(@Param('employeeId') employeeId: string) {
-    return this.leaveRequestsService.markAllEmployeeUpdatesRead(employeeId);
+    try {
+      this.logger.log(`Marking all updates as read for employee: ${employeeId}`);
+      return this.leaveRequestsService.markAllEmployeeUpdatesRead(employeeId);
+    } catch (error) {
+      this.logger.error(`Error marking all updates read for ${employeeId}: ${error.message}`, error.stack);
+      throw error;
+    }
   }
 
   @Delete(':id/RequestDeleted')
   remove(@Param('id') id: string) {
-    return this.leaveRequestsService.remove(+id);
+    try {
+      this.logger.log(`Deleting leave request: ${id}`);
+      return this.leaveRequestsService.remove(+id);
+    } catch (error) {
+      this.logger.error(`Error deleting leave request ${id}: ${error.message}`, error.stack);
+      throw error;
+    }
   }
 
   @Post(':id/update-status')
@@ -180,16 +266,28 @@ export class LeaveRequestsController {
     @Body('status') status: string,
     @Req() req: any
   ) {
-    const user = req.user;
-    const reviewerName = user?.aliasLoginName || user?.fullName || 'Admin';
-    const reviewerEmail = user?.loginId || user?.email;
-    return this.leaveRequestsService.updateStatus(+id, status as any, undefined, reviewerName, reviewerEmail);
+    try {
+      this.logger.log(`Updating leave request ${id} status to ${status}`);
+      const user = req.user;
+      const reviewerName = user?.aliasLoginName || user?.fullName || 'Admin';
+      const reviewerEmail = user?.loginId || user?.email;
+      return this.leaveRequestsService.updateStatus(+id, status as any, undefined, reviewerName, reviewerEmail);
+    } catch (error) {
+      this.logger.error(`Error updating status for request ${id}: ${error.message}`, error.stack);
+      throw error;
+    }
   }
 
   @Patch(':id/:employeeId/clear-attendance')
   @UseGuards(JwtAuthGuard)
   clearAttendance(@Param('id') id: string, @Param('employeeId') employeeId: string) {
-    return this.leaveRequestsService.clearAttendanceForRequest(+id);
+    try {
+      this.logger.log(`Clearing attendance for leave request: ${id}`);
+      return this.leaveRequestsService.clearAttendanceForRequest(+id);
+    } catch (error) {
+      this.logger.error(`Error clearing attendance for request ${id}: ${error.message}`, error.stack);
+      throw error;
+    }
   }
 
   @Patch(':id/modify')
@@ -199,8 +297,14 @@ export class LeaveRequestsController {
     @Body() updateData: { title?: string; description?: string; firstHalf?: string; secondHalf?: string; employeeId?: string },
     @Req() req: any,
   ) {
-    const employeeId = updateData.employeeId || req.user.id || req.user.employeeId;
-    return this.leaveRequestsService.modifyRequest(+id, employeeId, updateData);
+    try {
+      this.logger.log(`Modifying leave request ID: ${id}`);
+      const employeeId = updateData.employeeId || req.user.id || req.user.employeeId;
+      return this.leaveRequestsService.modifyRequest(+id, employeeId, updateData);
+    } catch (error) {
+      this.logger.error(`Error modifying leave request ${id}: ${error.message}`, error.stack);
+      throw error;
+    }
   }
 
   @Post(':id/request-modified')
@@ -208,12 +312,24 @@ export class LeaveRequestsController {
     @Param('id') id: string,
     @Body() data: { fromDate: string; toDate: string; sourceRequestId: number; sourceRequestType: string },
   ) {
-    return this.leaveRequestsService.createModification(+id, data);
+    try {
+      this.logger.log(`Creating modification for leave request: ${id}`);
+      return this.leaveRequestsService.createModification(+id, data);
+    } catch (error) {
+      this.logger.error(`Error creating modification for request ${id}: ${error.message}`, error.stack);
+      throw error;
+    }
   }
 
   @Patch(':id/cancel-approved')
   async cancelApproved(@Param('id') id: string, @Body('employeeId') employeeId: string) {
-    return this.leaveRequestsService.cancelApprovedRequest(+id, employeeId);
+    try {
+      this.logger.log(`Canceling approved leave request: ${id}`);
+      return await this.leaveRequestsService.cancelApprovedRequest(+id, employeeId);
+    } catch (error) {
+      this.logger.error(`Error canceling approved request ${id}: ${error.message}`, error.stack);
+      throw error;
+    }
   }
 
   @Patch(':id/reject-cancellation')
@@ -223,15 +339,27 @@ export class LeaveRequestsController {
     @Body('employeeId') employeeId: string,
     @Req() req: any
   ) {
-    const user = req.user;
-    const reviewerName = user?.aliasLoginName || user?.fullName || UserType.ADMIN;
-    const reviewerEmail = user?.loginId || user?.email;
-    return this.leaveRequestsService.rejectCancellation(+id, employeeId, reviewerName, reviewerEmail);
+    try {
+      this.logger.log(`Rejecting cancellation for request: ${id}`);
+      const user = req.user;
+      const reviewerName = user?.aliasLoginName || user?.fullName || UserType.ADMIN;
+      const reviewerEmail = user?.loginId || user?.email;
+      return await this.leaveRequestsService.rejectCancellation(+id, employeeId, reviewerName, reviewerEmail);
+    } catch (error) {
+      this.logger.error(`Error rejecting cancellation for request ${id}: ${error.message}`, error.stack);
+      throw error;
+    }
   }
 
   @Patch(':id/undo-modification')
   async undoModificationRequest(@Param('id') id: number, @Body('employeeId') employeeId: string) {
-    return this.leaveRequestsService.undoModificationRequest(id, employeeId);
+    try {
+      this.logger.log(`Undoing modification for request: ${id}`);
+      return await this.leaveRequestsService.undoModificationRequest(id, employeeId);
+    } catch (error) {
+      this.logger.error(`Error undoing modification for request ${id}: ${error.message}`, error.stack);
+      throw error;
+    }
   }
 
   @Get(':id/cancellable-dates')
@@ -241,7 +369,13 @@ export class LeaveRequestsController {
     @Query('employeeId') employeeId: string,
     @Req() req: any
   ) {
-    return this.leaveRequestsService.getCancellableDates(+id, employeeId, req.user);
+    try {
+      this.logger.log(`Fetching cancellable dates for request: ${id}`);
+      return await this.leaveRequestsService.getCancellableDates(+id, employeeId, req.user);
+    } catch (error) {
+      this.logger.error(`Error fetching cancellable dates for ${id}: ${error.message}`, error.stack);
+      throw error;
+    }
   }
 
   @Patch(':id/cancel-dates')
@@ -252,18 +386,29 @@ export class LeaveRequestsController {
     @Body('dates') dates: string[],
     @Req() req: any
   ) {
-    return this.leaveRequestsService.cancelApprovedDates(
-      +id,
-      employeeId,
-      dates,
-      req.user
-    );
+    try {
+      this.logger.log(`Canceling specific dates for approved request: ${id}`);
+      return await this.leaveRequestsService.cancelApprovedDates(
+        +id,
+        employeeId,
+        dates,
+        req.user
+      );
+    } catch (error) {
+      this.logger.error(`Error canceling dates for request ${id}: ${error.message}`, error.stack);
+      throw error;
+    }
   }
 
   @Patch(':id/undo-cancellation')
   async undoCancellation(@Param('id') id: string, @Body('employeeId') employeeId: string) {
-    // Logic handled in service
-    return this.leaveRequestsService.undoCancellationRequest(+id, employeeId);
+    try {
+      this.logger.log(`Undoing cancellation for request: ${id}`);
+      return await this.leaveRequestsService.undoCancellationRequest(+id, employeeId);
+    } catch (error) {
+      this.logger.error(`Error undoing cancellation for request ${id}: ${error.message}`, error.stack);
+      throw error;
+    }
   }
 
   @Get('balance/:employeeId')
@@ -271,8 +416,14 @@ export class LeaveRequestsController {
     @Param('employeeId') employeeId: string,
     @Query('year') year: string,
   ) {
-    const y = year || String(new Date().getFullYear());
-    return this.leaveRequestsService.getLeaveBalance(employeeId, y);
+    try {
+      const y = year || String(new Date().getFullYear());
+      this.logger.log(`Fetching leave balance for employee ${employeeId}, Year: ${y}`);
+      return this.leaveRequestsService.getLeaveBalance(employeeId, y);
+    } catch (error) {
+      this.logger.error(`Error fetching leave balance for ${employeeId}: ${error.message}`, error.stack);
+      throw error;
+    }
   }
 
   @Get('monthly-balance/:employeeId')
@@ -281,11 +432,17 @@ export class LeaveRequestsController {
     @Query('month') month: number,
     @Query('year') year: number,
   ) {
-    return this.leaveRequestsService.getMonthlyLeaveBalance(
-      employeeId,
-      Number(month),
-      Number(year),
-    );
+    try {
+      this.logger.log(`Fetching monthly leave balance for employee ${employeeId}: ${month}/${year}`);
+      return this.leaveRequestsService.getMonthlyLeaveBalance(
+        employeeId,
+        Number(month),
+        Number(year),
+      );
+    } catch (error) {
+      this.logger.error(`Error fetching monthly leave balance for ${employeeId}: ${error.message}`, error.stack);
+      throw error;
+    }
   }
 
   @Get('stats/:employeeId')
@@ -294,12 +451,24 @@ export class LeaveRequestsController {
     @Query('month') month: string = 'All',
     @Query('year') year: string = 'All',
   ) {
-    return this.leaveRequestsService.getStats(employeeId, month, year);
+    try {
+      this.logger.log(`Fetching leave stats for employee ${employeeId} - Month: ${month}, Year: ${year}`);
+      return this.leaveRequestsService.getStats(employeeId, month, year);
+    } catch (error) {
+      this.logger.error(`Error fetching leave stats for ${employeeId}: ${error.message}`, error.stack);
+      throw error;
+    }
   }
 
   @Get(':id')
   findOne(@Param('id') id: string) {
-    return this.leaveRequestsService.findOne(+id);
+    try {
+      this.logger.log(`Fetching leave request: ${id}`);
+      return this.leaveRequestsService.findOne(+id);
+    } catch (error) {
+      this.logger.error(`Error fetching leave request ${id}: ${error.message}`, error.stack);
+      throw error;
+    }
   }
 
   @Patch('parent-update')
@@ -309,7 +478,13 @@ export class LeaveRequestsController {
     @Body('fromDate') fromDate: string,
     @Body('toDate') toDate: string
   ) {
-    return this.leaveRequestsService.updateParentRequest(parentId, duration, fromDate, toDate);
+    try {
+      this.logger.log(`Updating parent request ID: ${parentId}`);
+      return await this.leaveRequestsService.updateParentRequest(parentId, duration, fromDate, toDate);
+    } catch (error) {
+      this.logger.error(`Error updating parent request ${parentId}: ${error.message}`, error.stack);
+      throw error;
+    }
   }
 
   @Post('upload-file/entityId/:entityId/refId/:refId')
@@ -323,32 +498,37 @@ export class LeaveRequestsController {
     @Query('entityType') entityType: EntityType,
     @Req() req: any,
   ) {
-    const userContext = req.user;
-    const loginId = userContext?.userId || 'system';
+    try {
+      this.logger.log(`Uploading document for entity: ${entityId}, refId: ${refId}`);
+      const userContext = req.user;
+      const loginId = userContext?.userId || 'system';
 
-    if (entityId === 'NaN' || isNaN(Number(entityId))) {
-      throw new HttpException('Invalid entityId: must be a numeric string. Received "NaN" or non-numeric value.', HttpStatus.BAD_REQUEST);
+      if (entityId === 'NaN' || isNaN(Number(entityId))) {
+        throw new HttpException('Invalid entityId: must be a numeric string. Received "NaN" or non-numeric value.', HttpStatus.BAD_REQUEST);
+      }
+      if (refId === 'NaN' || isNaN(Number(refId))) {
+        throw new HttpException('Invalid refId: must be a numeric string.', HttpStatus.BAD_REQUEST);
+      }
+
+      const documents = docs.file || [];
+
+      if (!refType) {
+        throw new HttpException('Reference type is required', HttpStatus.BAD_REQUEST);
+      }
+
+      if (documents.length === 0) {
+        throw new HttpException('No files uploaded', HttpStatus.BAD_REQUEST);
+      }
+
+      for (const file of documents) {
+        await this.fileService.validateFileType(file);
+      }
+
+      return await this.leaveRequestsService.uploadDocument(documents, refType, +refId, entityType, +entityId);
+    } catch (error) {
+      this.logger.error(`Error uploading document: ${error.message}`, error.stack);
+      throw error;
     }
-    if (refId === 'NaN' || isNaN(Number(refId))) {
-      throw new HttpException('Invalid refId: must be a numeric string.', HttpStatus.BAD_REQUEST);
-    }
-
-    const documents = docs.file || [];
-
-    if (!refType) {
-      throw new HttpException('Reference type is required', HttpStatus.BAD_REQUEST);
-    }
-
-    if (documents.length === 0) {
-      throw new HttpException('No files uploaded', HttpStatus.BAD_REQUEST);
-    }
-
-    for (const file of documents) {
-      await this.fileService.validateFileType(file);
-    }
-
-    const result = await this.leaveRequestsService.uploadDocument(documents, refType, +refId, entityType, +entityId);
-    return result;
   }
 
   @Get('entityId/:entityId/refId/:refId/get-files')
@@ -359,11 +539,16 @@ export class LeaveRequestsController {
     @Query('refType') referenceType: ReferenceType,
     @Query('entityType') entityType: EntityType,
   ) {
-    if (isNaN(Number(entityId)) || isNaN(Number(refId))) {
-      throw new HttpException('Invalid entityId or refId: must be numeric.', HttpStatus.BAD_REQUEST);
+    try {
+      this.logger.log(`Fetching files for entity: ${entityId}, refId: ${refId}`);
+      if (isNaN(Number(entityId)) || isNaN(Number(refId))) {
+        throw new HttpException('Invalid entityId or refId: must be numeric.', HttpStatus.BAD_REQUEST);
+      }
+      return await this.leaveRequestsService.getAllFiles(entityType, +entityId, +refId, referenceType);
+    } catch (error) {
+      this.logger.error(`Error fetching files: ${error.message}`, error.stack);
+      throw error;
     }
-    const files = await this.leaveRequestsService.getAllFiles(entityType, +entityId, +refId, referenceType);
-    return files;
   }
 
   @Get('entityId/:entityId/refId/:refId/download-file')
@@ -375,27 +560,33 @@ export class LeaveRequestsController {
     @Query('entityType') entityType: EntityType,
     @Res() res: any,
   ) {
-    if (isNaN(Number(entityId)) || isNaN(Number(refId))) {
-      throw new HttpException('Invalid entityId or refId: must be numeric.', HttpStatus.BAD_REQUEST);
-    }
-    await this.leaveRequestsService.validateEntity(entityType, +entityId, +refId);
+    try {
+      this.logger.log(`Downloading file with key: ${key}`);
+      if (isNaN(Number(entityId)) || isNaN(Number(refId))) {
+        throw new HttpException('Invalid entityId or refId: must be numeric.', HttpStatus.BAD_REQUEST);
+      }
+      await this.leaveRequestsService.validateEntity(entityType, +entityId, +refId);
 
-    const metaData = await this.documentUploaderService.getMetaData(key);
-    const dataStream = await this.documentUploaderService.downloadFile(key);
+      const metaData = await this.documentUploaderService.getMetaData(key);
+      const dataStream = await this.documentUploaderService.downloadFile(key);
 
-    res.set({
-      'Content-Type': metaData.mimetype,
-      'Content-Disposition': `attachment; filename="${metaData.filename}"`,
-      'Content-Length': dataStream.ContentLength || undefined,
-    });
+      res.set({
+        'Content-Type': metaData.mimetype,
+        'Content-Disposition': `attachment; filename="${metaData.filename}"`,
+        'Content-Length': dataStream.ContentLength || undefined,
+      });
 
-    if (dataStream.Body instanceof Readable) {
-      dataStream.Body.pipe(res);
-    } else if (dataStream.Body) {
-      const buffer = await dataStream.Body.transformToByteArray();
-      res.send(Buffer.from(buffer));
-    } else {
-      throw new HttpException('File content not found', HttpStatus.NOT_FOUND);
+      if (dataStream.Body instanceof Readable) {
+        dataStream.Body.pipe(res);
+      } else if (dataStream.Body) {
+        const buffer = await dataStream.Body.transformToByteArray();
+        res.send(Buffer.from(buffer));
+      } else {
+        throw new HttpException('File content not found', HttpStatus.NOT_FOUND);
+      }
+    } catch (error) {
+      this.logger.error(`Error downloading file: ${error.message}`, error.stack);
+      throw error;
     }
   }
 
@@ -408,27 +599,33 @@ export class LeaveRequestsController {
     @Query('entityType') entityType: EntityType,
     @Res() res: any,
   ) {
-    if (isNaN(Number(entityId)) || isNaN(Number(refId))) {
-      throw new HttpException('Invalid entityId or refId: must be numeric.', HttpStatus.BAD_REQUEST);
-    }
-    await this.leaveRequestsService.validateEntity(entityType, +entityId, +refId);
+    try {
+      this.logger.log(`Viewing file with key: ${key}`);
+      if (isNaN(Number(entityId)) || isNaN(Number(refId))) {
+        throw new HttpException('Invalid entityId or refId: must be numeric.', HttpStatus.BAD_REQUEST);
+      }
+      await this.leaveRequestsService.validateEntity(entityType, +entityId, +refId);
 
-    const metaData = await this.documentUploaderService.getMetaData(key);
-    const dataStream = await this.documentUploaderService.downloadFile(key);
+      const metaData = await this.documentUploaderService.getMetaData(key);
+      const dataStream = await this.documentUploaderService.downloadFile(key);
 
-    res.set({
-      'Content-Type': metaData.mimetype,
-      'Content-Disposition': `inline; filename="${metaData.filename}"`,
-      'Content-Length': dataStream.ContentLength || undefined,
-    });
+      res.set({
+        'Content-Type': metaData.mimetype,
+        'Content-Disposition': `inline; filename="${metaData.filename}"`,
+        'Content-Length': dataStream.ContentLength || undefined,
+      });
 
-    if (dataStream.Body instanceof Readable) {
-      dataStream.Body.pipe(res);
-    } else if (dataStream.Body) {
-      const buffer = await dataStream.Body.transformToByteArray();
-      res.send(Buffer.from(buffer));
-    } else {
-      throw new HttpException('File content not found', HttpStatus.NOT_FOUND);
+      if (dataStream.Body instanceof Readable) {
+        dataStream.Body.pipe(res);
+      } else if (dataStream.Body) {
+        const buffer = await dataStream.Body.transformToByteArray();
+        res.send(Buffer.from(buffer));
+      } else {
+        throw new HttpException('File content not found', HttpStatus.NOT_FOUND);
+      }
+    } catch (error) {
+      this.logger.error(`Error viewing file: ${error.message}`, error.stack);
+      throw error;
     }
   }
 
@@ -440,11 +637,16 @@ export class LeaveRequestsController {
     @Query('key') key: string,
     @Query('entityType') entityType: EntityType,
   ) {
-    if (isNaN(Number(entityId)) || isNaN(Number(refId))) {
-      throw new HttpException('Invalid entityId or refId: must be numeric.', HttpStatus.BAD_REQUEST);
+    try {
+      this.logger.log(`Deleting file with key: ${key}`);
+      if (isNaN(Number(entityId)) || isNaN(Number(refId))) {
+        throw new HttpException('Invalid entityId or refId: must be numeric.', HttpStatus.BAD_REQUEST);
+      }
+      return await this.leaveRequestsService.deleteDocument(entityType, +entityId, +refId, key);
+    } catch (error) {
+      this.logger.error(`Error deleting file: ${error.message}`, error.stack);
+      throw error;
     }
-    const result = await this.leaveRequestsService.deleteDocument(entityType, +entityId, +refId, key);
-    return result;
   }
 
 }

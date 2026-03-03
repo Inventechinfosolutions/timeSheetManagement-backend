@@ -53,14 +53,26 @@ export class EmployeeDetailsController {
   @ApiOperation({ summary: 'Get all departments from enum' })
   @ApiOkResponse({ type: [String] })
   async getDepartments() {
-    return this.employeeDetailsService.getDepartments();
+    try {
+      this.logger.log('Fetching all departments');
+      return await this.employeeDetailsService.getDepartments();
+    } catch (error) {
+      this.logger.error(`Error fetching departments: ${error.message}`, error.stack);
+      throw error;
+    }
   }
 
   @Get('roles')
   @ApiOperation({ summary: 'Get all roles from enum' })
   @ApiOkResponse({ type: [String] })
   async getRoles() {
-    return this.employeeDetailsService.getRoles();
+    try {
+      this.logger.log('Fetching all roles');
+      return await this.employeeDetailsService.getRoles();
+    } catch (error) {
+      this.logger.error(`Error fetching roles: ${error.message}`, error.stack);
+      throw error;
+    }
   }
 
   @Get('list-select')
@@ -73,7 +85,13 @@ export class EmployeeDetailsController {
     @Query('role') role: string,
     @Query('search') search: string,
   ) {
-    return this.employeeDetailsService.getListSelect(department, role, search);
+    try {
+      this.logger.log(`Fetching employee selection list - Dept: ${department}, Role: ${role}, Search: ${search}`);
+      return await this.employeeDetailsService.getListSelect(department, role, search);
+    } catch (error) {
+      this.logger.error(`Error fetching employee selection list: ${error.message}`, error.stack);
+      throw error;
+    }
   }
 
   @Post()
@@ -82,8 +100,13 @@ export class EmployeeDetailsController {
   @ApiCreatedResponse({ type: EmployeeDetailsDto })
   @ApiBadRequestResponse({ description: 'Invalid request body' })
   async createEmployee(@Body() employeeData: EmployeeDetailsDto) {
-    this.logger.log(`Creating new employee with data: ${JSON.stringify(employeeData)}`);
-    return this.employeeDetailsService.createEmployee(employeeData);
+    try {
+      this.logger.log(`Creating new employee with data: ${JSON.stringify(employeeData)}`);
+      return await this.employeeDetailsService.createEmployee(employeeData);
+    } catch (error) {
+      this.logger.error(`Error creating employee: ${error.message}`, error.stack);
+      throw error;
+    }
   }
 
   @Post('bulk-upload')
@@ -111,8 +134,13 @@ export class EmployeeDetailsController {
   @ApiBadRequestResponse({ description: 'Invalid file format or validation errors' })
   @UseInterceptors(FileInterceptor('file'))
   async bulkUploadEmployees(@UploadedFile() file: Express.Multer.File) {
-    this.logger.log(`Bulk upload request received with file: ${file?.originalname}`);
-    return this.employeeDetailsService.bulkCreateEmployees(file);
+    try {
+      this.logger.log(`Bulk upload request received with file: ${file?.originalname}`);
+      return await this.employeeDetailsService.bulkCreateEmployees(file);
+    } catch (error) {
+      this.logger.error(`Error in bulk upload: ${error.message}`, error.stack);
+      throw error;
+    }
   }
 
   @Post(':employeeId/resend-activation')
@@ -120,8 +148,13 @@ export class EmployeeDetailsController {
   @ApiParam({ name: 'employeeId', type: String, description: 'Employee String ID' })
   @ApiOkResponse({ description: 'Activation link sent successfully' })
   async resendActivationLink(@Param('employeeId') employeeId: string) {
-    this.logger.log(`Resending activation link for employee: ${employeeId}`);
-    return this.employeeDetailsService.resendActivationLink(employeeId);
+    try {
+      this.logger.log(`Resending activation link for employee: ${employeeId}`);
+      return await this.employeeDetailsService.resendActivationLink(employeeId);
+    } catch (error) {
+      this.logger.error(`Error resending activation link for ${employeeId}: ${error.message}`, error.stack);
+      throw error;
+    }
   }
 
 
@@ -155,31 +188,37 @@ export class EmployeeDetailsController {
     @Query('includeSelf') includeSelf: string,
     @Req() req: any,
   ) {
-    const user = req.user;
-    let managerName: string | undefined;
-    let managerId: string | undefined;
+    try {
+      this.logger.log(`Fetching timesheet list - Status: ${status}, Month: ${month}, Year: ${year}`);
+      const user = req.user;
+      let managerName: string | undefined;
+      let managerId: string | undefined;
 
-    // Filter for Managers (consistent with getAllEmployees)
-    const roleUpper = (user?.role || '').toUpperCase();
-    if (user && (user.userType === UserType.MANAGER || roleUpper.includes('MNG') || roleUpper.includes(UserType.MANAGER))) {
-      managerName = user.aliasLoginName;
-      managerId = user.loginId;
+      // Filter for Managers (consistent with getAllEmployees)
+      const roleUpper = (user?.role || '').toUpperCase();
+      if (user && (user.userType === UserType.MANAGER || roleUpper.includes('MNG') || roleUpper.includes(UserType.MANAGER))) {
+        managerName = user.aliasLoginName;
+        managerId = user.loginId;
+      }
+
+      return await this.employeeDetailsService.getTimesheetList(
+        search,
+        sort,
+        order,
+        department,
+        page,
+        limit,
+        status,
+        month,
+        year,
+        managerName,
+        managerId,
+        includeSelf === 'true'
+      );
+    } catch (error) {
+      this.logger.error(`Error fetching timesheet list: ${error.message}`, error.stack);
+      throw error;
     }
-
-    return this.employeeDetailsService.getTimesheetList(
-      search,
-      sort,
-      order,
-      department,
-      page,
-      limit,
-      status,
-      month,
-      year,
-      managerName,
-      managerId,
-      includeSelf === 'true'
-    );
   }
 
   @Get(':employeeId')
@@ -189,8 +228,13 @@ export class EmployeeDetailsController {
   @ApiNotFoundResponse({ description: 'Employee not found' })
   @ApiInternalServerErrorResponse({ description: 'Internal server error' })
   async getEmployeeByEmployeeId(@Param('employeeId') employeeId: string) {
-    this.logger.log(`Fetching employee with Employee ID: ${employeeId}`);
-    return this.employeeDetailsService.findByEmployeeId(employeeId);
+    try {
+      this.logger.log(`Fetching employee with Employee ID: ${employeeId}`);
+      return await this.employeeDetailsService.findByEmployeeId(employeeId);
+    } catch (error) {
+      this.logger.error(`Error fetching employee ${employeeId}: ${error.message}`, error.stack);
+      throw error;
+    }
   }
 
   @Get()
@@ -222,34 +266,39 @@ export class EmployeeDetailsController {
     @Query('userStatus') userStatus: string,
     @Req() req: any,
   ) {
-    const user = req.user;
-    this.logger.log(`User in getAllEmployees: ${JSON.stringify(user)}`);
+    try {
+      const user = req.user;
+      this.logger.log(`Fetching all employees - User in session: ${user?.loginId || 'system'}`);
 
-    let managerName: string | undefined;
-    let managerId: string | undefined;
+      let managerName: string | undefined;
+      let managerId: string | undefined;
 
-    // Filter for Managers (check both userType and role for robustness)
-    const roleUpper = (user?.role || '').toUpperCase();
-    if (user && (user.userType === UserType.MANAGER || roleUpper.includes('MNG') || roleUpper.includes(UserType.MANAGER))) {
-      managerName = user.aliasLoginName;
-      managerId = user.loginId; // Fallback or alternative match
-      this.logger.log(`Manager filter applied: Name=${managerName}, ID=${managerId}`);
-    } else {
-      this.logger.log('Manager filter NOT applied');
+      // Filter for Managers (check both userType and role for robustness)
+      const roleUpper = (user?.role || '').toUpperCase();
+      if (user && (user.userType === UserType.MANAGER || roleUpper.includes('MNG') || roleUpper.includes(UserType.MANAGER))) {
+        managerName = user.aliasLoginName;
+        managerId = user.loginId; // Fallback or alternative match
+        this.logger.log(`Manager filter applied: Name=${managerName}, ID=${managerId}`);
+      } else {
+        this.logger.log('Manager filter NOT applied');
+      }
+
+      return await this.employeeDetailsService.getAllEmployees(
+        search,
+        sort,
+        order,
+        department,
+        page,
+        limit,
+        managerName,
+        managerId,
+        includeSelf === 'true',
+        userStatus
+      );
+    } catch (error) {
+      this.logger.error(`Error fetching employees: ${error.message}`, error.stack);
+      throw error;
     }
-
-    return this.employeeDetailsService.getAllEmployees(
-      search,
-      sort,
-      order,
-      department,
-      page,
-      limit,
-      managerName,
-      managerId,
-      includeSelf === 'true',
-      userStatus
-    );
   }
 
 
@@ -263,9 +312,14 @@ export class EmployeeDetailsController {
     @Param('employeeId') employeeId: string,
     @Body() updateData: Partial<EmployeeDetailsDto>,
   ) {
-    this.logger.log(`Updating employee ${employeeId} with data: ${JSON.stringify(updateData)}`);
-    const employee = await this.employeeDetailsService.findByEmployeeId(employeeId);
-    return this.employeeDetailsService.updateEmployee(employee.id, updateData);
+    try {
+      this.logger.log(`Updating employee ${employeeId} with data: ${JSON.stringify(updateData)}`);
+      const employee = await this.employeeDetailsService.findByEmployeeId(employeeId);
+      return await this.employeeDetailsService.updateEmployee(employee.id, updateData);
+    } catch (error) {
+      this.logger.error(`Error updating employee ${employeeId}: ${error.message}`, error.stack);
+      throw error;
+    }
   }
 
   @Delete(':employeeId')
@@ -274,9 +328,14 @@ export class EmployeeDetailsController {
   @ApiOkResponse({ description: 'Employee deleted successfully' })
   @ApiInternalServerErrorResponse({ description: 'Internal server error' })
   async deleteEmployee(@Param('employeeId') employeeId: string) {
-    this.logger.log(`Deleting employee with ID: ${employeeId}`);
-    const employee = await this.employeeDetailsService.findByEmployeeId(employeeId);
-    return await this.employeeDetailsService.deleteEmployee(employee.id);
+    try {
+      this.logger.log(`Deleting employee with ID: ${employeeId}`);
+      const employee = await this.employeeDetailsService.findByEmployeeId(employeeId);
+      return await this.employeeDetailsService.deleteEmployee(employee.id);
+    } catch (error) {
+      this.logger.error(`Error deleting employee ${employeeId}: ${error.message}`, error.stack);
+      throw error;
+    }
   }
 
   @Patch(':employeeId')
@@ -291,10 +350,15 @@ export class EmployeeDetailsController {
     @Body() updateData: Partial<EmployeeDetailsDto>,
     @Req() req: any,
   ) {
-    const loginId = req.user?.userId ?? 'system';
-    this.logger.log(`Partially updating employee ${employeeId} with data: ${JSON.stringify(updateData)}`);
-    const employee = await this.employeeDetailsService.findByEmployeeId(employeeId);
-    return this.employeeDetailsService.partialUpdateEmployee(employee.id, updateData, loginId);
+    try {
+      const loginId = req.user?.userId ?? 'system';
+      this.logger.log(`Partially updating employee ${employeeId} with data: ${JSON.stringify(updateData)}`);
+      const employee = await this.employeeDetailsService.findByEmployeeId(employeeId);
+      return await this.employeeDetailsService.partialUpdateEmployee(employee.id, updateData, loginId);
+    } catch (error) {
+      this.logger.error(`Error in partial update for ${employeeId}: ${error.message}`, error.stack);
+      throw error;
+    }
   }
 
   @Patch(':employeeId/status')
@@ -306,19 +370,31 @@ export class EmployeeDetailsController {
     @Param('employeeId') employeeId: string,
     @Body('status') status: string,
   ) {
-    if (!status) {
-      throw new Error('Status is required');
+    try {
+      this.logger.log(`Updating status for employee ${employeeId} to ${status}`);
+      if (!status) {
+        throw new Error('Status is required');
+      }
+      return await this.employeeDetailsService.updateStatus(employeeId, status);
+    } catch (error) {
+      this.logger.error(`Error updating status for ${employeeId}: ${error.message}`, error.stack);
+      throw error;
     }
-    return this.employeeDetailsService.updateStatus(employeeId, status);
   }
 
   @Post('reset-password')
   @ApiOperation({ summary: 'Reset password for employee' })
   async resetPassword(@Body() resetPasswordDto: ResetPasswordDto, @Req() req: any) {
-    if (!resetPasswordDto.loginId && req.user?.employeeId) {
-      resetPasswordDto.loginId = req.user.employeeId;
+    try {
+      this.logger.log(`Resetting password for employee ID: ${resetPasswordDto.loginId || req.user?.employeeId}`);
+      if (!resetPasswordDto.loginId && req.user?.employeeId) {
+        resetPasswordDto.loginId = req.user.employeeId;
+      }
+      return await this.employeeDetailsService.resetPassword(resetPasswordDto);
+    } catch (error) {
+      this.logger.error(`Error resetting password: ${error.message}`, error.stack);
+      throw error;
     }
-    return await this.employeeDetailsService.resetPassword(resetPasswordDto);
   }
 
   @Post('upload-profile-image/:employeeId')
@@ -328,8 +404,14 @@ export class EmployeeDetailsController {
     @Param('employeeId') employeeId: string,
     @UploadedFile() file: any,
   ) {
-    const employee = await this.employeeDetailsService.findByEmployeeId(employeeId);
-    return this.employeeDetailsService.uploadProfileImage(file, employee.id);
+    try {
+      this.logger.log(`Uploading profile image for employee: ${employeeId}`);
+      const employee = await this.employeeDetailsService.findByEmployeeId(employeeId);
+      return await this.employeeDetailsService.uploadProfileImage(file, employee.id);
+    } catch (error) {
+      this.logger.error(`Error uploading profile image for ${employeeId}: ${error.message}`, error.stack);
+      throw error;
+    }
   }
 
   @Get('profile-image/:employeeId/view')

@@ -79,6 +79,7 @@ export class ManagerMappingController {
     @Query('managerName') managerName?: string,
   ): Promise<Pagination<ManagerMappingDTO>> {
     try {
+      this.logger.log(`Fetching all manager mappings - Page: ${page}, Limit: ${limit}`);
       const pageNumber = page ? parseInt(page, 10) : 1;
       const limitNumber = limit ? parseInt(limit, 10) : 10;
 
@@ -112,6 +113,7 @@ export class ManagerMappingController {
 
       return await this.managerMappingService.findAll(options, validSortOrder, search, statusEnum, managerName);
     } catch (error) {
+      this.logger.error(`Error fetching manager mappings: ${error.message}`, error.stack);
       if (error instanceof HttpException) {
         throw error;
       }
@@ -132,18 +134,24 @@ export class ManagerMappingController {
     @Query('department') department?: string,
     @Query('status') status?: string,
   ): Promise<any> {
-    const pageNumber = page ? parseInt(page, 10) : 1;
-    const limitNumber = limit ? parseInt(limit, 10) : 10;
+    try {
+      this.logger.log('Fetching manager mapping history');
+      const pageNumber = page ? parseInt(page, 10) : 1;
+      const limitNumber = limit ? parseInt(limit, 10) : 10;
 
-    return await this.managerMappingService.getMappingHistory(
-      pageNumber,
-      limitNumber,
-      search,
-      sortBy,
-      sortOrder,
-      department,
-      status
-    );
+      return await this.managerMappingService.getMappingHistory(
+        pageNumber,
+        limitNumber,
+        search,
+        sortBy,
+        sortOrder,
+        department,
+        status
+      );
+    } catch (error) {
+      this.logger.error(`Error fetching mapping history: ${error.message}`, error.stack);
+      throw error;
+    }
   }
 
   @Get('/mapped-employee-ids')
@@ -151,7 +159,13 @@ export class ManagerMappingController {
   @ApiOperation({ summary: 'Get all active mapped employee IDs' })
   @ApiResponse({ status: 200, description: 'Get list of employee IDs' })
   async getMappedEmployeeIds(): Promise<string[]> {
-    return await this.managerMappingService.getMappedEmployeeIds();
+    try {
+      this.logger.log('Fetching all mapped employee IDs');
+      return await this.managerMappingService.getMappedEmployeeIds();
+    } catch (error) {
+      this.logger.error(`Error fetching mapped employee IDs: ${error.message}`, error.stack);
+      throw error;
+    }
   }
 
   @Get('/:id')
@@ -162,8 +176,10 @@ export class ManagerMappingController {
   @ApiResponse({ status: 200, description: 'Get manager mapping by id' })
   async getOne(@Param('id', ParseIntPipe) id: number): Promise<ManagerMappingDTO> {
     try {
+      this.logger.log(`Fetching manager mapping ID: ${id}`);
       return await this.managerMappingService.findOne(id);
     } catch (error) {
+      this.logger.error(`Error fetching manager mapping ${id}: ${error.message}`, error.stack);
       throw new HttpException(error.message, HttpStatus.NOT_FOUND);
     }
   }
@@ -180,8 +196,10 @@ export class ManagerMappingController {
   @ApiResponse({ status: 201, description: 'Create new manager mapping' })
   async create(@Body() dto: ManagerMappingDTO): Promise<ManagerMappingDTO> {
     try {
+      this.logger.log(`Creating manager mapping for employee: ${dto.employeeId}`);
       return await this.managerMappingService.create(dto);
     } catch (error) {
+      this.logger.error(`Error creating manager mapping: ${error.message}`, error.stack);
       throw new HttpException(error.message, HttpStatus.BAD_REQUEST);
     }
   }
@@ -196,8 +214,10 @@ export class ManagerMappingController {
   @ApiResponse({ status: 200, description: 'Update manager mapping by id' })
   async update(@Param('id', ParseIntPipe) id: number, @Body() dto: ManagerMappingDTO): Promise<ManagerMappingDTO> {
     try {
+      this.logger.log(`Updating manager mapping ID: ${id}`);
       return await this.managerMappingService.update(id, dto);
     } catch (error) {
+      this.logger.error(`Error updating manager mapping ${id}: ${error.message}`, error.stack);
       throw new HttpException(error.message, HttpStatus.NOT_FOUND);
     }
   }
@@ -213,15 +233,21 @@ export class ManagerMappingController {
     @Param('id') id: string,
     @Body() updateData: Partial<ManagerMappingDTO>,
   ): Promise<{ message: string; data: ManagerMappingDTO }> {
-    const userContext = req.user;
-    const loginId = userContext?.userId || 'unknown';
+    try {
+      this.logger.log(`Partially updating manager mapping ID: ${id}`);
+      const userContext = req.user;
+      const loginId = userContext?.userId || 'unknown';
 
-    const updated = await this.managerMappingService.partialUpdate(id, updateData, loginId);
+      const updated = await this.managerMappingService.partialUpdate(id, updateData, loginId);
 
-    return {
-      message: 'Manager mapping partially updated successfully',
-      data: updated,
-    };
+      return {
+        message: 'Manager mapping partially updated successfully',
+        data: updated,
+      };
+    } catch (error) {
+      this.logger.error(`Error in partial update for ${id}: ${error.message}`, error.stack);
+      throw error;
+    }
   }
 
   @Delete('/:id')
@@ -233,9 +259,11 @@ export class ManagerMappingController {
   @ApiResponse({ status: 200, description: 'Delete manager mapping by id' })
   async delete(@Param('id', ParseIntPipe) id: number): Promise<{ message: string }> {
     try {
+      this.logger.log(`Deactivating manager mapping ID: ${id}`);
       await this.managerMappingService.delete(id);
       return { message: `ManagerMapping with id ${id} deactivated successfully` };
     } catch (error) {
+      this.logger.error(`Error deactivating manager mapping ${id}: ${error.message}`, error.stack);
       throw new HttpException(error.message, HttpStatus.NOT_FOUND);
     }
   }
@@ -249,8 +277,10 @@ export class ManagerMappingController {
   @ApiResponse({ status: 200, description: 'Get manager mapping by employee ID' })
   async getByEmployeeId(@Param('employeeId') employeeId: string): Promise<ManagerMappingDTO | null> {
     try {
+      this.logger.log(`Fetching manager mapping for employee ID: ${employeeId}`);
       return await this.managerMappingService.findByEmployeeId(employeeId);
     } catch (error) {
+      this.logger.error(`Error fetching manager mapping for employee ${employeeId}: ${error.message}`, error.stack);
       throw new HttpException(error.message, HttpStatus.NOT_FOUND);
     }
   }
