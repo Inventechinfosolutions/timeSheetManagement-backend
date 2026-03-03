@@ -8,6 +8,8 @@ import { EmployeeDetails } from '../employeeTimeSheet/entities/employeeDetails.e
 import { ManagerMapping, ManagerMappingStatus } from '../managerMapping/entities/managerMapping.entity';
 import { MasterHolidayService } from '../master/service/master-holiday.service';
 import { NotificationsService } from '../notifications/Services/notifications.service';
+import { UserStatus } from '../users/enums/user-status.enum';
+import { MonthStatus } from '../employeeTimeSheet/enums/month-status.enum';
 
 @Injectable()
 export class AttendanceCronService {
@@ -25,7 +27,7 @@ export class AttendanceCronService {
 
     private readonly masterHolidayService: MasterHolidayService,
     private readonly notificationsService: NotificationsService,
-  ) {}
+  ) { }
 
   // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -76,7 +78,7 @@ export class AttendanceCronService {
     this.logger.debug('Month-End 12PM: Sending last-call reminder to pending employees...');
 
     const pendingEmployees = await this.employeeRepo.find({
-      where: { monthStatus: 'Pending', userStatus: 'ACTIVE' } as any,
+      where: { monthStatus: MonthStatus.PENDING, userStatus: UserStatus.ACTIVE } as any,
     });
 
     this.logger.log(`Month-End 12PM: Found ${pendingEmployees.length} employees with pending status.`);
@@ -102,7 +104,7 @@ export class AttendanceCronService {
     const managerPendingMap = new Map<string, string[]>();
     for (const mapping of mappings) {
       const emp = await this.employeeRepo.findOne({
-        where: { employeeId: mapping.employeeId, monthStatus: 'Pending', userStatus: 'ACTIVE' } as any,
+        where: { employeeId: mapping.employeeId, monthStatus: MonthStatus.PENDING, userStatus: UserStatus.ACTIVE } as any,
       });
       if (emp) {
         const list = managerPendingMap.get(mapping.managerName) || [];
@@ -116,7 +118,7 @@ export class AttendanceCronService {
     // Send one email per manager
     for (const [managerName, pendingList] of managerPendingMap.entries()) {
       const manager = await this.employeeRepo.findOne({
-        where: { fullName: managerName, userStatus: 'ACTIVE' } as any,
+        where: { fullName: managerName, userStatus: UserStatus.ACTIVE } as any,
       });
       if (manager?.email) {
         await this.notificationsService.sendManagerPendingReport(manager, pendingList);
@@ -164,7 +166,7 @@ export class AttendanceCronService {
 
     // 5. Find Employees with NO record today OR a record with NULL status
     const presentRecordIds = new Set(records.filter(r => r.status !== null && r.status !== undefined).map(r => r.employeeId));
-    
+
     // Employees needing a new record
     const employeesNeedingRecord = allEmployees.filter(
       (emp) => !records.some(r => r.employeeId === emp.employeeId)
@@ -191,16 +193,16 @@ export class AttendanceCronService {
 
     // Update NULL status records
     for (const record of nullStatusRecords) {
-        record.status = AttendanceStatus.WEEKEND;
-        record.totalHours = 0;
+      record.status = AttendanceStatus.WEEKEND;
+      record.totalHours = 0;
     }
 
     if (newWeekendRecords.length > 0) {
       await this.attendanceRepo.save(newWeekendRecords);
     }
-    
+
     if (nullStatusRecords.length > 0) {
-        await this.attendanceRepo.save(nullStatusRecords);
+      await this.attendanceRepo.save(nullStatusRecords);
     }
 
     if (newWeekendRecords.length > 0 || nullStatusRecords.length > 0) {
@@ -270,8 +272,8 @@ export class AttendanceCronService {
     });
 
     for (const record of nullStatusRecords) {
-        record.status = targetStatus;
-        record.totalHours = 0;
+      record.status = targetStatus;
+      record.totalHours = 0;
     }
 
     if (newRecords.length > 0) {
@@ -279,7 +281,7 @@ export class AttendanceCronService {
     }
 
     if (nullStatusRecords.length > 0) {
-        await this.attendanceRepo.save(nullStatusRecords);
+      await this.attendanceRepo.save(nullStatusRecords);
     }
 
     if (newRecords.length > 0 || nullStatusRecords.length > 0) {

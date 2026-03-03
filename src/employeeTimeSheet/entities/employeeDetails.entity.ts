@@ -4,6 +4,8 @@ import { Department } from '../enums/department.enum';
 import { EmploymentType } from '../enums/employment-type.enum';
 import { Gender } from '../enums/gender.enum';
 import { UserType } from '../../users/enums/user-type.enum';
+import { MonthStatus } from '../enums/month-status.enum';
+import { UserStatus } from '../../users/enums/user-status.enum';
 
 @Entity('employee_details')
 export class EmployeeDetails extends BaseEntity {
@@ -36,7 +38,7 @@ export class EmployeeDetails extends BaseEntity {
   })
   employmentType: EmploymentType | null;
 
-  @Column({ name: 'email', unique: true, length: 255 ,nullable: true })
+  @Column({ name: 'email', unique: true, length: 255, nullable: true })
   email: string;
 
   @Column({ name: 'joining_date', type: 'date', nullable: true })
@@ -48,8 +50,13 @@ export class EmployeeDetails extends BaseEntity {
   @Column({ name: 'password', length: 255, nullable: true })
   password: string;
 
-  @Column({ name: 'user_status', default: 'ACTIVE', length: 50 })
-  userStatus: string;
+  @Column({
+    name: 'user_status',
+    type: 'enum',
+    enum: UserStatus,
+    default: UserStatus.ACTIVE,
+  })
+  userStatus: UserStatus;
 
   @Column({
     name: 'gender',
@@ -67,6 +74,11 @@ export class EmployeeDetails extends BaseEntity {
   })
   role: UserType;
 
-  @Column({ name: 'month_status', length: 50, default: 'Pending' })
-  monthStatus: string;
+  @Column({
+    name: 'month_status',
+    type: 'enum',
+    enum: MonthStatus,
+    default: MonthStatus.PENDING,
+  })
+  monthStatus: MonthStatus;
 }

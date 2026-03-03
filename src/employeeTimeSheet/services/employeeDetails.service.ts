@@ -24,11 +24,12 @@ import { DocumentMetaInfo, EntityType, ReferenceType } from '../../common/docume
 import * as XLSX from 'xlsx';
 import { BulkUploadResultDto, BulkUploadErrorDto } from '../dto/bulk-upload-result.dto';
 import { EmployeeAttendanceService } from './employeeAttendance.service';
-import { ManagerMapping } from '../../managerMapping/entities/managerMapping.entity';
+import { ManagerMapping, ManagerMappingStatus } from '../../managerMapping/entities/managerMapping.entity';
 import { EmployeeAttendance } from '../entities/employeeAttendance.entity';
 import { LeaveRequest } from '../entities/leave-request.entity';
 import { TimesheetBlocker } from '../entities/timesheetBlocker.entity';
 import { Notification } from '../../notifications/entities/notification.entity';
+import { MonthStatus } from '../enums/month-status.enum';
 
 
 
@@ -55,7 +56,7 @@ export class EmployeeDetailsService {
     private readonly employeeLinkService: EmployeeLinkService,
     private readonly documentUploaderService: DocumentUploaderService,
     private readonly employeeAttendanceService: EmployeeAttendanceService,
-  ) {}
+  ) { }
 
   async createEmployee(
     createEmployeeDetailsDto: EmployeeDetailsDto,
@@ -90,7 +91,7 @@ export class EmployeeDetailsService {
         if (createEmployeeDetailsDto.password !== createEmployeeDetailsDto.confirmPassword) {
           throw new BadRequestException('Passwords do not match');
         }
-        
+
         // Hash password
         const salt = await bcrypt.genSalt(10);
         createEmployeeDetailsDto.password = await bcrypt.hash(createEmployeeDetailsDto.password, salt);
@@ -100,12 +101,12 @@ export class EmployeeDetailsService {
       const { confirmPassword, ...employeeData } = createEmployeeDetailsDto;
 
       const employee = this.employeeDetailsRepository.create({
-        ...employeeData,
+        ...(employeeData as any),
         department: employeeData.department as Department,
         role: employeeData.role as UserType,
-      });
-      const result = await this.employeeDetailsRepository.save(employee);
-      
+      }) as unknown as EmployeeDetails;
+      const result = await this.employeeDetailsRepository.save(employee) as unknown as EmployeeDetails;
+
       // Also create User entity for authentication
       try {
         await this.usersService.create({
@@ -125,19 +126,19 @@ export class EmployeeDetailsService {
       const activationInfo = await this.employeeLinkService.generateActivationLink(result.employeeId);
 
       this.logger.log(`Employee created and activation link generated for: ${result.employeeId}`);
-      
+
       return {
-          id: result.id,
-          fullName: result.fullName,
-          employeeId: result.employeeId,
-          email: result.email,
-          department: result.department,
-          designation: result.designation,
-          employmentType: result.employmentType ?? undefined,
-          loginId: activationInfo.loginId,
-          password: activationInfo.password,
-          activationLink: activationInfo.activationLink,
-          message: 'Employee registered successfully'
+        id: result.id,
+        fullName: result.fullName,
+        employeeId: result.employeeId,
+        email: result.email,
+        department: result.department,
+        designation: result.designation,
+        employmentType: result.employmentType ?? undefined,
+        loginId: activationInfo.loginId,
+        password: activationInfo.password,
+        activationLink: activationInfo.activationLink,
+        message: 'Employee registered successfully'
       };
     } catch (error) {
       if (error instanceof HttpException) throw error;
@@ -147,11 +148,23 @@ export class EmployeeDetailsService {
   }
 
   async getDepartments(): Promise<string[]> {
-    return Object.values(Department);
+    this.logger.log('Fetching all departments from enum');
+    try {
+      return Object.values(Department);
+    } catch (error) {
+      this.logger.error(`Error fetching departments: ${error.message}`);
+      throw new HttpException('Failed to fetch departments', HttpStatus.INTERNAL_SERVER_ERROR);
+    }
   }
 
   async getRoles(): Promise<string[]> {
-    return Object.values(UserType);
+    this.logger.log('Fetching all roles from enum');
+    try {
+      return Object.values(UserType);
+    } catch (error) {
+      this.logger.error(`Error fetching roles: ${error.message}`);
+      throw new HttpException('Failed to fetch roles', HttpStatus.INTERNAL_SERVER_ERROR);
+    }
   }
 
   async getAllEmployees(
@@ -174,7 +187,7 @@ export class EmployeeDetailsService {
         department,
         page,
         limit,
-        managerName, 
+        managerName,
         managerId
       });
 
@@ -221,34 +234,34 @@ export class EmployeeDetailsService {
         query.andWhere('user_filter.status = :activeStatus', { activeStatus: UserStatus.ACTIVE });
 
         query.leftJoin(ManagerMapping, 'mm', 'mm.employeeId = employee.employeeId');
-        
+
         if (includeSelf) {
-            // Include the manager themselves OR those mapped to them
-            query.andWhere(
-                '(employee.employeeId = :exactManagerId OR (mm.managerName LIKE :managerNameQuery OR mm.managerName LIKE :managerIdQuery))', 
-                { 
-                    exactManagerId: managerId,
-                    managerNameQuery: `%${managerName}%`, 
-                    managerIdQuery: `%${managerId}%`
-                }
-            );
-            
-            // Ensure only active mappings are considered OR it's the manager themselves
-            query.andWhere('(mm.status = :mappingStatus OR employee.employeeId = :exactManagerId)', { 
-                mappingStatus: 'ACTIVE',
-                exactManagerId: managerId 
-            });
+          // Include the manager themselves OR those mapped to them
+          query.andWhere(
+            '(employee.employeeId = :exactManagerId OR (mm.managerName LIKE :managerNameQuery OR mm.managerName LIKE :managerIdQuery))',
+            {
+              exactManagerId: managerId,
+              managerNameQuery: `%${managerName}%`,
+              managerIdQuery: `%${managerId}%`
+            }
+          );
+
+          // Ensure only active mappings are considered OR it's the manager themselves
+          query.andWhere('(mm.status = :mappingStatus OR employee.employeeId = :exactManagerId)', {
+            mappingStatus: ManagerMappingStatus.ACTIVE,
+            exactManagerId: managerId
+          });
         } else {
-            // Standard behavior: ONLY those mapped to them (exclude self)
-            query.andWhere(
-                '(mm.managerName LIKE :managerNameQuery OR mm.managerName LIKE :managerIdQuery)', 
-                { 
-                    managerNameQuery: `%${managerName}%`, 
-                    managerIdQuery: `%${managerId}%`
-                }
-            );
-            query.andWhere('mm.status = :status', { status: 'ACTIVE' });
-            query.andWhere('employee.employeeId != :excludeManagerId', { excludeManagerId: managerId });
+          // Standard behavior: ONLY those mapped to them (exclude self)
+          query.andWhere(
+            '(mm.managerName LIKE :managerNameQuery OR mm.managerName LIKE :managerIdQuery)',
+            {
+              managerNameQuery: `%${managerName}%`,
+              managerIdQuery: `%${managerId}%`
+            }
+          );
+          query.andWhere('mm.status = :status', { status: ManagerMappingStatus.ACTIVE });
+          query.andWhere('employee.employeeId != :excludeManagerId', { excludeManagerId: managerId });
         }
       }
 
@@ -296,7 +309,7 @@ export class EmployeeDetailsService {
           'employee.role',
         ])
         .leftJoinAndMapOne('employee.user', User, 'user', 'user.loginId = employee.employeeId')
-        .addSelect(['user.status']); 
+        .addSelect(['user.status']);
 
       if (department && department !== 'All') {
         query.andWhere('employee.department = :department', { department });
@@ -319,23 +332,23 @@ export class EmployeeDetailsService {
 
         // If fetching employees, exclude those who are already mapped to a manager
         // UNLESS the manager they are mapped to is INACTIVE.
-        if (roles.includes('EMPLOYEE')) {
-             query.leftJoin(ManagerMapping, 'mm', 'mm.employeeId = employee.employeeId AND mm.status = :mappingStatus', { mappingStatus: 'ACTIVE' });
-             
-             // Join to check manager status using Entity classes
-             query.leftJoin(EmployeeDetails, 'm_details', 'mm.managerName = m_details.fullName');
-             query.leftJoin(User, 'm_user', 'm_details.employeeId = m_user.loginId');
-             
-             // Keep if:
-             // 1. Not mapped at all (mm.id is NULL)
-             // 2. Mapped, but manager is NOT Active (m_user.status != ACTIVE or NULL)
-             query.andWhere(
-               '(mm.id IS NULL OR m_user.status != :activeStatus OR m_user.status IS NULL)', 
-               { activeStatus: UserStatus.ACTIVE }
-             );
+        if (roles.includes(UserType.EMPLOYEE)) {
+          query.leftJoin(ManagerMapping, 'mm', 'mm.employeeId = employee.employeeId AND mm.status = :mappingStatus', { mappingStatus: ManagerMappingStatus.ACTIVE });
+
+          // Join to check manager status using Entity classes
+          query.leftJoin(EmployeeDetails, 'm_details', 'mm.managerName = m_details.fullName');
+          query.leftJoin(User, 'm_user', 'm_details.employeeId = m_user.loginId');
+
+          // Keep if:
+          // 1. Not mapped at all (mm.id is NULL)
+          // 2. Mapped, but manager is NOT Active (m_user.status != ACTIVE or NULL)
+          query.andWhere(
+            '(mm.id IS NULL OR m_user.status != :activeStatus OR m_user.status IS NULL)',
+            { activeStatus: UserStatus.ACTIVE }
+          );
         }
       }
-      
+
       const data = await query.getMany();
 
       return data.map((emp: any) => ({
@@ -416,7 +429,7 @@ export class EmployeeDetailsService {
       if (managerName || managerId) {
         // For managers, only show ACTIVE employees
         query.andWhere('user_filter.status = :activeStatus', { activeStatus: UserStatus.ACTIVE });
-        
+
         if (includeSelf && managerId) {
              // Include the manager themselves OR those mapped to them
              // Use LEFT JOIN because the manager might not be in ManagerMapping table as a subordinate
@@ -433,7 +446,7 @@ export class EmployeeDetailsService {
                 { 
                     managerNameQuery: `%${managerName}%`, 
                     managerIdQuery: `%${managerId}%`,
-                    activeMappingStatus: 'ACTIVE',
+                    activeMappingStatus: ManagerMappingStatus.ACTIVE,
                     exactManagerId: managerId,
                     searchEmpty: search ? 0 : 1,
                     search: `%${search}%`,
@@ -444,17 +457,17 @@ export class EmployeeDetailsService {
             if (managerId) {
                 query.andWhere('employee.employeeId != :excludeManagerId', { excludeManagerId: managerId });
             }
-    
-            query.innerJoin(ManagerMapping, 'mm', 'mm.employeeId = employee.employeeId');
-            query.andWhere(
-                '(mm.managerName LIKE :managerNameQuery OR mm.managerName LIKE :managerIdQuery)', 
-                { 
-                    managerNameQuery: `%${managerName}%`, 
-                    managerIdQuery: `%${managerId}%` 
-                }
-            );
-            // Ensure only active mappings are considered
-            query.andWhere('mm.status = :status', { status: 'ACTIVE' });
+
+          query.innerJoin(ManagerMapping, 'mm', 'mm.employeeId = employee.employeeId');
+          query.andWhere(
+            '(mm.managerName LIKE :managerNameQuery OR mm.managerName LIKE :managerIdQuery)',
+            {
+              managerNameQuery: `%${managerName}%`,
+              managerIdQuery: `%${managerId}%`
+            }
+          );
+          // Ensure only active mappings are considered
+          query.andWhere('mm.status = :status', { status: ManagerMappingStatus.ACTIVE });
         }
       }
 
@@ -465,7 +478,7 @@ export class EmployeeDetailsService {
 
       if (status && status !== 'All' && month && year) {
         const filteredEmployeeIds = Object.keys(allStats).filter(empId => {
-          const empStatus = allStats[empId].monthStatus === 'Submitted' ? 'Submitted' : 'Pending';
+          const empStatus = allStats[empId].monthStatus === MonthStatus.SUBMITTED ? MonthStatus.SUBMITTED : MonthStatus.PENDING;
           return empStatus === status;
         });
 
@@ -492,7 +505,7 @@ export class EmployeeDetailsService {
         userStatus: emp.user?.status || UserStatus.DRAFT,
         resetRequired: emp.user?.resetRequired ?? true,
         lastLoggedIn: emp.user?.lastLoggedIn || null,
-        monthStatus: allStats[emp.employeeId]?.monthStatus || 'Pending',
+        monthStatus: allStats[emp.employeeId]?.monthStatus || MonthStatus.PENDING,
       }));
 
       return { data: enrichedData, totalItems };
@@ -514,13 +527,13 @@ export class EmployeeDetailsService {
         this.logger.warn(`Employee with ID ${id} not found`);
         throw new NotFoundException(`Employee with ID ${id} not found`);
       }
-      
+
       const result: any = employee;
       result.userStatus = result.user?.status || UserStatus.DRAFT;
       result.resetRequired = result.user?.resetRequired ?? true;
       result.lastLoggedIn = result.user?.lastLoggedIn || null;
       delete result.user;
-      
+
       return result;
     } catch (error) {
       if (error instanceof HttpException) throw error;
@@ -547,13 +560,13 @@ export class EmployeeDetailsService {
         this.logger.warn(`Employee ${employeeId} not found`);
         throw new NotFoundException(`Employee ${employeeId} not found`);
       }
-      
+
       const result: any = employee;
       result.userStatus = result.user?.status || UserStatus.DRAFT;
       result.resetRequired = result.user?.resetRequired ?? true;
       result.lastLoggedIn = result.user?.lastLoggedIn || null;
       delete result.user;
-      
+
       return result;
     } catch (error) {
       if (error instanceof HttpException) throw error;
@@ -620,7 +633,7 @@ export class EmployeeDetailsService {
 
       // Handle intern to full-timer conversion automatic date stamping
       if (
-        updateFields.employmentType === EmploymentType.FULL_TIMER && 
+        updateFields.employmentType === EmploymentType.FULL_TIMER &&
         employee.employmentType === EmploymentType.INTERN &&
         !employee.conversionDate
       ) {
@@ -641,34 +654,34 @@ export class EmployeeDetailsService {
 
       if (employeeIdChanged) {
         this.logger.log(`EmployeeId changed from ${originalEmployeeId} to ${updatedEmployeeId}. Synchronizing related tables.`);
-        
+
         // Update ManagerMapping
         await this.managerMappingRepository.update({ employeeId: originalEmployeeId }, { employeeId: updatedEmployeeId });
-        
+
         // Update EmployeeAttendance
         await this.employeeAttendanceRepository.update({ employeeId: originalEmployeeId }, { employeeId: updatedEmployeeId });
-        
+
         // Update LeaveRequest
         await this.leaveRequestRepository.update({ employeeId: originalEmployeeId }, { employeeId: updatedEmployeeId });
-        
+
         // Update TimesheetBlocker
         await this.timesheetBlockerRepository.update({ employeeId: originalEmployeeId }, { employeeId: updatedEmployeeId });
-        
+
         // Update Notification
         await this.notificationRepository.update({ employeeId: originalEmployeeId }, { employeeId: updatedEmployeeId });
-        
+
         this.logger.log(`Synchronization for employeeId ${updatedEmployeeId} completed.`);
       }
 
       if (fullNameChanged) {
         this.logger.log(`FullName changed for ${updatedEmployeeId}. Synchronizing ManagerMapping.`);
-        
+
         // Update ManagerMapping where this employee is a subordinate
         await this.managerMappingRepository.update({ employeeId: updatedEmployeeId }, { employeeName: updateData.fullName });
-        
+
         // Update ManagerMapping where this employee is a manager
         await this.managerMappingRepository.update({ managerName: employee.fullName }, { managerName: updateData.fullName });
-        
+
         this.logger.log(`Synchronization for fullName ${updateData.fullName} completed.`);
       }
       // --------------------------------------------------------------------
@@ -694,7 +707,7 @@ export class EmployeeDetailsService {
         if (user) {
           // Check if user.loginId matches the updated employeeId (case-insensitive comparison)
           const userLoginIdMatches = user.loginId.toLowerCase() === updatedEmployeeId.toLowerCase();
-          
+
           if (userLoginIdMatches && user.loginId === updatedEmployeeId) {
             // Case 1: User loginId exactly matches updated employeeId (case-sensitive)
             // Send activation link with updated employeeId and new password
@@ -703,7 +716,7 @@ export class EmployeeDetailsService {
             );
             try {
               const activationInfo = await this.employeeLinkService.generateActivationLink(updatedEmployeeId);
-              
+
               // generateActivationLink updates both employee and user passwords
               // Reload employee to get the new password and verify user is synced
               const updatedEmployee = await this.employeeDetailsRepository.findOne({
@@ -712,7 +725,7 @@ export class EmployeeDetailsService {
               const updatedUser = await this.userRepository.findOne({
                 where: { loginId: updatedEmployeeId },
               });
-              
+
               // Ensure user password matches employee password
               if (updatedEmployee && updatedUser && updatedEmployee.password !== updatedUser.password) {
                 updatedUser.password = updatedEmployee.password;
@@ -725,7 +738,7 @@ export class EmployeeDetailsService {
                 await this.userRepository.save(updatedUser);
                 this.logger.log(`ResetRequired set to true for user: ${updatedEmployeeId}`);
               }
-              
+
               this.logger.log(`Activation link sent to updated email: ${updatedEmail}`);
             } catch (linkError) {
               this.logger.warn(
@@ -747,7 +760,7 @@ export class EmployeeDetailsService {
             // Send activation link (will generate new password and update both employee and user tables)
             try {
               const activationInfo = await this.employeeLinkService.generateActivationLink(updatedEmployeeId);
-              
+
               // generateActivationLink updates both employee and user passwords
               // Reload both to verify they're in sync
               const updatedEmployee = await this.employeeDetailsRepository.findOne({
@@ -756,7 +769,7 @@ export class EmployeeDetailsService {
               const updatedUser = await this.userRepository.findOne({
                 where: { loginId: updatedEmployeeId },
               });
-              
+
               // Ensure user password matches employee password
               if (updatedEmployee && updatedUser && updatedEmployee.password !== updatedUser.password) {
                 updatedUser.password = updatedEmployee.password;
@@ -769,7 +782,7 @@ export class EmployeeDetailsService {
                 await this.userRepository.save(updatedUser);
                 this.logger.log(`ResetRequired set to true for user: ${updatedEmployeeId}`);
               }
-              
+
               this.logger.log(`Activation link sent to updated email: ${updatedEmail}`);
             } catch (linkError) {
               this.logger.warn(
@@ -833,34 +846,34 @@ export class EmployeeDetailsService {
     status: string
   ): Promise<any> {
     try {
-        this.logger.log(`Updating status for employee ${employeeId} to ${status}`);
-        const employee = await this.findByEmployeeId(employeeId);
-        
-        // Update EmployeeDetails
-        employee.userStatus = status;
-        await this.employeeDetailsRepository.save(employee);
+      this.logger.log(`Updating status for employee ${employeeId} to ${status}`);
+      const employee = await this.findByEmployeeId(employeeId);
 
-        // Update User entity
-        // Map status string to UserStatus enum if possible
-        let userStatus = UserStatus.ACTIVE; 
-        if (status === 'INACTIVE') {
-            userStatus = UserStatus.INACTIVE;
-        } else if (status === 'ACTIVE') {
-            userStatus = UserStatus.ACTIVE;
-        }
+      // Update EmployeeDetails
+      employee.userStatus = status as UserStatus;
+      await this.employeeDetailsRepository.save(employee);
 
-        const user = await this.userRepository.findOne({ where: { loginId: employeeId } });
-        if (user) {
-            user.status = userStatus;
-            await this.userRepository.save(user);
-        }
+      // Update User entity
+      // Map status string to UserStatus enum if possible
+      let userStatus = UserStatus.ACTIVE;
+      if (status === UserStatus.INACTIVE) {
+        userStatus = UserStatus.INACTIVE;
+      } else if (status === UserStatus.ACTIVE) {
+        userStatus = UserStatus.ACTIVE;
+      }
 
-        return { message: 'Status updated successfully', status: employee.userStatus };
+      const user = await this.userRepository.findOne({ where: { loginId: employeeId } });
+      if (user) {
+        user.status = userStatus;
+        await this.userRepository.save(user);
+      }
+
+      return { message: 'Status updated successfully', status: employee.userStatus };
 
     } catch (error) {
-        this.logger.error(`Error updating status: ${error.message}`, error.stack);
-        if (error instanceof HttpException) throw error;
-        throw new HttpException('Failed to update status', HttpStatus.INTERNAL_SERVER_ERROR);
+      this.logger.error(`Error updating status: ${error.message}`, error.stack);
+      if (error instanceof HttpException) throw error;
+      throw new HttpException('Failed to update status', HttpStatus.INTERNAL_SERVER_ERROR);
     }
   }
 
@@ -903,7 +916,7 @@ export class EmployeeDetailsService {
       // employee.mobileVerification = true; // Entity doesn't have this field yet
 
       await this.employeeDetailsRepository.save(employee);
-      
+
       // Update User entity if it exists
       const user = await this.userRepository.findOne({ where: { loginId: employee.employeeId.toLowerCase() } });
       if (user) {
@@ -913,7 +926,7 @@ export class EmployeeDetailsService {
       }
 
       this.logger.log(`Password reset successfully for employee: ${resetPasswordDto.loginId}`);
-      
+
       return {
         message: 'Password successfully updated.',
         employeeId: employee.employeeId,
@@ -928,12 +941,12 @@ export class EmployeeDetailsService {
   async resendActivationLink(employeeId: string): Promise<any> {
     try {
       this.logger.log(`Resending activation link for employee: ${employeeId}`);
-      
+
       const employee = await this.findByEmployeeId(employeeId);
-      
+
       // Check if user exists
       let user = await this.userRepository.findOne({ where: { loginId: employeeId.toLowerCase() } });
-      
+
       if (!user) {
         // Create user if missing
         this.logger.warn(`User not found for ${employeeId}, creating new user record`);
@@ -973,58 +986,66 @@ export class EmployeeDetailsService {
 
   async uploadProfileImage(file: any, employeeId: number): Promise<any> {
     if (!file) {
-        throw new BadRequestException('File is required');
+      throw new BadRequestException('File is required');
     }
     try {
-        const employee = await this.getEmployeeById(employeeId); // Validate existence
-        
-        const meta = new DocumentMetaInfo();
-        meta.entityId = employeeId;
-        meta.entityType = EntityType.EMPLOYEE;
-        meta.refType = ReferenceType.EMPLOYEE_PROFILE_PHOTO;
-        meta.refId = employeeId; // For profile pic, refId can be same as entityId or 0
+      const employee = await this.getEmployeeById(employeeId); // Validate existence
 
-        // Cast to any to satisfy the BufferedFile interface compatibility if needed
-        return await this.documentUploaderService.uploadImage(file as any, meta);
+      const meta = new DocumentMetaInfo();
+      meta.entityId = employeeId;
+      meta.entityType = EntityType.EMPLOYEE;
+      meta.refType = ReferenceType.EMPLOYEE_PROFILE_PHOTO;
+      meta.refId = employeeId; // For profile pic, refId can be same as entityId or 0
+
+      // Cast to any to satisfy the BufferedFile interface compatibility if needed
+      return await this.documentUploaderService.uploadImage(file as any, meta);
     } catch (error) {
-        if (error instanceof HttpException) throw error;
-        this.logger.error(`Error uploading profile image: ${error.message}`, error.stack);
-        throw new HttpException('Error uploading profile image', HttpStatus.INTERNAL_SERVER_ERROR);
+      if (error instanceof HttpException) throw error;
+      this.logger.error(`Error uploading profile image: ${error.message}`, error.stack);
+      throw new HttpException('Error uploading profile image', HttpStatus.INTERNAL_SERVER_ERROR);
     }
   }
 
   async getProfileImage(employeeId: number): Promise<any> {
-      try {
-          const docs = await this.documentUploaderService.getAllDocs(
-              EntityType.EMPLOYEE, 
-              employeeId, 
-              ReferenceType.EMPLOYEE_PROFILE_PHOTO,
-              employeeId
-          );
-          
-          // Assuming we just want the latest one or list of them
-          return docs;
-      } catch (error) {
-           if (error instanceof HttpException) throw error;
-           this.logger.error(`Error fetching profile image: ${error.message}`, error.stack);
-           throw new HttpException('Error fetching profile image', HttpStatus.INTERNAL_SERVER_ERROR);
-      }
+    try {
+      const docs = await this.documentUploaderService.getAllDocs(
+        EntityType.EMPLOYEE,
+        employeeId,
+        ReferenceType.EMPLOYEE_PROFILE_PHOTO,
+        employeeId
+      );
+
+      // Assuming we just want the latest one or list of them
+      return docs;
+    } catch (error) {
+      if (error instanceof HttpException) throw error;
+      this.logger.error(`Error fetching profile image: ${error.message}`, error.stack);
+      throw new HttpException('Error fetching profile image', HttpStatus.INTERNAL_SERVER_ERROR);
+    }
   }
 
   async getProfileImageStream(employeeId: number) {
-    const docs = await this.getProfileImage(employeeId);
-    if (!docs || docs.length === 0) {
-      throw new HttpException('No profile image found', HttpStatus.NOT_FOUND);
-    }
-    
-    // Sort by creation date descending to get the latest
-    docs.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-    const latest = docs[0];
+    this.logger.log(`Fetching profile image stream for employee ID: ${employeeId}`);
+    try {
+      const docs = await this.getProfileImage(employeeId);
+      if (!docs || docs.length === 0) {
+        this.logger.warn(`No profile image found for employee ID: ${employeeId}`);
+        throw new NotFoundException('No profile image found');
+      }
 
-    const stream = await this.documentUploaderService.downloadFile(latest.key);
-    const meta = await this.documentUploaderService.getMetaData(latest.key);
-    
-    return { stream, meta };
+      // Sort by creation date descending to get the latest
+      docs.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      const latest = docs[0];
+
+      const stream = await this.documentUploaderService.downloadFile(latest.key);
+      const meta = await this.documentUploaderService.getMetaData(latest.key);
+
+      return { stream, meta };
+    } catch (error) {
+      this.logger.error(`Error streaming profile image for employee ${employeeId}: ${error.message}`, error.stack);
+      if (error instanceof HttpException) throw error;
+      throw new HttpException('Error streaming profile image', HttpStatus.INTERNAL_SERVER_ERROR);
+    }
   }
 
   /**
@@ -1035,10 +1056,10 @@ export class EmployeeDetailsService {
       const workbook = XLSX.read(buffer, { type: 'buffer' });
       const sheetName = workbook.SheetNames[0];
       const worksheet = workbook.Sheets[sheetName];
-      
+
       // Convert to JSON with header row
       const data = XLSX.utils.sheet_to_json(worksheet);
-      
+
       this.logger.log(`Parsed ${data.length} rows from Excel file`);
       return data;
     } catch (error) {
@@ -1055,7 +1076,7 @@ export class EmployeeDetailsService {
 
     // Required fields validation
     const requiredFields = ['fullName', 'employeeId', 'department', 'designation', 'email'];
-    
+
     for (const field of requiredFields) {
       if (!data[field] || String(data[field]).trim() === '') {
         errors.push({
@@ -1150,7 +1171,7 @@ export class EmployeeDetailsService {
           let msg = '';
           if (existingEmployee.employeeId === employeeId) msg += `Employee ID ${employeeId} already exists. `;
           if (existingEmployee.email === email) msg += `Email ${email} already exists.`;
-          
+
           result.errors.push({
             row: rowNumber,
             message: msg.trim()

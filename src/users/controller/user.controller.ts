@@ -40,17 +40,23 @@ export class UsersController {
   @ApiOperation({ summary: 'Create new user' })
   @ApiBody({ type: CreateUserDto })
   async createUser(@Body() createUserDto: CreateUserDto): Promise<any> {
-    const user = await this.usersService.create({
-      loginId: createUserDto.loginId,
-      aliasLoginName: createUserDto.name,
-      password: createUserDto.password,
-    });
-    const { password, ...result } = user;
-    return {
-      success: true,
-      statusCode: HttpStatus.CREATED,
-      data: result,
-    };
+    try {
+      this.logger.log(`Creating user: ${createUserDto.loginId}`);
+      const user = await this.usersService.create({
+        loginId: createUserDto.loginId,
+        aliasLoginName: createUserDto.name,
+        password: createUserDto.password,
+      });
+      const { password, ...result } = user;
+      return {
+        success: true,
+        statusCode: HttpStatus.CREATED,
+        data: result,
+      };
+    } catch (error) {
+      this.logger.error(`Error creating user ${createUserDto.loginId}: ${error.message}`, error.stack);
+      throw error;
+    }
   }
 
   @Post('login')
@@ -58,33 +64,40 @@ export class UsersController {
   @ApiOperation({ summary: 'User login' })
   @ApiBody({ type: UserLoginDto })
   async login(@Body() userLoginDto: UserLoginDto, @Res() res): Promise<any> {
-    const response = await this.usersService.login(userLoginDto);
+    try {
+      this.logger.log(`User login attempt: ${userLoginDto.loginId}`);
+      const response = await this.usersService.login(userLoginDto);
 
-    res.cookie('refreshToken', response.refreshToken, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'strict',
-    });
+      res.cookie('refreshToken', response.refreshToken, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'strict',
+      });
 
-    return res.json({
-      success: true,
-      statusCode: 200,
-      data: {
-        userId: response.userId,
-        name: response.name,
-        email: response.email,
-        userType: response.userType,
-        role: response.role || null,
-        accessToken: response.accessToken,
-        resetRequired: response.resetRequired,
-        status: response.status,
-      },
-    });
+      return res.json({
+        success: true,
+        statusCode: 200,
+        data: {
+          userId: response.userId,
+          name: response.name,
+          email: response.email,
+          userType: response.userType,
+          role: response.role || null,
+          accessToken: response.accessToken,
+          resetRequired: response.resetRequired,
+          status: response.status,
+        },
+      });
+    } catch (error) {
+      this.logger.error(`Login failed for ${userLoginDto.loginId}: ${error.message}`, error.stack);
+      throw error;
+    }
   }
 
   @Get('auth/me')
   async me(@Req() req: any, @Res() res: any): Promise<any> {
     try {
+      this.logger.log('Fetching current user profile (me)');
       const { refreshToken } = req?.cookies || {}; // Handle potential missing cookies
       
       if (!refreshToken) {
@@ -107,7 +120,7 @@ export class UsersController {
         data: responseData,
       });
     } catch (error) {
-      this.logger.error(error);
+      this.logger.error(`Error in me controller: ${error.message}`, error.stack);
       throw new HttpException('Unauthorized', HttpStatus.UNAUTHORIZED);
     }
   }
@@ -120,6 +133,7 @@ export class UsersController {
   })
   async userLogout(@Req() req: any, @Res() res: any): Promise<any> {
     try {
+      this.logger.log('User logout attempt');
       res.cookie('refreshToken', '', {
         httpOnly: true,
         secure: process.env.NODE_ENV === 'production',
@@ -135,6 +149,7 @@ export class UsersController {
 
       return res.json({ success: true });
     } catch (error) {
+      this.logger.error(`Logout failed: ${error.message}`, error.stack);
       throw new HttpException(error.message, error.status);
     }
   }
@@ -148,8 +163,14 @@ export class UsersController {
   })
   @ApiBody({ type: ChangePasswordDto })
   async changePassword(@Req() req, @Body() changePasswordDto: ChangePasswordDto, @Res() res) {
-    const userId = req.user.id; // JwtAuthGuard adds user to req
-    const response = await this.usersService.changePassword(userId, changePasswordDto);
-    return res.json(response);
+    try {
+      const userId = req.user.id; // JwtAuthGuard adds user to req
+      this.logger.log(`Password change attempt for user ID: ${userId}`);
+      const response = await this.usersService.changePassword(userId, changePasswordDto);
+      return res.json(response);
+    } catch (error) {
+      this.logger.error(`Error changing password: ${error.message}`, error.stack);
+      throw error;
+    }
   }
 }
