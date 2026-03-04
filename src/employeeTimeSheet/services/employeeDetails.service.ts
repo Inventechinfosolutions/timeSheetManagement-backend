@@ -431,43 +431,39 @@ export class EmployeeDetailsService {
         query.andWhere('user_filter.status = :activeStatus', { activeStatus: UserStatus.ACTIVE });
 
         if (includeSelf && managerId) {
-             // Include the manager themselves OR those mapped to them
-             // Use LEFT JOIN because the manager might not be in ManagerMapping table as a subordinate
-             query.leftJoin(ManagerMapping, 'mm', 'mm.employeeId = employee.employeeId');
-             
-             query.andWhere(
-                `( 
-                  (mm.managerName LIKE :managerNameQuery OR mm.managerName LIKE :managerIdQuery) 
-                  AND mm.status = :activeMappingStatus 
-                ) OR (
-                  employee.employeeId = :exactManagerId
-                  AND (:searchEmpty = 1 OR employee.fullName LIKE :search OR employee.employeeId LIKE :search)
-                )`, 
-                { 
-                    managerNameQuery: `%${managerName}%`, 
-                    managerIdQuery: `%${managerId}%`,
-                    activeMappingStatus: ManagerMappingStatus.ACTIVE,
-                    exactManagerId: managerId,
-                    searchEmpty: search ? 0 : 1,
-                    search: `%${search}%`,
-                }
-             );
-        } else {
-            // Exclude the manager themselves from their own list (Standard for timesheets)
-            if (managerId) {
-                query.andWhere('employee.employeeId != :excludeManagerId', { excludeManagerId: managerId });
-            }
-
-          query.innerJoin(ManagerMapping, 'mm', 'mm.employeeId = employee.employeeId');
+          // Include the manager themselves OR those mapped to them
+          query.leftJoin(ManagerMapping, 'mm', 'mm.employeeId = employee.employeeId');
           query.andWhere(
-            '(mm.managerName LIKE :managerNameQuery OR mm.managerName LIKE :managerIdQuery)',
+            `( 
+              (mm.managerName LIKE :managerNameQuery OR mm.managerName LIKE :managerIdQuery) 
+              AND mm.status = :activeMappingStatus 
+            ) OR (
+              employee.employeeId = :exactManagerId
+              AND (:searchEmpty = 1 OR employee.fullName LIKE :search OR employee.employeeId LIKE :search)
+            )`,
             {
               managerNameQuery: `%${managerName}%`,
-              managerIdQuery: `%${managerId}%`
+              managerIdQuery: `%${managerId}%`,
+              activeMappingStatus: ManagerMappingStatus.ACTIVE,
+              exactManagerId: managerId,
+              searchEmpty: search ? 0 : 1,
+              search: `%${search}%`,
             }
           );
-          // Ensure only active mappings are considered
-          query.andWhere('mm.status = :status', { status: ManagerMappingStatus.ACTIVE });
+        } else {
+          // Exclude the manager themselves from their own list (standard for timesheets)
+          if (managerId) {
+            query.leftJoin(ManagerMapping, 'mm', 'mm.employeeId = employee.employeeId');
+            query.andWhere(
+              '(mm.managerName LIKE :managerNameQuery OR mm.managerName LIKE :managerIdQuery)',
+              {
+                managerNameQuery: `%${managerName}%`,
+                managerIdQuery: `%${managerId}%`
+              }
+            );
+            query.andWhere('mm.status = :status', { status: ManagerMappingStatus.ACTIVE });
+            query.andWhere('employee.employeeId != :excludeManagerId', { excludeManagerId: managerId });
+          }
         }
       }
 
