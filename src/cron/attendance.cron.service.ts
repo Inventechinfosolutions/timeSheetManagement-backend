@@ -187,6 +187,8 @@ export class AttendanceCronService {
         employeeId: emp.employeeId,
         workingDate: new Date(dateStr),
         status: AttendanceStatus.WEEKEND,
+        firstHalf: AttendanceStatus.WEEKEND,
+        secondHalf: AttendanceStatus.WEEKEND,
         totalHours: 0,
       });
     });
@@ -194,6 +196,8 @@ export class AttendanceCronService {
     // Update NULL status records
     for (const record of nullStatusRecords) {
       record.status = AttendanceStatus.WEEKEND;
+      record.firstHalf = AttendanceStatus.WEEKEND;
+      record.secondHalf = AttendanceStatus.WEEKEND;
       record.totalHours = 0;
     }
 
@@ -267,12 +271,16 @@ export class AttendanceCronService {
         employeeId: emp.employeeId,
         workingDate: new Date(dateStr),
         status: targetStatus,
+        firstHalf: targetStatus,
+        secondHalf: targetStatus,
         totalHours: 0,
       });
     });
 
     for (const record of nullStatusRecords) {
       record.status = targetStatus;
+      record.firstHalf = targetStatus;
+      record.secondHalf = targetStatus;
       record.totalHours = 0;
     }
 

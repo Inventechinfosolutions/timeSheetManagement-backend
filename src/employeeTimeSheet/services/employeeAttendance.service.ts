@@ -255,10 +255,16 @@ export class EmployeeAttendanceService {
 
           existingRecord.status = newStatus;
 
-          if (newStatus === AttendanceStatus.ABSENT) {
-            existingRecord.firstHalf = AttendanceStatus.ABSENT;
-            existingRecord.secondHalf = AttendanceStatus.ABSENT;
-            existingRecord.totalHours = 0; // Ensure 0 is saved
+          if (
+            newStatus === AttendanceStatus.ABSENT ||
+            newStatus === AttendanceStatus.WEEKEND ||
+            newStatus === AttendanceStatus.HOLIDAY ||
+            newStatus === AttendanceStatus.NOT_UPDATED ||
+            newStatus === AttendanceStatus.UPCOMING
+          ) {
+            existingRecord.firstHalf = newStatus as any;
+            existingRecord.secondHalf = newStatus as any;
+            existingRecord.totalHours = newStatus === AttendanceStatus.ABSENT ? 0 : null;
           } else {
             existingRecord.firstHalf = null;
             existingRecord.secondHalf = null;
@@ -352,10 +358,16 @@ export class EmployeeAttendanceService {
 
         newAttendance.status = newStatus;
 
-        if (newAttendance.status === AttendanceStatus.ABSENT) {
-          newAttendance.firstHalf = AttendanceStatus.ABSENT;
-          newAttendance.secondHalf = AttendanceStatus.ABSENT;
-          newAttendance.totalHours = 0; // Ensure 0 is saved
+        if (
+          newAttendance.status === AttendanceStatus.ABSENT ||
+          newAttendance.status === AttendanceStatus.WEEKEND ||
+          newAttendance.status === AttendanceStatus.HOLIDAY ||
+          newAttendance.status === AttendanceStatus.NOT_UPDATED ||
+          newAttendance.status === AttendanceStatus.UPCOMING
+        ) {
+          newAttendance.firstHalf = newAttendance.status as any;
+          newAttendance.secondHalf = newAttendance.status as any;
+          newAttendance.totalHours = newAttendance.status === AttendanceStatus.ABSENT ? 0 : null;
         } else {
           newAttendance.firstHalf = null;
           newAttendance.secondHalf = null;
@@ -817,20 +829,25 @@ export class EmployeeAttendanceService {
           attendance.status = newStatus;
           updateDto.status = newStatus;
 
-          if (newStatus === AttendanceStatus.ABSENT) {
-            attendance.firstHalf = AttendanceStatus.ABSENT;
-            attendance.secondHalf = AttendanceStatus.ABSENT;
-            // Ensure 0 is saved, not null
-            attendance.totalHours = 0;
-            updateDto.firstHalf = AttendanceStatus.ABSENT as any;
-            updateDto.secondHalf = AttendanceStatus.ABSENT as any;
-            updateDto.totalHours = 0;
+          if (
+            newStatus === AttendanceStatus.ABSENT ||
+            newStatus === AttendanceStatus.WEEKEND ||
+            newStatus === AttendanceStatus.HOLIDAY ||
+            newStatus === AttendanceStatus.NOT_UPDATED ||
+            newStatus === AttendanceStatus.UPCOMING
+          ) {
+            attendance.firstHalf = newStatus as any;
+            attendance.secondHalf = newStatus as any;
+            attendance.totalHours = newStatus === AttendanceStatus.ABSENT ? 0 : null;
+            updateDto.firstHalf = newStatus as any;
+            updateDto.secondHalf = newStatus as any;
+            updateDto.totalHours = attendance.totalHours as any;
           } else {
-            // For UPCOMING or NOT_UPDATED (Cleared) or WEEKEND/HOLIDAY
+            // For UPCOMING or NOT_UPDATED (Cleared)
             attendance.firstHalf = null;
             attendance.secondHalf = null;
             attendance.totalHours = null; // Explicitly set to null in DB
-            updateDto.firstHalf = attendance.firstHalf as any;
+            updateDto.firstHalf = null as any;
             updateDto.secondHalf = null as any;
             updateDto.totalHours = null as any;
           }
