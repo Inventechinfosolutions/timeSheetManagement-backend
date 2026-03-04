@@ -591,10 +591,12 @@ export class LeaveRequestsService {
         this.logger.warn(`[CANCEL] Request ${id} not found for employee ${employeeId}`);
         throw new NotFoundException('Request not found');
       }
-      if (request.status !== LeaveRequestStatus.APPROVED) {
-        this.logger.warn(`[CANCEL] Request ${id} is not in APPROVED status. Current status: ${request.status}`);
-        throw new ForbiddenException('Only approved requests can be checked for cancellation');
+      if (request.status !== LeaveRequestStatus.APPROVED && request.status !== LeaveRequestStatus.PENDING) {
+        this.logger.warn(`[CANCEL] Request ${id} is not in APPROVED or PENDING status. Current status: ${request.status}`);
+        throw new ForbiddenException('Only approved or pending requests can be checked for cancellation');
       }
+
+      const isPending = request.status === LeaveRequestStatus.PENDING;
 
       const startDate = dayjs(request.fromDate);
       const endDate = dayjs(request.toDate);
@@ -615,6 +617,7 @@ export class LeaveRequestsService {
             LeaveRequestStatus.CANCELLATION_APPROVED,
             LeaveRequestStatus.REQUESTING_FOR_MODIFICATION,
             LeaveRequestStatus.MODIFICATION_APPROVED,
+            LeaveRequestStatus.CANCELLED,
           ]),
         },
       });
@@ -629,23 +632,27 @@ export class LeaveRequestsService {
         if (isHol) continue;
 
         const currentStr = currentDate.format('YYYY-MM-DD');
-        const isAlreadyCancelled = existingCancellations.some((c) => {
-          const cStart = dayjs(c.fromDate);
-          const cEnd = dayjs(c.toDate);
-          return (currentDate.isSame(cStart, 'day') || currentDate.isAfter(cStart, 'day')) &&
-            (currentDate.isSame(cEnd, 'day') || currentDate.isBefore(cEnd, 'day'));
-        });
 
-        if (isAlreadyCancelled) continue;
+        // For approved requests, skip dates already under a cancellation/modification request
+        if (!isPending) {
+          const isAlreadyCancelled = existingCancellations.some((c) => {
+            const cStart = dayjs(c.fromDate);
+            const cEnd = dayjs(c.toDate);
+            return (currentDate.isSame(cStart, 'day') || currentDate.isAfter(cStart, 'day')) &&
+              (currentDate.isSame(cEnd, 'day') || currentDate.isBefore(cEnd, 'day'));
+          });
+          if (isAlreadyCancelled) continue;
+        }
 
+        // For pending requests: all dates are immediately cancellable (no approval needed to cancel)
         const deadline = currentDate.hour(18).minute(30).second(0);
-        const isCancellable = isPrivileged || now.isBefore(deadline);
+        const isCancellable = isPending ? true : (isPrivileged || now.isBefore(deadline));
 
         results.push({
-          date: currentDate.format('YYYY-MM-DD'),
+          date: currentStr,
           isCancellable,
           reason: isCancellable
-            ? (isPrivileged ? 'Admin/Manager Bypass' : `Deadline: ${deadline.format('DD-MMM HH:mm')}`)
+            ? (isPending ? 'Pending request — cancellable' : (isPrivileged ? 'Admin/Manager Bypass' : `Deadline: ${deadline.format('DD-MMM HH:mm')}`))
             : `Deadline passed (${deadline.format('DD-MMM HH:mm')})`,
         });
       }
@@ -673,10 +680,12 @@ export class LeaveRequestsService {
         this.logger.warn(`[CANCEL] Request ${id} not found for employee ${employeeId}`);
         throw new NotFoundException('Request not found');
       }
-      if (request.status !== LeaveRequestStatus.APPROVED) {
-        this.logger.warn(`[CANCEL] Request ${id} must be APPROVED to cancel dates`);
-        throw new ForbiddenException('Request must be approved');
+      if (request.status !== LeaveRequestStatus.APPROVED && request.status !== LeaveRequestStatus.PENDING) {
+        this.logger.warn(`[CANCEL] Request ${id} must be APPROVED or PENDING to cancel dates. Current: ${request.status}`);
+        throw new ForbiddenException('Request must be approved or pending to cancel dates');
       }
+
+      const isPendingRequest = request.status === LeaveRequestStatus.PENDING;
 
       if (!datesToCancel || datesToCancel.length === 0) {
         throw new BadRequestException('No dates provided for cancellation');
@@ -740,29 +749,64 @@ export class LeaveRequestsService {
 
       const createdRequests: LeaveRequest[] = [];
 
-      for (const range of ranges) {
-        const newRequest = this.leaveRequestRepository.create({
-          ...(request as any),
-          id: undefined,
-          fromDate: range.start,
-          toDate: range.end,
-          status: LeaveRequestStatus.REQUESTING_FOR_CANCELLATION,
-          isRead: false,
-          isReadEmployee: true,
-          createdAt: new Date(),
-          updatedAt: new Date(),
-          duration: range.count,
-        }) as unknown as LeaveRequest;
+      if (isPendingRequest) {
+        // --- PENDING REQUEST CANCELLATION ---
+        // For pending requests: do not split the original plan.
+        // Instead, just create new CANCELLED requests for the selected dates, 
+        // and reduce the duration of the master request. Update boundaries if needed.
 
-        const savedNew = await this.leaveRequestRepository.save(newRequest);
-        await this.copyRequestDocuments(request.id, savedNew.id);
+        for (const range of ranges) {
+          const newRequest = this.leaveRequestRepository.create({
+            ...(request as any),
+            id: undefined,
+            fromDate: range.start,
+            toDate: range.end,
+            status: LeaveRequestStatus.CANCELLED,
+            isRead: false,
+            isReadEmployee: true,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+            duration: request.isHalfDay ? range.count * 0.5 : range.count,
+          }) as unknown as LeaveRequest;
 
-        createdRequests.push(savedNew);
+          const savedNew = await this.leaveRequestRepository.save(newRequest);
+          await this.copyRequestDocuments(request.id, savedNew.id);
+          createdRequests.push(savedNew);
+          this.logger.log(`[CANCEL] Created new CANCELLED row ${savedNew.id} for dates ${range.start} - ${range.end}`);
+        }
 
-        await this.notifyAdminOfCancellationRequest(savedNew, employeeId, range.count).catch(e => this.logger.error(`[CANCEL] notifyAdmin failed: ${e.message}`));
-        await this.notifyManagerOfRequest(savedNew).catch(e => this.logger.error(`[CANCEL] notifyManager failed: ${e.message}`));
-        await this.notifyEmployeeOfSubmission(savedNew).catch(e => this.logger.error(`[CANCEL] notifyEmployee failed: ${e.message}`));
+        // Reduce the duration of the original request
+        const totalCancelledDays = createdRequests.reduce((sum, req) => sum + Number(req.duration || 0), 0);
+        const newDuration = Math.max(0, Number(request.duration || 0) - totalCancelledDays);
+        
+        request.duration = newDuration;
+        
+        // Adjust the boundaries so edge cancelled dates do not show up as the start/end date
+        const cancelledDateSet = new Set(datesToCancel.map(d => dayjs(d).format('YYYY-MM-DD')));
+        const allDates: string[] = [];
+        let cur = dayjs(request.fromDate);
+        const end = dayjs(request.toDate);
+        while (cur.isBefore(end) || cur.isSame(end, 'day')) {
+          allDates.push(cur.format('YYYY-MM-DD'));
+          cur = cur.add(1, 'day');
+        }
+        
+        const remainingDates = allDates.filter(d => !cancelledDateSet.has(d));
 
+        // If all days were cancelled, mark the master request as cancelled too
+        if (newDuration === 0 || remainingDates.length === 0) {
+          request.status = LeaveRequestStatus.CANCELLED;
+          this.logger.log(`[CANCEL] Pending request ${id} fully cancelled.`);
+        } else {
+          // Shrink bounding box to cover only remaining dates
+          request.fromDate = remainingDates[0];
+          request.toDate = remainingDates[remainingDates.length - 1];
+          this.logger.log(`[CANCEL] Pending request ${id} partially cancelled. Original plan left intact with reduced duration ${newDuration}. Bounds shrunk to ${request.fromDate} - ${request.toDate}`);
+        }
+        
+        await this.leaveRequestRepository.save(request);
+
+        // Notify manager and employee about the cancellation
         try {
           const mapping = await this.managerMappingRepository.findOne({ where: { employeeId, status: ManagerMappingStatus.ACTIVE } });
           if (mapping) {
@@ -770,8 +814,8 @@ export class LeaveRequestsService {
             if (manager && manager.loginId) {
               await this.notificationsService.createNotification({
                 employeeId: manager.loginId,
-                title: 'Cancellation Request',
-                message: `${employeeId} requested to Cancel an approved Leave.`,
+                title: 'Pending Request Cancelled',
+                message: `${employeeId} cancelled a pending ${request.requestType} request for selected dates.`,
                 type: 'alert'
               });
             }
@@ -779,11 +823,54 @@ export class LeaveRequestsService {
         } catch (e) {
           this.logger.error(`[CANCEL] App notification failed: ${e.message}`);
         }
+
+      } else {
+        // --- APPROVED REQUEST CANCELLATION (original logic) ---
+        for (const range of ranges) {
+          const newRequest = this.leaveRequestRepository.create({
+            ...(request as any),
+            id: undefined,
+            fromDate: range.start,
+            toDate: range.end,
+            status: LeaveRequestStatus.REQUESTING_FOR_CANCELLATION,
+            isRead: false,
+            isReadEmployee: true,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+            duration: request.isHalfDay ? range.count * 0.5 : range.count,
+          }) as unknown as LeaveRequest;
+
+          const savedNew = await this.leaveRequestRepository.save(newRequest);
+          await this.copyRequestDocuments(request.id, savedNew.id);
+
+          createdRequests.push(savedNew);
+
+          await this.notifyAdminOfCancellationRequest(savedNew, employeeId, range.count).catch(e => this.logger.error(`[CANCEL] notifyAdmin failed: ${e.message}`));
+          await this.notifyManagerOfRequest(savedNew).catch(e => this.logger.error(`[CANCEL] notifyManager failed: ${e.message}`));
+          await this.notifyEmployeeOfSubmission(savedNew).catch(e => this.logger.error(`[CANCEL] notifyEmployee failed: ${e.message}`));
+
+          try {
+            const mapping = await this.managerMappingRepository.findOne({ where: { employeeId, status: ManagerMappingStatus.ACTIVE } });
+            if (mapping) {
+              const manager = await this.userRepository.findOne({ where: { aliasLoginName: mapping.managerName } });
+              if (manager && manager.loginId) {
+                await this.notificationsService.createNotification({
+                  employeeId: manager.loginId,
+                  title: 'Cancellation Request',
+                  message: `${employeeId} requested to Cancel an approved Leave.`,
+                  type: 'alert'
+                });
+              }
+            }
+          } catch (e) {
+            this.logger.error(`[CANCEL] App notification failed: ${e.message}`);
+          }
+        }
       }
 
       this._recalcMonthStatus(employeeId, request.fromDate.toString()).catch(() => { });
 
-      this.logger.log(`[CANCEL] Successfully created ${createdRequests.length} cancellation segments for request ${id}`);
+      this.logger.log(`[CANCEL] Successfully processed ${createdRequests.length} cancellation segment(s) for request ${id}`);
       return createdRequests.length === 1 ? createdRequests[0] : createdRequests;
     } catch (error) {
       this.logger.error(`[CANCEL] cancelApprovedDates failed for ID ${id}: ${error.message}`, error.stack);
@@ -1327,6 +1414,19 @@ export class LeaveRequestsService {
             const startOfDay = targetDate.startOf('day').toDate();
             const endOfDay = targetDate.endOf('day').toDate();
 
+            const isCancelled = await this.leaveRequestRepository.findOne({
+              where: {
+                employeeId: request.employeeId,
+                status: LeaveRequestStatus.CANCELLED,
+                fromDate: LessThanOrEqual(targetDate.format('YYYY-MM-DD')),
+                toDate: MoreThanOrEqual(targetDate.format('YYYY-MM-DD'))
+              }
+            });
+            if (isCancelled) {
+              this.logger.log(`[UPDATE_STATUS] Skipping cancelled date ${targetDate.format('YYYY-MM-DD')}`);
+              continue;
+            }
+
             let attendance = await this.employeeAttendanceRepository.findOne({
               where: { employeeId: request.employeeId, workingDate: Between(startOfDay, endOfDay) }
             });
@@ -1636,7 +1736,7 @@ export class LeaveRequestsService {
       modification.submittedDate = new Date().toISOString().slice(0, 10);
       modification.isRead = true;
       modification.isReadEmployee = false;
-      modification.duration = data.duration || (dayjs(data.toDate).diff(dayjs(data.fromDate), 'day') + 1);
+      modification.duration = data.duration || ((dayjs(data.toDate).diff(dayjs(data.fromDate), 'day') + 1) * (parent.isHalfDay ? 0.5 : 1));
       modification.requestModifiedFrom = data.overrideStatus === LeaveRequestStatus.APPROVED ? parent.requestModifiedFrom : data.sourceRequestType;
 
       const savedModification = await this.leaveRequestRepository.save(modification);
