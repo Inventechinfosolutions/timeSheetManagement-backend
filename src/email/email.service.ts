@@ -17,14 +17,25 @@ export class EmailService {
     });
   }
 
-  async sendEmail(to: string, subject: string, text: string, htmlContent: string, replyTo?: string) {
-    await this.transporter.sendMail({
+  async sendEmail(
+    to: string,
+    subject: string,
+    text: string,
+    htmlContent: string,
+    replyTo?: string,
+    cc?: string[],
+  ) {
+    const mailOptions: Record<string, unknown> = {
       from: process.env.MAIL_FROM || process.env['mail.FROM'],
       to,
       subject,
       text,
       html: htmlContent,
       replyTo,
-    });
+    };
+    if (cc && cc.length > 0) {
+      mailOptions.cc = cc;
+    }
+    await this.transporter.sendMail(mailOptions);
   }
 }

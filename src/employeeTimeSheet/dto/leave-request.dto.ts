@@ -1,10 +1,13 @@
 import { Transform } from 'class-transformer';
 import {
   IsDateString,
+  IsEmail,
   IsNotEmpty,
   IsNumber,
   IsOptional,
   IsString,
+  IsArray,
+  ArrayMaxSize,
 } from 'class-validator';
 
 export class LeaveRequestDto {
@@ -67,4 +70,11 @@ export class LeaveRequestDto {
   @IsString()
   @IsOptional()
   secondHalf?: string;
+
+  /** Optional additional CC email addresses for leave request notifications (max 10). */
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(20)
+  @IsEmail({}, { each: true })
+  ccEmails?: string[];
 }

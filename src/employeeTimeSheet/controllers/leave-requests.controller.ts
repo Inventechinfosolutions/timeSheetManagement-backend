@@ -294,7 +294,7 @@ export class LeaveRequestsController {
   @UseGuards(JwtAuthGuard)
   modifyRequest(
     @Param('id') id: string,
-    @Body() updateData: { title?: string; description?: string; firstHalf?: string; secondHalf?: string; employeeId?: string },
+    @Body() updateData: { title?: string; description?: string; firstHalf?: string; secondHalf?: string; employeeId?: string; ccEmails?: string[] },
     @Req() req: any,
   ) {
     try {
@@ -456,6 +456,17 @@ export class LeaveRequestsController {
       return this.leaveRequestsService.getStats(employeeId, month, year);
     } catch (error) {
       this.logger.error(`Error fetching leave stats for ${employeeId}: ${error.message}`, error.stack);
+      throw error;
+    }
+  }
+
+  @Get('email-config')
+  getLeaveRequestEmailConfig(@Query('employeeId') employeeId: string) {
+    try {
+      this.logger.log(`Fetching leave request email config for employee: ${employeeId}`);
+      return this.leaveRequestsService.getLeaveRequestEmailConfig(employeeId);
+    } catch (error) {
+      this.logger.error(`Error fetching email config for ${employeeId}: ${error.message}`, error.stack);
       throw error;
     }
   }

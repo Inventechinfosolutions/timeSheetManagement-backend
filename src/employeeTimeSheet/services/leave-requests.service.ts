@@ -33,9 +33,17 @@ import { NotificationsService } from '../../notifications/Services/notifications
 import { MasterHolidays } from '../../master/models/master-holidays.entity';
 import { LeaveRequestDto } from '../dto/leave-request.dto';
 
+/** Fallback HR email only when HR_EMAIL env is not set. Set HR_EMAIL in .env (e.g. .env.local) instead of putting real email here. */
+const DEFAULT_HR_EMAIL = 'darshinigb2001@gmail.com';
+
 @Injectable()
 export class LeaveRequestsService {
   private readonly logger = new Logger(LeaveRequestsService.name);
+
+  /** Single HR email. Set HR_EMAIL in .env only. */
+  private getHrEmail(): string {
+    return process.env.HR_EMAIL?.trim() || DEFAULT_HR_EMAIL;
+  }
 
   // Helper to check if weekend based on department
   private async _isWeekend(date: dayjs.Dayjs, employeeId: string): Promise<boolean> {
@@ -249,6 +257,7 @@ export class LeaveRequestsService {
         ...data,
         fromDate: data.fromDate,
         toDate: data.toDate,
+        ccEmails: data.ccEmails?.length ? JSON.stringify(data.ccEmails) : null,
       } as unknown as DeepPartial<LeaveRequest>) as LeaveRequest;
 
       const savedRequest = await this.leaveRequestRepository.save(leaveRequest);
@@ -278,14 +287,17 @@ export class LeaveRequestsService {
           });
 
           if (adminEmail) {
+            const hrEmail = this.getHrEmail();
+            const adminCcList = [hrEmail, ...(data.ccEmails || [])].filter((e): e is string => !!e && e.includes('@'));
             await this.emailService.sendEmail(
               adminEmail,
               subject,
               `New request from ${employee.fullName}`,
               htmlContent,
               employee.email,
+              adminCcList.length > 0 ? adminCcList : undefined,
             );
-            this.logger.log(`[CREATE] Notification sent to Admin (${adminEmail}) for request from ${employee.fullName}`);
+            this.logger.log(`[CREATE] Notification sent to Admin (${adminEmail})${adminCcList.length ? ` with CC: ${adminCcList.join(', ')}` : ''}`);
           }
         }
       } catch (error) {
@@ -375,6 +387,7 @@ export class LeaveRequestsService {
           'lr.firstHalf AS firstHalf',
           'lr.secondHalf AS secondHalf',
           'lr.isHalfDay AS isHalfDay',
+          'lr.ccEmails AS ccEmails',
           'ed.department AS department',
           'ed.fullName AS fullName'
         ]);
@@ -529,6 +542,7 @@ export class LeaveRequestsService {
           'lr.firstHalf AS firstHalf',
           'lr.secondHalf AS secondHalf',
           'lr.isHalfDay AS isHalfDay',
+          'lr.ccEmails AS ccEmails',
           'ed.department AS department',
           'ed.fullName AS fullName'
         ])
@@ -539,7 +553,16 @@ export class LeaveRequestsService {
         throw new NotFoundException(`Leave request with ID ${id} not found`);
       }
 
-      return result;
+      const assignedManagerEmail = await this.getAssignedManagerEmail(result.employeeId);
+      const hrEmail = this.getHrEmail();
+      const ccEmailsParsed = result.ccEmails ? this._parseCcEmails(result.ccEmails) : [];
+
+      return {
+        ...result,
+        assignedManagerEmail: assignedManagerEmail ?? null,
+        hrEmail,
+        ccEmails: ccEmailsParsed,
+      };
     } catch (error) {
       this.logger.error(`[FETCH] findOne failed for ID ${id}: ${error.message}`, error.stack);
       if (error instanceof HttpException) throw error;
@@ -1943,43 +1966,41 @@ export class LeaveRequestsService {
   }
 
   private async notifyManagerOfRequest(request: LeaveRequest) {
-    this.logger.log(`[NOTIFY] Manager for request ${request.id} (${request.status})`);
+    this.logger.log(`[NOTIFY] Manager/HR for request ${request.id} (${request.status})`);
     try {
+      const hrEmail = this.getHrEmail();
+      const parsedCc = this._parseCcEmails(request.ccEmails);
+      const ccList = [hrEmail, ...parsedCc].filter((e): e is string => !!e && e.includes('@'));
+
+      const requester = await this.employeeDetailsRepository.findOne({
+        where: { employeeId: request.employeeId }
+      });
+      const requesterName = requester?.fullName || request.employeeId;
+
+      const actionText = request.status === LeaveRequestStatus.REQUESTING_FOR_CANCELLATION ? 'Cancellation' : request.status === LeaveRequestStatus.CANCELLED ? 'Reverted' : 'New';
+      const emailActionText = request.status === LeaveRequestStatus.REQUESTING_FOR_MODIFICATION ? 'Modification' : actionText;
+
       const mapping = await this.managerMappingRepository.findOne({
         where: { employeeId: request.employeeId, status: ManagerMappingStatus.ACTIVE }
       });
 
+      let sent = false;
       if (mapping) {
         const manager = await this.userRepository.findOne({
           where: { aliasLoginName: mapping.managerName }
         });
 
         if (manager) {
-          const actionText = request.status === LeaveRequestStatus.REQUESTING_FOR_CANCELLATION ? 'Cancellation' : request.status === LeaveRequestStatus.CANCELLED ? 'Reverted' : 'New';
-          const emailActionText = request.status === LeaveRequestStatus.REQUESTING_FOR_MODIFICATION ? 'Modification' : actionText;
-
-          await this.notificationsService.createNotification({
-            employeeId: manager.loginId,
-            title: `${actionText} ${request.requestType} Request`,
-            message: `${mapping.employeeName} has submitted ${actionText === 'New' ? 'a new' : 'a'} ${request.requestType} titled "${request.title}".`,
-            type: 'alert'
-          });
-
           const managerDetails = await this.employeeDetailsRepository.findOne({
             where: { email: manager.loginId }
           }) || await this.employeeDetailsRepository.findOne({
             where: { fullName: mapping.managerName }
           });
-
           const managerEmail = managerDetails?.email || manager.loginId;
 
           if (managerEmail && managerEmail.includes('@')) {
-            const requester = await this.employeeDetailsRepository.findOne({
-              where: { employeeId: request.employeeId }
-            });
-
-            const htmlContent = getRequestNotificationTemplate({
-              employeeName: requester?.fullName || mapping.employeeName,
+            const htmlContentManager = getRequestNotificationTemplate({
+              employeeName: requesterName,
               employeeId: request.employeeId,
               requestType: request.requestType,
               title: request.title,
@@ -1992,19 +2013,88 @@ export class LeaveRequestsService {
               secondHalf: request.secondHalf
             });
 
+            await this.notificationsService.createNotification({
+              employeeId: manager.loginId,
+              title: `${actionText} ${request.requestType} Request`,
+              message: `${mapping.employeeName} has submitted ${actionText === 'New' ? 'a new' : 'a'} ${request.requestType} titled "${request.title}".`,
+              type: 'alert'
+            });
+
             await this.emailService.sendEmail(
               managerEmail,
               `${emailActionText} Request: ${request.requestType} - ${mapping.employeeName}`,
               `${emailActionText} request submitted by ${mapping.employeeName}`,
-              htmlContent
+              htmlContentManager,
+              undefined,
+              ccList
             );
-            this.logger.log(`[NOTIFY] Email sent to manager ${managerEmail}`);
+            this.logger.log(`[NOTIFY] Email sent to manager ${managerEmail} (CC: ${ccList.join(', ')})`);
+            sent = true;
           }
         }
+      }
+
+      if (!sent) {
+        const htmlContentHr = getRequestNotificationTemplate({
+          employeeName: requesterName,
+          employeeId: request.employeeId,
+          requestType: request.requestType,
+          title: request.title,
+          fromDate: request.fromDate.toString(),
+          toDate: request.toDate.toString(),
+          duration: request.duration,
+          status: request.status,
+          recipientName: 'HR',
+          firstHalf: request.firstHalf,
+          secondHalf: request.secondHalf
+        });
+        await this.emailService.sendEmail(
+          hrEmail,
+          `${emailActionText} Request: ${request.requestType} - ${requesterName}`,
+          `${emailActionText} request submitted by ${requesterName}`,
+          htmlContentHr,
+          undefined,
+          parsedCc.length > 0 ? parsedCc : undefined
+        );
+        this.logger.log(`[NOTIFY] No manager mapping; email sent to HR ${hrEmail} (CC: ${parsedCc.join(', ') || 'none'})`);
       }
     } catch (error) {
       this.logger.error(`[NOTIFY] notifyManagerOfRequest failed: ${error.message}`);
     }
+  }
+
+  private _parseCcEmails(ccEmails: string | null): string[] {
+    if (!ccEmails) return [];
+    try {
+      const parsed = JSON.parse(ccEmails);
+      return Array.isArray(parsed) ? parsed.filter((e: unknown) => typeof e === 'string' && e.includes('@')) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  /** Returns assigned manager email and HR email for leave request form (assigned manager = TO, HR = fixed CC). */
+  async getLeaveRequestEmailConfig(employeeId: string): Promise<{ assignedManagerEmail: string | null; hrEmail: string }> {
+    const assignedManagerEmail = await this.getAssignedManagerEmail(employeeId);
+    const hrEmail = this.getHrEmail();
+    return { assignedManagerEmail, hrEmail };
+  }
+
+  private async getAssignedManagerEmail(employeeId: string): Promise<string | null> {
+    const mapping = await this.managerMappingRepository.findOne({
+      where: { employeeId, status: ManagerMappingStatus.ACTIVE }
+    });
+    if (!mapping) return null;
+    const manager = await this.userRepository.findOne({
+      where: { aliasLoginName: mapping.managerName }
+    });
+    if (!manager) return null;
+    const managerDetails = await this.employeeDetailsRepository.findOne({
+      where: { email: manager.loginId }
+    }) || await this.employeeDetailsRepository.findOne({
+      where: { fullName: mapping.managerName }
+    });
+    return (managerDetails?.email || manager.loginId)?.includes('@') ? (managerDetails?.email || manager.loginId) : null;
   }
 
   private async notifyEmployeeOfSubmission(request: LeaveRequest) {
@@ -2090,7 +2180,7 @@ export class LeaveRequestsService {
     return this.findUnifiedRequests({ month, year, employeeId, status, page, limit });
   }
 
-  async modifyRequest(id: number, employeeId: string, updateData: { title?: string; description?: string; firstHalf?: string; secondHalf?: string; datesToModify?: string[] }) {
+  async modifyRequest(id: number, employeeId: string, updateData: { title?: string; description?: string; firstHalf?: string; secondHalf?: string; datesToModify?: string[]; ccEmails?: string[] }) {
     this.logger.log(`[MODIFY_REQUEST] id=${id}, employee=${employeeId}`);
     try {
       const request = await this.leaveRequestRepository.findOne({ where: { id, employeeId } });
@@ -2121,6 +2211,7 @@ export class LeaveRequestsService {
 
       if (updateData.firstHalf !== undefined) updatedData.firstHalf = updateData.firstHalf as WorkLocation | AttendanceStatus;
       if (updateData.secondHalf !== undefined) updatedData.secondHalf = updateData.secondHalf as WorkLocation | AttendanceStatus;
+      if (updateData.ccEmails !== undefined) updatedData.ccEmails = updateData.ccEmails?.length ? JSON.stringify(updateData.ccEmails) : null;
 
       if (updateData.firstHalf || updateData.secondHalf) {
         const newFirstHalf = updateData.firstHalf || request.firstHalf || request.requestType;

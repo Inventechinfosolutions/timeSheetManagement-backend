@@ -75,4 +75,8 @@ export class LeaveRequest extends BaseEntity {
 
   @Column({ name: 'last_modified_date', type: 'timestamp', nullable: true })
   lastModifiedDate: Date;
+
+  /** Optional additional CC email addresses for leave request notifications (JSON array string). */
+  @Column({ name: 'cc_emails', type: 'text', nullable: true })
+  ccEmails: string | null;
 }
