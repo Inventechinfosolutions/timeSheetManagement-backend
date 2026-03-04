@@ -15,17 +15,20 @@ export interface StatusUpdateData {
   reviewedBy?: string;
   firstHalf?: string | null;
   secondHalf?: string | null;
+  employeeId?: string;
+  recipientName?: string;
+  isSelf?: boolean;
 }
 
 export const getStatusUpdateTemplate = (data: StatusUpdateData) => {
   const statusLower = data.status.toLowerCase();
   const isApproved = statusLower.includes('approved') && !statusLower.includes('restored');
-  const isRestored = statusLower.includes('restored') || statusLower.includes('reverted') || statusLower === 'cancelled';
+  const isRestored = false; // We are moving these to orange
   const isRejected = statusLower.includes('rejected');
-  const isCancelled = statusLower === 'cancelled';
+  const isCancelled = statusLower.includes('cancelled') || statusLower.includes('reverted') || statusLower.includes('restored');
   const isCancellation = data.isCancellation || (statusLower.includes('cancel') && statusLower !== 'cancelled');
 
-  const statusColor = isApproved ? '#22c55e' : isRestored ? '#8b5cf6' : isRejected ? '#ef4444' : (isCancelled || statusLower.includes('requesting')) ? '#f97316' : '#6b7280';
+  const statusColor = isApproved ? '#22c55e' : isRejected ? '#ef4444' : (isCancelled || isRestored || statusLower.includes('requesting') || statusLower.includes('pending')) ? '#f97316' : '#6b7280';
 
   // Custom Header/Subject Logic
   let requestDisplayName = data.requestType;
@@ -126,13 +129,26 @@ export const getStatusUpdateTemplate = (data: StatusUpdateData) => {
         </td>
       </tr>
     </table>`;
+  let reviewedByText = "";
+  if (data.reviewedBy && data.reviewedBy.trim()) {
+    if (data.recipientName && data.recipientName.trim().toLowerCase() === data.reviewedBy.trim().toLowerCase()) {
+      reviewedByText = ` reviewed by <strong>you</strong> and`;
+    } else {
+      reviewedByText = ` reviewed by <strong>${data.reviewedBy}</strong> and`;
+    }
+  }
+  const greeting = data.isSelf 
+    ? `Dear ${data.employeeName},`
+    : (data.recipientName ? `Hello ${data.recipientName},` : `Hello,`);
 
-  const reviewedByText = (data.reviewedBy && data.reviewedBy.trim()) ? ` reviewed by <strong>${data.reviewedBy}</strong> and` : "";
+  const introText = data.isSelf
+    ? `Your request for ${requestText} titled "<strong>${data.title}</strong>" has been${reviewedByText} <strong>${displayStatus}</strong>.`
+    : `<strong>${data.employeeName}</strong> ${data.employeeId ? `(EMP-${data.employeeId})` : ''} has a request for ${requestText} titled "<strong>${data.title}</strong>" which has been${reviewedByText} <strong>${displayStatus}</strong>.`;
 
   const content = `
-    <p style="font-family: sans-serif; font-size: 16px; color: #1f2937;">Dear ${data.employeeName},</p>
+    <p style="font-family: sans-serif; font-size: 16px; color: #1f2937;">${greeting}</p>
     <p style="font-family: sans-serif; font-size: 14px; color: #4b5563; line-height: 1.6;">
-      Your request for ${requestText} titled "<strong>${data.title}</strong>" has been${reviewedByText} <strong>${displayStatus}</strong>.
+      ${introText}
     </p>
 
     <table width="100%" border="0" cellspacing="0" cellpadding="0" style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; margin: 25px 0;">
@@ -170,11 +186,11 @@ export const getStatusUpdateTemplate = (data: StatusUpdateData) => {
       <tr>
         <td align="center">
           <!--[if mso]>
-          <v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w="urn:schemas-microsoft-com:office:word" href="https://timesheet.inventech-developer.in" style="height:50px;v-text-anchor:middle;width:200px;" arcsize="16%" stroke="f" fillcolor="#2563eb">
+          <v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w="urn:schemas-microsoft-com:office:word" href="https://timesheet.inventech-developer.in" style="height:32px;v-text-anchor:middle;width:160px;" arcsize="16%" stroke="f" fillcolor="#2563eb">
             <w:anchorlock/>
             <center>
           <![endif]-->
-          <a href="https://timesheet.inventech-developer.in" class="btn" style="background-color:#2563eb;border-radius:8px;color:#ffffff;display:inline-block;font-family:sans-serif;font-size:14px;font-weight:bold;line-height:50px;text-align:center;text-decoration:none;width:200px;-webkit-text-size-adjust:none;">LOGIN TO PORTAL →</a>
+          <a href="https://timesheet.inventech-developer.in" class="btn" style="background-color:#2563eb;border-radius:8px;color:#ffffff;display:inline-block;font-family:sans-serif;font-size:13px;font-weight:bold;line-height:32px;text-align:center;text-decoration:none;width:160px;-webkit-text-size-adjust:none;">LOGIN TO PORTAL →</a>
           <!--[if mso]>
             </center>
           </v:roundrect>

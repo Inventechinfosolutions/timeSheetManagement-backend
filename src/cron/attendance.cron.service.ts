@@ -38,20 +38,36 @@ export class AttendanceCronService {
    */
   private async isLastWorkingDayOfMonth(): Promise<boolean> {
     const today = new Date();
-    let check = new Date(today);
-    check.setDate(today.getDate() + 1);
+    
+    // 1. If today itself is a weekend or holiday, it cannot be a working day.
+    const todayIsWeekend = today.getDay() === 0 || today.getDay() === 6;
+    const todayDateStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+    const todayIsHoliday = !!(await this.masterHolidayService.findByDate(todayDateStr));
+    
+    if (todayIsWeekend || todayIsHoliday) {
+      return false;
+    }
 
-    // Walk forward from tomorrow until we find the next working day
+    // 2. Start from the strict calendar last day of the current month
+    let check = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+
+    // 3. Walk backward from the last calendar day to find the true last working day
     while (true) {
       const isWeekend = check.getDay() === 0 || check.getDay() === 6;
       const dateStr = `${check.getFullYear()}-${String(check.getMonth() + 1).padStart(2, '0')}-${String(check.getDate()).padStart(2, '0')}`;
       const isHoliday = !!(await this.masterHolidayService.findByDate(dateStr));
-      if (!isWeekend && !isHoliday) break;
-      check.setDate(check.getDate() + 1);
+      
+      if (!isWeekend && !isHoliday) {
+        // We found the very last true working day of the month!
+        break;
+      }
+      
+      // Keep stepping backward
+      check.setDate(check.getDate() - 1);
     }
 
-    // If the next working day is in a different month, today is the last working day
-    return check.getMonth() !== today.getMonth();
+    // 4. Return true only if today exactly matches that found last working day
+    return check.getDate() === today.getDate();
   }
 
   // ─── Month-End Last-Working-Day Cron Jobs ───────────────────────────────────

@@ -10,26 +10,40 @@ export interface CancellationData {
   duration: string | number;
   reason?: string;
   actionType?: 'request' | 'revert' | 'revert_back';
+  recipientName?: string;
+  isSelf?: boolean;
 }
 
 export const getCancellationTemplate = (data: CancellationData) => {
   const isRevert = data.actionType === 'revert';
   const isRevertBack = data.actionType === 'revert_back';
 
-  let actionText = 'has submitted a cancellation request for';
+  let actionText = data.isSelf ? 'have submitted a cancellation request for' : 'has submitted a cancellation request for';
   let statusText = 'Pending';
   let statusColor = '#f97316'; // Orange
 
-  if (isRevert || isRevertBack) {
-    actionText = isRevert ? 'has REVERTED their cancellation request for' : 'has REVERTED BACK their pending request for';
+  if (isRevert) {
+    actionText = data.isSelf ? 'have REVERTED your cancellation request for' : 'has REVERTED their cancellation request for';
     statusText = 'REVERTED';
-    statusColor = '#8b5cf6'; // Purple
+    statusColor = '#f97316'; // Orange
+  } else if (isRevertBack) {
+    actionText = data.isSelf ? 'have CANCELLED your pending request for' : 'has CANCELLED their pending request for';
+    statusText = 'CANCELLED';
+    statusColor = '#f97316'; // Orange
   }
 
+  const greeting = data.isSelf 
+    ? `Dear ${data.employeeName},`
+    : (data.recipientName ? `Hello ${data.recipientName},` : `Hello,`);
+
+  const introText = data.isSelf
+    ? `You ${actionText} <strong>${data.requestType}</strong> titled "<strong>${data.title}</strong>".`
+    : `<strong>${data.employeeName}</strong> ${data.employeeId ? `(EMP-${data.employeeId})` : ''} ${actionText} <strong>${data.requestType}</strong> titled "<strong>${data.title}</strong>".`;
+
   const content = `
-    <p style="font-family: sans-serif; font-size: 16px; color: #1f2937;">Hello Admin,</p>
+    <p style="font-family: sans-serif; font-size: 16px; color: #1f2937;">${greeting}</p>
     <p style="font-family: sans-serif; font-size: 14px; color: #4b5563; line-height: 1.6;">
-      <strong>${data.employeeName}</strong> (EMP-${data.employeeId}) ${actionText} <strong>${data.requestType}</strong> titled "<strong>${data.title}</strong>".
+      ${introText}
     </p>
 
     <table width="100%" border="0" cellspacing="0" cellpadding="0" style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; margin: 25px 0;">
@@ -65,11 +79,11 @@ export const getCancellationTemplate = (data: CancellationData) => {
       <tr>
         <td align="center">
           <!--[if mso]>
-          <v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w="urn:schemas-microsoft-com:office:word" href="https://timesheet.inventech-developer.in" style="height:50px;v-text-anchor:middle;width:200px;" arcsize="16%" stroke="f" fillcolor="#2563eb">
+          <v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w="urn:schemas-microsoft-com:office:word" href="https://timesheet.inventech-developer.in" style="height:32px;v-text-anchor:middle;width:160px;" arcsize="16%" stroke="f" fillcolor="#2563eb">
             <w:anchorlock/>
             <center>
           <![endif]-->
-          <a href="https://timesheet.inventech-developer.in" class="btn" style="background-color:#2563eb;border-radius:8px;color:#ffffff;display:inline-block;font-family:sans-serif;font-size:14px;font-weight:bold;line-height:50px;text-align:center;text-decoration:none;width:200px;-webkit-text-size-adjust:none;">LOGIN TO PORTAL →</a>
+          <a href="https://timesheet.inventech-developer.in" class="btn" style="background-color:#2563eb;border-radius:8px;color:#ffffff;display:inline-block;font-family:sans-serif;font-size:13px;font-weight:bold;line-height:32px;text-align:center;text-decoration:none;width:160px;-webkit-text-size-adjust:none;">LOGIN TO PORTAL →</a>
           <!--[if mso]>
             </center>
           </v:roundrect>
@@ -80,7 +94,7 @@ export const getCancellationTemplate = (data: CancellationData) => {
   `;
 
 
-  const headerLabel = isRevert ? 'CANCELLATION REVERTED' : isRevertBack ? `${data.requestType} REVERTED` : `${data.requestType} CANCELLATION`;
+  const headerLabel = isRevert ? 'CANCELLATION REVERTED' : isRevertBack ? `${data.requestType} CANCELLED` : `${data.requestType} CANCELLATION`;
 
   return baseLayout(content, `${data.requestType} Update`, headerLabel);
 };

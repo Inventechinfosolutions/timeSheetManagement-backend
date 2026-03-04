@@ -1016,6 +1016,27 @@ export class EmployeeDetailsService {
     }
   }
 
+  async removeProfileImage(employeeId: number): Promise<any> {
+    try {
+      this.logger.log(`Removing profile image for employee ID: ${employeeId}`);
+      const docs = await this.getProfileImage(employeeId);
+      if (!docs || docs.length === 0) {
+        throw new NotFoundException('No profile image found to remove');
+      }
+
+      for (const doc of docs) {
+        await this.documentUploaderService.deleteDoc(doc.key);
+      }
+
+      this.logger.log(`Profile image(s) removed for employee ID: ${employeeId}`);
+      return { message: 'Profile image removed successfully' };
+    } catch (error) {
+      this.logger.error(`Error removing profile image for employee ${employeeId}: ${error.message}`, error.stack);
+      if (error instanceof HttpException) throw error;
+      throw new HttpException('Error removing profile image', HttpStatus.INTERNAL_SERVER_ERROR);
+    }
+  }
+
   async getProfileImageStream(employeeId: number) {
     this.logger.log(`Fetching profile image stream for employee ID: ${employeeId}`);
     try {

@@ -450,4 +450,26 @@ export class EmployeeDetailsController {
       return res.sendStatus(204);
     }
   }
+
+  @Delete('profile-image/:employeeId')
+  @ApiOperation({ summary: 'Delete profile image' })
+  async deleteProfileImage(@Param('employeeId') employeeIdStr: string) {
+    try {
+      this.logger.log(`Deleting profile image for employee: ${employeeIdStr}`);
+      let employee;
+      try {
+        employee = await this.employeeDetailsService.findByEmployeeId(employeeIdStr);
+      } catch (e) {
+        if (!isNaN(Number(employeeIdStr))) {
+          employee = await this.employeeDetailsService.getEmployeeById(Number(employeeIdStr));
+        } else {
+          throw e;
+        }
+      }
+      return await this.employeeDetailsService.removeProfileImage(employee.id);
+    } catch (error) {
+      this.logger.error(`Error deleting profile image for ${employeeIdStr}: ${error.message}`, error.stack);
+      throw error;
+    }
+  }
 }
