@@ -260,47 +260,6 @@ export class LeaveRequestsService {
       const savedRequest = await this.leaveRequestRepository.save(leaveRequest);
       this.logger.log(`[CREATE] Successfully saved leave request ID: ${savedRequest.id} for employee: ${data.employeeId}`);
 
-      // --- NOTIFICATIONS ---
-      try {
-        const employee = await this.employeeDetailsRepository.findOne({
-          where: { employeeId: data.employeeId },
-        });
-
-        if (employee) {
-          const adminEmail = process.env.ADMIN_EMAIL || process.env.SMTP_USERNAME;
-          const requestTypeLabel = (data.requestType === LeaveRequestType.APPLY_LEAVE ? AttendanceStatus.LEAVE : data.requestType) || 'Request';
-          const subject = `New ${requestTypeLabel} Request - ${employee.fullName}`;
-
-          const htmlContent = getRequestNotificationTemplate({
-            employeeName: employee.fullName || 'Employee',
-            employeeId: employee.employeeId,
-            requestType: requestTypeLabel,
-            title: data.title || 'No Title',
-            fromDate: data.fromDate?.toString() || '',
-            toDate: data.toDate?.toString() || '',
-            duration: data.duration || 0,
-            status: LeaveRequestStatus.PENDING,
-            description: data.description || 'N/A'
-          });
-
-          if (adminEmail) {
-            const hrEmail = this.getHrEmail();
-            const adminCcList = [hrEmail, ...(data.ccEmails || [])].filter((e): e is string => !!e && e.includes('@'));
-            await this.emailService.sendEmail(
-              adminEmail,
-              subject,
-              `New request from ${employee.fullName}`,
-              htmlContent,
-              employee.email,
-              adminCcList.length > 0 ? adminCcList : undefined,
-            );
-            this.logger.log(`[CREATE] Notification sent to Admin (${adminEmail})${adminCcList.length ? ` with CC: ${adminCcList.join(', ')}` : ''}`);
-          }
-        }
-      } catch (error) {
-        this.logger.error(`[CREATE] Failed to send admin notification: ${error.message}`);
-      }
-
       // Link orphaned documents
       try {
         const employee = await this.employeeDetailsRepository.findOne({
@@ -380,6 +339,7 @@ export class LeaveRequestsService {
           'lr.submittedDate AS submittedDate',
           'lr.duration AS duration',
           'lr.createdAt AS createdAt',
+          'lr.updatedAt AS updatedAt',
           'lr.requestModifiedFrom AS requestModifiedFrom',
           'lr.firstHalf AS firstHalf',
           'lr.secondHalf AS secondHalf',
@@ -460,22 +420,8 @@ export class LeaveRequestsService {
       const total = await query.getCount();
 
       const data = await query
-        .addSelect(`CASE 
-          WHEN lr.status = '${LeaveRequestStatus.PENDING}' THEN 1 
-          WHEN lr.status = '${LeaveRequestStatus.REQUESTING_FOR_MODIFICATION}' THEN 2
-          WHEN lr.status = '${LeaveRequestStatus.REQUESTING_FOR_CANCELLATION}' THEN 2
-          WHEN lr.status = '${LeaveRequestStatus.APPROVED}' THEN 3
-          WHEN lr.status = '${LeaveRequestStatus.CANCELLATION_APPROVED}' THEN 4
-          WHEN lr.status = '${LeaveRequestStatus.CANCELLATION_REJECTED}' THEN 5
-          WHEN lr.status = '${LeaveRequestStatus.MODIFICATION_APPROVED}' THEN 4
-          WHEN lr.status = '${LeaveRequestStatus.MODIFICATION_CANCELLED}' THEN 5
-          WHEN lr.status = '${LeaveRequestStatus.CANCELLATION_REVERTED}' THEN 5
-          WHEN lr.status = '${LeaveRequestStatus.REQUEST_MODIFIED}' THEN 6
-          WHEN lr.status = '${LeaveRequestStatus.REJECTED}' THEN 6
-          WHEN lr.status = '${LeaveRequestStatus.CANCELLED}' THEN 7
-          ELSE 8 
-        END`, 'priority')
-        .orderBy('priority', 'ASC')
+        .orderBy('lr.createdAt', 'DESC')
+        .addOrderBy('lr.updatedAt', 'DESC')
         .addOrderBy('lr.id', 'DESC')
         .offset((page - 1) * limit)
         .limit(limit)
@@ -872,14 +818,21 @@ export class LeaveRequestsService {
             reason: request.description
           });
 
+          const managerEmail = await this.getAssignedManagerEmail(request.employeeId);
+          const hrEmail = this.getHrEmail();
+          const parsedCc = this._parseCcEmails(request.ccEmails);
+          const cancelReqCc = [managerEmail, hrEmail, ...parsedCc].filter((e): e is string => !!e && e.includes('@'));
+          const cancelReqCcList = [...new Set(cancelReqCc)].filter(e => e.toLowerCase() !== (adminEmail || '').toLowerCase());
+
           await this.emailService.sendEmail(
             adminEmail,
             subject,
             `Cancellation requested by ${employee.fullName}`,
             htmlContent,
-            employee.email
+            employee.email,
+            cancelReqCcList.length > 0 ? cancelReqCcList : undefined
           );
-          this.logger.log(`[NOTIFY] Cancellation notification sent to Admin (${adminEmail}) for ${employee.fullName}`);
+          this.logger.log(`[NOTIFY] Cancellation notification sent to Admin (CC: Manager, HR, CC) for ${employee.fullName}`);
         }
       }
     } catch (error) {
@@ -972,10 +925,10 @@ export class LeaveRequestsService {
         const employee = await this.employeeDetailsRepository.findOne({
           where: { employeeId: request.employeeId },
         });
-        const adminEmail = process.env.ADMIN_EMAIL || process.env.SMTP_USERNAME;
+        const adminEmail = (process.env.ADMIN_EMAIL || process.env.SMTP_USERNAME)?.trim();
 
         if (employee) {
-          // 1. Admin Email
+          // 1. One email to Admin with CC: Manager, HR, and additional CC so everyone gets the revert notification once
           if (adminEmail) {
             const adminSubject = `Cancellation Reverted: ${request.requestType} - ${employee.fullName}`;
             const adminHtml = getCancellationTemplate({
@@ -988,45 +941,23 @@ export class LeaveRequestsService {
               duration: request.duration,
               actionType: 'revert',
             });
-            await this.emailService.sendEmail(adminEmail, adminSubject, 'Cancellation Reverted', adminHtml);
-            this.logger.log(`[UNDO_CANCEL] Revert notification sent to Admin (${adminEmail})`);
+            const managerEmail = await this.getAssignedManagerEmail(request.employeeId);
+            const hrEmail = this.getHrEmail();
+            const parsedCc = this._parseCcEmails(request.ccEmails);
+            const revertCc = [managerEmail, hrEmail, ...parsedCc].filter((e): e is string => !!e && e.includes('@'));
+            const revertCcList = [...new Set(revertCc)].filter(e => e.toLowerCase() !== adminEmail.toLowerCase());
+            await this.emailService.sendEmail(
+              adminEmail,
+              adminSubject,
+              'Cancellation Reverted',
+              adminHtml,
+              undefined,
+              revertCcList.length > 0 ? revertCcList : undefined
+            );
+            this.logger.log(`[UNDO_CANCEL] Revert notification sent to Admin (CC: Manager, HR, CC)`);
           }
 
-          // 2. Manager Email
-          const mapping = await this.managerMappingRepository.findOne({
-            where: { employeeId: request.employeeId, status: ManagerMappingStatus.ACTIVE }
-          });
-
-          if (mapping) {
-            const manager = await this.userRepository.findOne({
-              where: { aliasLoginName: mapping.managerName }
-            });
-
-            const managerDetails = await this.employeeDetailsRepository.findOne({
-              where: { email: manager?.loginId }
-            }) || await this.employeeDetailsRepository.findOne({
-              where: { fullName: mapping.managerName }
-            });
-            const managerEmail = managerDetails?.email || manager?.loginId;
-
-            if (managerEmail && managerEmail.includes('@')) {
-              const managerSubject = `Cancellation Reverted: ${request.requestType} - ${employee.fullName}`;
-              const managerHtml = getCancellationTemplate({
-                employeeName: employee.fullName,
-                employeeId: employee.employeeId,
-                requestType: request.requestType,
-                title: request.title,
-                fromDate: request.fromDate.toString(),
-                toDate: request.toDate.toString(),
-                duration: request.duration,
-                actionType: 'revert',
-              });
-              await this.emailService.sendEmail(managerEmail, managerSubject, 'Cancellation Reverted', managerHtml);
-              this.logger.log(`[UNDO_CANCEL] Revert notification sent to Manager (${managerEmail})`);
-            }
-          }
-
-          // 3. Employee Email
+          // 2. Employee Email
           if (employee.email) {
             const empSubject = `Cancellation Reverted: ${request.requestType} - ${request.title}`;
             const empHtml = getStatusUpdateTemplate({
@@ -1103,7 +1034,7 @@ export class LeaveRequestsService {
         });
 
         if (employee) {
-          const adminEmail = process.env.ADMIN_EMAIL || process.env.SMTP_USERNAME;
+          const adminEmail = (process.env.ADMIN_EMAIL || process.env.SMTP_USERNAME)?.trim();
 
           if (adminEmail) {
             const requestTypeLabel =
@@ -1122,13 +1053,21 @@ export class LeaveRequestsService {
               actionType: 'revert_back'
             });
 
+            const managerEmail = await this.getAssignedManagerEmail(request.employeeId);
+            const hrEmail = this.getHrEmail();
+            const parsedCc = this._parseCcEmails(request.ccEmails);
+            const revertBackCc = [managerEmail, hrEmail, ...parsedCc].filter((e): e is string => !!e && e.includes('@'));
+            const revertBackCcList = [...new Set(revertBackCc)].filter(e => e.toLowerCase() !== adminEmail.toLowerCase());
+
             await this.emailService.sendEmail(
               adminEmail,
               subject,
               `Request Reverted Back by ${employee.fullName}`,
               htmlContent,
+              undefined,
+              revertBackCcList.length > 0 ? revertBackCcList : undefined
             );
-            this.logger.log(`[DELETE] Revert back notification sent to admin: ${adminEmail}`);
+            this.logger.log(`[DELETE] Revert back notification sent to admin (CC: Manager, HR, CC)`);
           }
         }
       } catch (notifyError) {
@@ -1482,7 +1421,7 @@ export class LeaveRequestsService {
         const employee = await this.employeeDetailsRepository.findOne({ where: { employeeId: request.employeeId } });
         if (employee) {
           if (status === LeaveRequestStatus.CANCELLED && previousStatus === LeaveRequestStatus.PENDING) {
-            const adminEmail = process.env.ADMIN_EMAIL || process.env.SMTP_USERNAME;
+            const adminEmail = (process.env.ADMIN_EMAIL || process.env.SMTP_USERNAME)?.trim();
             if (adminEmail) {
               const requestTypeLabel = request.requestType === LeaveRequestType.APPLY_LEAVE ? AttendanceStatus.LEAVE : request.requestType;
               const adminHtml = getCancellationTemplate({
@@ -1496,7 +1435,20 @@ export class LeaveRequestsService {
                 reason: request.description,
                 actionType: 'revert_back',
               });
-              await this.emailService.sendEmail(adminEmail, `Request Cancelled: ${requestTypeLabel} - ${employee.fullName}`, `Request Cancelled by ${employee.fullName}`, adminHtml);
+              const managerEmail = await this.getAssignedManagerEmail(request.employeeId);
+              const hrEmail = this.getHrEmail();
+              const parsedCc = this._parseCcEmails(request.ccEmails);
+              const cancelCc = [managerEmail, hrEmail, ...parsedCc].filter((e): e is string => !!e && e.includes('@'));
+              const cancelCcList = [...new Set(cancelCc)].filter(e => e.toLowerCase() !== adminEmail.toLowerCase());
+              await this.emailService.sendEmail(
+                adminEmail,
+                `Request Cancelled: ${requestTypeLabel} - ${employee.fullName}`,
+                `Request Cancelled by ${employee.fullName}`,
+                adminHtml,
+                undefined,
+                cancelCcList.length > 0 ? cancelCcList : undefined
+              );
+              this.logger.log(`[UPDATE_STATUS] Employee self-cancel notification sent to Admin (CC: Manager, HR, CC)`);
             }
           }
 
@@ -1545,6 +1497,50 @@ export class LeaveRequestsService {
           }
         } catch (error) {
           this.logger.error(`[UPDATE_STATUS] Reviewer email failed: ${error.message}`);
+        }
+      }
+
+      // Decision notification to HR, assigned manager, and CC so everyone gets the decision once.
+      // Skip for employee self-cancel (CANCELLED from PENDING) — they already got one email above (Admin with CC everyone).
+      const isEmployeeSelfCancel = status === LeaveRequestStatus.CANCELLED && previousStatus === LeaveRequestStatus.PENDING;
+      if (!isEmployeeSelfCancel) {
+        try {
+          const hrEmail = this.getHrEmail();
+          const managerEmail = await this.getAssignedManagerEmail(request.employeeId);
+          if (hrEmail && hrEmail.includes('@')) {
+            const parsedCc = this._parseCcEmails(request.ccEmails);
+            const adminEmail = (process.env.ADMIN_EMAIL || process.env.SMTP_USERNAME)?.trim();
+            const decisionCc = [adminEmail, managerEmail, ...parsedCc].filter((e): e is string => !!e && e.includes('@'));
+            const ccList = [...new Set(decisionCc)].filter(e => e.toLowerCase() !== hrEmail.toLowerCase());
+            const employee = await this.employeeDetailsRepository.findOne({ where: { employeeId: request.employeeId } });
+            if (employee) {
+              const isCancellation = status === LeaveRequestStatus.CANCELLATION_APPROVED;
+              const htmlContent = getStatusUpdateTemplate({
+                employeeName: employee.fullName,
+                requestType: request.requestType,
+                title: request.title,
+                fromDate: dayjs(request.fromDate).format('YYYY-MM-DD'),
+                toDate: dayjs(request.toDate).format('YYYY-MM-DD'),
+                duration: request.duration || 0,
+                status: status as any,
+                isCancellation,
+                reviewedBy: request.reviewedBy || '',
+                firstHalf: request.firstHalf,
+                secondHalf: request.secondHalf
+              });
+              await this.emailService.sendEmail(
+                hrEmail,
+                `Decision: ${request.requestType} Request ${status} - ${employee.fullName}`,
+                `Request status updated to ${status} by ${request.reviewedBy || 'Reviewer'}`,
+                htmlContent,
+                undefined,
+                ccList.length > 0 ? ccList : undefined
+              );
+              this.logger.log(`[UPDATE_STATUS] Decision notification sent to HR, Manager, and CC`);
+            }
+          }
+        } catch (err) {
+          this.logger.error(`[UPDATE_STATUS] Decision notification to HR/CC failed: ${err.message}`);
         }
       }
 
@@ -1764,6 +1760,37 @@ export class LeaveRequestsService {
         }
       }
 
+      try {
+        const hrEmail = this.getHrEmail();
+        const managerEmail = await this.getAssignedManagerEmail(request.employeeId);
+        if (hrEmail && hrEmail.includes('@')) {
+          const parsedCc = this._parseCcEmails(request.ccEmails);
+          const adminEmail = (process.env.ADMIN_EMAIL || process.env.SMTP_USERNAME)?.trim();
+          const decisionCc = [adminEmail, managerEmail, ...parsedCc].filter((e): e is string => !!e && e.includes('@'));
+          const ccList = [...new Set(decisionCc)].filter(e => e.toLowerCase() !== hrEmail.toLowerCase());
+          const emp = await this.employeeDetailsRepository.findOne({ where: { employeeId: request.employeeId } });
+          if (emp) {
+            const emailBody = getStatusUpdateTemplate({
+              employeeName: emp.fullName,
+              requestType: request.requestType,
+              title: request.title,
+              fromDate: checkStart,
+              toDate: checkEnd,
+              duration: request.duration || 0,
+              status: LeaveRequestStatus.CANCELLATION_REJECTED as any,
+              isCancellation: true,
+              reviewedBy: request.reviewedBy || '',
+              firstHalf: request.firstHalf,
+              secondHalf: request.secondHalf
+            });
+            await this.emailService.sendEmail(hrEmail, `Decision: Cancellation Rejected - ${emp.fullName}`, 'Cancellation request was rejected.', emailBody, undefined, ccList.length > 0 ? ccList : undefined);
+            this.logger.log(`[REJECT_CANCELLATION] Decision notification sent to HR, Manager, and CC`);
+          }
+        }
+      } catch (err) {
+        this.logger.error(`[REJECT_CANCELLATION] Decision notification to HR/CC failed: ${err.message}`);
+      }
+
       this._recalcMonthStatus(request.employeeId, String(request.fromDate)).catch(() => { });
       this.logger.log(`[REJECT_CANCELLATION] Successfully rejected cancellation for request ${id}`);
       return request;
@@ -1850,7 +1877,7 @@ export class LeaveRequestsService {
 
       try {
         const employee = await this.employeeDetailsRepository.findOne({ where: { employeeId } });
-        const adminEmail = process.env.ADMIN_EMAIL || process.env.SMTP_USERNAME;
+        const adminEmail = (process.env.ADMIN_EMAIL || process.env.SMTP_USERNAME)?.trim();
 
         if (employee && adminEmail) {
           const htmlContent = getCancellationTemplate({
@@ -1869,6 +1896,7 @@ export class LeaveRequestsService {
         this.logger.error(`[CANCEL_APPROVED] Admin notification failed: ${error.message}`);
       }
 
+      // HR and CC get this via notifyManagerOfRequest (sends to Manager with CC: Admin, HR, CC)
       await this.notifyManagerOfRequest(request);
       await this.notifyEmployeeOfSubmission(request);
 
@@ -1965,9 +1993,11 @@ export class LeaveRequestsService {
   private async notifyManagerOfRequest(request: LeaveRequest) {
     this.logger.log(`[NOTIFY] Manager/HR for request ${request.id} (${request.status})`);
     try {
+      const adminEmail = (process.env.ADMIN_EMAIL || process.env.SMTP_USERNAME)?.trim();
       const hrEmail = this.getHrEmail();
       const parsedCc = this._parseCcEmails(request.ccEmails);
-      const ccList = [hrEmail, ...parsedCc].filter((e): e is string => !!e && e.includes('@'));
+      const allCc = [adminEmail, hrEmail, ...parsedCc].filter((e): e is string => !!e && e.includes('@'));
+      const ccList = [...new Set(allCc)];
 
       const requester = await this.employeeDetailsRepository.findOne({
         where: { employeeId: request.employeeId }
@@ -2017,15 +2047,16 @@ export class LeaveRequestsService {
               type: 'alert'
             });
 
+            const ccForManager = ccList.filter(e => e.toLowerCase() !== managerEmail.toLowerCase());
             await this.emailService.sendEmail(
               managerEmail,
               `${emailActionText} Request: ${request.requestType} - ${mapping.employeeName}`,
               `${emailActionText} request submitted by ${mapping.employeeName}`,
               htmlContentManager,
               undefined,
-              ccList
+              ccForManager.length > 0 ? ccForManager : undefined
             );
-            this.logger.log(`[NOTIFY] Email sent to manager ${managerEmail} (CC: ${ccList.join(', ')})`);
+            this.logger.log(`[NOTIFY] Email sent to manager ${managerEmail} (CC: ${ccForManager.join(', ')})`);
             sent = true;
           }
         }
@@ -2045,15 +2076,16 @@ export class LeaveRequestsService {
           firstHalf: request.firstHalf,
           secondHalf: request.secondHalf
         });
+        const ccForHr = ccList.filter(e => e.toLowerCase() !== hrEmail.toLowerCase());
         await this.emailService.sendEmail(
           hrEmail,
           `${emailActionText} Request: ${request.requestType} - ${requesterName}`,
           `${emailActionText} request submitted by ${requesterName}`,
           htmlContentHr,
           undefined,
-          parsedCc.length > 0 ? parsedCc : undefined
+          ccForHr.length > 0 ? ccForHr : undefined
         );
-        this.logger.log(`[NOTIFY] No manager mapping; email sent to HR ${hrEmail} (CC: ${parsedCc.join(', ') || 'none'})`);
+        this.logger.log(`[NOTIFY] No manager mapping; email sent to HR ${hrEmail} (CC: ${ccForHr.join(', ') || 'none'})`);
       }
     } catch (error) {
       this.logger.error(`[NOTIFY] notifyManagerOfRequest failed: ${error.message}`);
@@ -2386,6 +2418,68 @@ export class LeaveRequestsService {
 
       request.status = LeaveRequestStatus.MODIFICATION_CANCELLED;
       await this.leaveRequestRepository.save(request);
+
+      // Notifications: everyone gets the MODIFICATION_CANCELLED update
+      try {
+        const employee = await this.employeeDetailsRepository.findOne({ where: { employeeId: request.employeeId } });
+        if (employee) {
+          if (employee.email) {
+            const empHtml = getStatusUpdateTemplate({
+              employeeName: employee.fullName,
+              requestType: request.requestType,
+              title: request.title,
+              fromDate: request.fromDate.toString(),
+              toDate: request.toDate.toString(),
+              duration: request.duration || 0,
+              status: LeaveRequestStatus.MODIFICATION_CANCELLED as any,
+              isCancellation: false,
+              reviewedBy: '',
+              firstHalf: request.firstHalf,
+              secondHalf: request.secondHalf
+            });
+            await this.emailService.sendEmail(
+              employee.email,
+              `${request.requestType} Request ${LeaveRequestStatus.MODIFICATION_CANCELLED}`,
+              'Your modification request has been cancelled.',
+              empHtml
+            );
+            this.logger.log(`[UNDO_MODIFY] Notification sent to employee ${employee.email}`);
+          }
+
+          const hrEmail = this.getHrEmail();
+          if (hrEmail && hrEmail.includes('@')) {
+            const managerEmail = await this.getAssignedManagerEmail(request.employeeId);
+            const parsedCc = this._parseCcEmails(request.ccEmails);
+            const adminEmail = (process.env.ADMIN_EMAIL || process.env.SMTP_USERNAME)?.trim();
+            const decisionCc = [adminEmail, managerEmail, ...parsedCc].filter((e): e is string => !!e && e.includes('@'));
+            const ccList = [...new Set(decisionCc)].filter(e => e.toLowerCase() !== hrEmail.toLowerCase());
+            const decisionHtml = getStatusUpdateTemplate({
+              employeeName: employee.fullName,
+              requestType: request.requestType,
+              title: request.title,
+              fromDate: request.fromDate.toString(),
+              toDate: request.toDate.toString(),
+              duration: request.duration || 0,
+              status: LeaveRequestStatus.MODIFICATION_CANCELLED as any,
+              isCancellation: false,
+              reviewedBy: '',
+              firstHalf: request.firstHalf,
+              secondHalf: request.secondHalf
+            });
+            await this.emailService.sendEmail(
+              hrEmail,
+              `Decision: ${request.requestType} Request ${LeaveRequestStatus.MODIFICATION_CANCELLED} - ${employee.fullName}`,
+              'Modification request has been cancelled.',
+              decisionHtml,
+              undefined,
+              ccList.length > 0 ? ccList : undefined
+            );
+            this.logger.log(`[UNDO_MODIFY] Decision notification sent to HR, Manager, and CC`);
+          }
+        }
+      } catch (err) {
+        this.logger.error(`[UNDO_MODIFY] Notification failed: ${err.message}`);
+      }
 
       this._recalcMonthStatus(employeeId, String(request.fromDate)).catch(() => { });
       this.logger.log(`[UNDO_MODIFY] Successfully cancelled modification request ${id}`);
