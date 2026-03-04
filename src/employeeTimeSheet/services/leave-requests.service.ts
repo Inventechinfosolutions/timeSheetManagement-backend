@@ -33,16 +33,13 @@ import { NotificationsService } from '../../notifications/Services/notifications
 import { MasterHolidays } from '../../master/models/master-holidays.entity';
 import { LeaveRequestDto } from '../dto/leave-request.dto';
 
-/** Fallback HR email only when HR_EMAIL env is not set. Set HR_EMAIL in .env (e.g. .env.local) instead of putting real email here. */
-const DEFAULT_HR_EMAIL = 'darshinigb2001@gmail.com';
-
 @Injectable()
 export class LeaveRequestsService {
   private readonly logger = new Logger(LeaveRequestsService.name);
 
-  /** Single HR email. Set HR_EMAIL in .env only. */
+  /** Single source: HR email from .env (HR_EMAIL) only. No default in code. */
   private getHrEmail(): string {
-    return process.env.HR_EMAIL?.trim() || DEFAULT_HR_EMAIL;
+    return process.env.HR_EMAIL?.trim() ?? '';
   }
 
   // Helper to check if weekend based on department
@@ -2034,7 +2031,7 @@ export class LeaveRequestsService {
         }
       }
 
-      if (!sent) {
+      if (!sent && hrEmail && hrEmail.includes('@')) {
         const htmlContentHr = getRequestNotificationTemplate({
           employeeName: requesterName,
           employeeId: request.employeeId,
