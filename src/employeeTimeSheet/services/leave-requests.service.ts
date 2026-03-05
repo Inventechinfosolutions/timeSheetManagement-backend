@@ -634,14 +634,12 @@ export class LeaveRequestsService {
 
       const existingCancellations = await this.leaveRequestRepository.find({
         where: {
-          employeeId,
-          requestType: request.requestType,
+          requestModifiedFrom: id.toString(),
           status: In([
             LeaveRequestStatus.REQUESTING_FOR_CANCELLATION,
             LeaveRequestStatus.CANCELLATION_APPROVED,
             LeaveRequestStatus.REQUESTING_FOR_MODIFICATION,
             LeaveRequestStatus.MODIFICATION_APPROVED,
-            LeaveRequestStatus.CANCELLED,
           ]),
         },
       });
@@ -1117,19 +1115,6 @@ export class LeaveRequestsService {
 
             const startOfDay = targetDate.startOf('day').toDate();
             const endOfDay = targetDate.endOf('day').toDate();
-
-            const isCancelled = await this.leaveRequestRepository.findOne({
-              where: {
-                employeeId: request.employeeId,
-                status: LeaveRequestStatus.CANCELLED,
-                fromDate: LessThanOrEqual(targetDate.format('YYYY-MM-DD')),
-                toDate: MoreThanOrEqual(targetDate.format('YYYY-MM-DD'))
-              }
-            });
-            if (isCancelled) {
-              this.logger.log(`[UPDATE_STATUS] Skipping cancelled date ${targetDate.format('YYYY-MM-DD')}`);
-              continue;
-            }
 
             let attendance = await this.employeeAttendanceRepository.findOne({
               where: { employeeId: request.employeeId, workingDate: Between(startOfDay, endOfDay) }
