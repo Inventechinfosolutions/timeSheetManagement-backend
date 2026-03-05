@@ -71,10 +71,14 @@ export class LeaveRequestDto {
   @IsOptional()
   secondHalf?: string;
 
-  /** Optional additional CC email addresses for leave request notifications (max 10). */
   @IsOptional()
   @IsArray()
   @ArrayMaxSize(20)
   @IsEmail({}, { each: true })
   ccEmails?: string[];
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  documentKeys?: string[];
 }
