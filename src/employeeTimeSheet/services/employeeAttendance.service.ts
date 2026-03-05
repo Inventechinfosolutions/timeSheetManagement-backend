@@ -139,6 +139,33 @@ export class EmployeeAttendanceService {
       const endOfDay = new Date(createEmployeeAttendanceDto.workingDate);
       endOfDay.setHours(23, 59, 59, 999);
 
+      // --- Holiday/Weekend Blocking Logic (Start) ---
+      const dateStrLocal = startOfDay.toISOString().split('T')[0];
+      const holiday = await this.masterHolidayService.findByDate(dateStrLocal);
+      const isSun = startOfDay.getDay() === 0;
+      const isSatLocal = startOfDay.getDay() === 6;
+
+      if (!isPrivileged) {
+        if (holiday) {
+          throw new BadRequestException('Attendance is blocked for Holidays.');
+        }
+        if (isSun) {
+          throw new BadRequestException('Attendance is blocked for Sundays.');
+        }
+        
+        // Saturday Rule: 4-9 hours validation
+        const incomingHours = createEmployeeAttendanceDto.totalHours !== undefined && createEmployeeAttendanceDto.totalHours !== null 
+          ? Number(createEmployeeAttendanceDto.totalHours) 
+          : null;
+
+        if (isSatLocal && incomingHours !== null && incomingHours > 0) {
+          if (incomingHours < 4 || incomingHours > 9) {
+            throw new BadRequestException('Saturday hours must be between 4 and 9.');
+          }
+        }
+      }
+      // --- Holiday/Weekend Blocking Logic (End) ---
+
       const existingRecord = await this.employeeAttendanceRepository.findOne({
         where: {
           employeeId: createEmployeeAttendanceDto.employeeId,
@@ -750,6 +777,33 @@ export class EmployeeAttendanceService {
         throw new BadRequestException(`Timesheet is locked for this date by ${blockedByName}. Please contact them to unlock.`);
       }
 
+      // --- Holiday/Weekend Blocking Logic (Start) ---
+      const dateStrLocal = workingDateObj.toISOString().split('T')[0];
+      const holiday = await this.masterHolidayService.findByDate(dateStrLocal);
+      const isSun = workingDateObj.getDay() === 0;
+      const isSatLocal = workingDateObj.getDay() === 6;
+
+      if (!isPrivileged) {
+        if (holiday) {
+          throw new BadRequestException('Attendance is blocked for Holidays.');
+        }
+        if (isSun) {
+          throw new BadRequestException('Attendance is blocked for Sundays.');
+        }
+        
+        // Saturday Rule: 4-9 hours validation
+        const incomingHours = updateDto.totalHours !== undefined && updateDto.totalHours !== null 
+          ? Number(updateDto.totalHours) 
+          : null;
+
+        if (isSatLocal && incomingHours !== null && incomingHours > 0) {
+          if (incomingHours < 4 || incomingHours > 9) {
+            throw new BadRequestException('Saturday hours must be between 4 and 9.');
+          }
+        }
+      }
+      // --- Holiday/Weekend Blocking Logic (End) ---
+
       const isHalfDayStatus = attendance.status === AttendanceStatus.HALF_DAY || String(attendance.status).toLowerCase() === AttendanceStatus.HALF_DAY.toLowerCase();
       const isLocked = !!attendance.sourceRequestId && isHalfDayStatus;
 
@@ -922,7 +976,12 @@ export class EmployeeAttendanceService {
       const day = String(dateObj.getDate()).padStart(2, '0');
       const dateStr = `${year}-${month}-${day}`;
 
+      const isSat = dateObj.getDay() === 6;
+
       // 0. Primary Rule: Hours strictly dictate status if available
+      if (isSat && hours > 3) {
+        return AttendanceStatus.FULL_DAY;
+      }
       if (hours > 0 && hours <= 6) {
         return AttendanceStatus.HALF_DAY;
       }
