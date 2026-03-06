@@ -168,6 +168,16 @@ export class EmployeeDetailsService {
     }
   }
 
+  async getStatuses(): Promise<string[]> {
+    this.logger.log('Fetching all month statuses from enum');
+    try {
+      return Object.values(MonthStatus);
+    } catch (error) {
+      this.logger.error(`Error fetching monthly statuses: ${error.message}`);
+      throw new HttpException('Failed to fetch monthly statuses', HttpStatus.INTERNAL_SERVER_ERROR);
+    }
+  }
+
   async getAllEmployees(
     search: string = '',
     sortBy: string = 'id',
@@ -437,7 +447,7 @@ export class EmployeeDetailsService {
           query.leftJoin(ManagerMapping, 'mm', 'mm.employeeId = employee.employeeId');
 
           query.andWhere(
-            '( (mm.managerName LIKE :managerNameQuery OR mm.managerName LIKE :managerIdQuery) AND mm.status = :activeMappingStatus ) OR employee.employeeId = :exactManagerId',
+            '( ( (mm.managerName LIKE :managerNameQuery OR mm.managerName LIKE :managerIdQuery) AND mm.status = :activeMappingStatus ) OR employee.employeeId = :exactManagerId )',
             {
               managerNameQuery: `%${managerName}%`,
               managerIdQuery: `%${managerId}%`,
@@ -464,22 +474,8 @@ export class EmployeeDetailsService {
         }
       }
 
-      let allStats: Record<string, any> = {};
-      if (month && year) {
-        allStats = await this.employeeAttendanceService.getAllDashboardStats(month.toString(), year.toString());
-      }
-
-      if (status && status !== 'All' && month && year) {
-        const filteredEmployeeIds = Object.keys(allStats).filter(empId => {
-          const empStatus = allStats[empId].monthStatus === MonthStatus.SUBMITTED ? MonthStatus.SUBMITTED : MonthStatus.PENDING;
-          return empStatus === status;
-        });
-
-        if (filteredEmployeeIds.length > 0) {
-          query.andWhere('employee.employeeId IN (:...filteredEmployeeIds)', { filteredEmployeeIds });
-        } else {
-          return { data: [], totalItems: 0 };
-        }
+      if (status && status !== 'All') {
+        query.andWhere('employee.monthStatus = :reqMonthStatus', { reqMonthStatus: status });
       }
 
       const [data, totalItems] = await query
@@ -498,7 +494,7 @@ export class EmployeeDetailsService {
         userStatus: emp.user?.status || UserStatus.DRAFT,
         resetRequired: emp.user?.resetRequired ?? true,
         lastLoggedIn: emp.user?.lastLoggedIn || null,
-        monthStatus: allStats[emp.employeeId]?.monthStatus || MonthStatus.PENDING,
+        monthStatus: emp.monthStatus || MonthStatus.PENDING,
       }));
 
       return { data: enrichedData, totalItems };

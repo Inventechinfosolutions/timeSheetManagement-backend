@@ -76,6 +76,19 @@ export class EmployeeDetailsController {
     }
   }
 
+  @Get('statuses')
+  @ApiOperation({ summary: 'Get all monthly statuses from enum' })
+  @ApiOkResponse({ type: [String] })
+  async getStatuses() {
+    try {
+      this.logger.log('Fetching all month statuses');
+      return await this.employeeDetailsService.getStatuses();
+    } catch (error) {
+      this.logger.error(`Error fetching statuses: ${error.message}`, error.stack);
+      throw error;
+    }
+  }
+
   @Get('list-select')
   @ApiOperation({ summary: 'Get lightweight employee list for selection' })
   @ApiQuery({ name: 'department', required: false, type: String })
