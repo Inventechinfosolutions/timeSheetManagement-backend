@@ -16,6 +16,9 @@ import { ChangePasswordDto } from '../dto/change-password.dto';
 import { CreateUserDto } from '../dto/create-user.dto';
 import { UserLoginDto } from '../dto/user-login.dto';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
+import { ReceptionistReadOnlyGuard } from '../../auth/guards/receptionist-readonly.guard';
+import { UserType } from '../enums/user-type.enum';
+import { UserStatus } from '../enums/user-status.enum';
 import {
   ApiTags,
   ApiOperation,
@@ -37,17 +40,28 @@ export class UsersController {
   constructor(private readonly usersService: UsersService) {}
 
   @Post('create')
-  @ApiOperation({ summary: 'Create new user' })
+  @ApiOperation({ summary: 'Create new user (e.g. Receptionist with default password Invent123, reset on first login)' })
   @ApiBody({ type: CreateUserDto })
   async createUser(@Body() createUserDto: CreateUserDto): Promise<any> {
     try {
-      this.logger.log(`Creating user: ${createUserDto.loginId}`);
+      this.logger.log(`Creating user: ${createUserDto.loginId}, role: ${createUserDto.role ?? 'EMPLOYEE'}`);
+      const isReceptionist = createUserDto.role === UserType.RECEPTIONIST;
+      const password = isReceptionist && !createUserDto.password
+        ? 'Invent123'
+        : createUserDto.password;
+      if (!password) {
+        throw new HttpException('Password is required when role is not Receptionist', HttpStatus.BAD_REQUEST);
+      }
       const user = await this.usersService.create({
         loginId: createUserDto.loginId,
         aliasLoginName: createUserDto.name,
-        password: createUserDto.password,
+        password,
+        userType: createUserDto.role ?? UserType.EMPLOYEE,
+        role: createUserDto.role ?? undefined,
+        status: UserStatus.ACTIVE,
+        resetRequired: isReceptionist,
       });
-      const { password, ...result } = user;
+      const { password: _p, ...result } = user;
       return {
         success: true,
         statusCode: HttpStatus.CREATED,
@@ -155,7 +169,7 @@ export class UsersController {
   }
 
   @Post('change-password')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, ReceptionistReadOnlyGuard)
   @HttpCode(200)
   @ApiOperation({
     summary: 'Change Password',

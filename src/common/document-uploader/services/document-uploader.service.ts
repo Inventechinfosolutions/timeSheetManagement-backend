@@ -63,18 +63,24 @@ export class DocumentUploaderService {
 
   async getAllDocs(entityType: EntityType, entityId: number, referenceType?: ReferenceType, referenceId?: number) {
     try {
-      this.logger.log(`Getting all documents for entity ${entityType} with ID ${entityId}`);
+      this.logger.log(`Getting all documents for entity ${entityType} with ID ${entityId}, refId ${referenceId}`);
       const query = this.documentRepo
         .createQueryBuilder('doc')
-        .where('doc.entityType = :entityType', { entityType })
-        .andWhere('doc.entityId = :entityId', { entityId });
+        .where('doc.entityType = :entityType', { entityType });
+
+      // For leave requests, when refId is the request id, fetch by refId so admin/employee see docs
+      // even if frontend sent request id as entityId instead of employee.id.
+      if (entityType === EntityType.LEAVE_REQUEST && referenceId != null && referenceId > 0) {
+        query.andWhere('doc.refId = :referenceId', { referenceId });
+      } else {
+        query.andWhere('doc.entityId = :entityId', { entityId });
+        if (referenceId != null) {
+          query.andWhere('doc.refId = :referenceId', { referenceId });
+        }
+      }
 
       if (referenceType) {
         query.andWhere('doc.refType = :referenceType', { referenceType });
-      }
-
-      if (referenceId) {
-        query.andWhere('doc.refId = :referenceId', { referenceId });
       }
 
       const objects = await query.getMany();
@@ -96,13 +102,22 @@ export class DocumentUploaderService {
           docs.push(docDetails);
         } catch (error) {
           if (error instanceof HttpException && error.getStatus() === HttpStatus.SERVICE_UNAVAILABLE) {
-              throw error; 
+            throw error;
           }
           this.logger.error('Error processing document metadata:', {
             documentId: e.id,
             error: error.message,
           });
-          continue;
+          // When S3 is unreachable (e.g. ETIMEDOUT), still add doc from DB so caller can try download and return 503 instead of 404
+          const fallback = new DocumentDetailsDto();
+          fallback.key = e.s3Key || e.id;
+          fallback.name = e.id;
+          fallback.entityType = e.entityType;
+          fallback.entityId = e.entityId;
+          fallback.refType = e.refType;
+          fallback.refId = e.refId;
+          fallback.createdAt = e.createdAt;
+          docs.push(fallback);
         }
       }
 

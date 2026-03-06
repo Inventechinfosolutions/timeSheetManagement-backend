@@ -16,6 +16,7 @@ import {
 } from '@nestjs/common';
 import { Response } from 'express';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
+import { ReceptionistReadOnlyGuard } from '../../auth/guards/receptionist-readonly.guard';
 import { UserType } from '../../users/enums/user-type.enum';
 import {
   ApiOperation,
@@ -38,7 +39,7 @@ export class EmployeeAttendanceController {
     private readonly employeeAttendanceService: EmployeeAttendanceService,
   ) { }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, ReceptionistReadOnlyGuard)
   @Get('download-report')
   @ApiOperation({ summary: 'Download monthly attendance Excel report' })
   @ApiQuery({ name: 'month', type: Number })
@@ -80,7 +81,7 @@ export class EmployeeAttendanceController {
     }
   }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, ReceptionistReadOnlyGuard)
   @Get('download-pdf')
   @ApiOperation({ summary: 'Download monthly attendance PDF report' })
   @ApiQuery({ name: 'month', type: Number })
@@ -126,7 +127,7 @@ export class EmployeeAttendanceController {
     }
   }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, ReceptionistReadOnlyGuard)
   @Post()
   @ApiOperation({ summary: 'Create a new employee attendance record' })
   @ApiBody({ type: EmployeeAttendanceDto })
@@ -169,7 +170,7 @@ export class EmployeeAttendanceController {
   }
 
   @Get('all-dashboard-stats')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, ReceptionistReadOnlyGuard)
   @ApiOperation({ summary: 'Get dashboard statistics for all employees' })
   @ApiQuery({ name: 'month', type: String, required: false })
   @ApiQuery({ name: 'year', type: String, required: false })
@@ -218,7 +219,7 @@ export class EmployeeAttendanceController {
     }
   }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, ReceptionistReadOnlyGuard)
   @Get('check-entry-block')
   @ApiOperation({ summary: 'Check if an attendance entry is blocked' })
   @ApiQuery({ name: 'employeeId', type: String })
@@ -404,7 +405,7 @@ export class EmployeeAttendanceController {
   }
 
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, ReceptionistReadOnlyGuard)
   @Put(':id')
   @ApiOperation({ summary: 'Update an existing employee attendance record' })
   @ApiBody({ type: EmployeeAttendanceDto })
@@ -429,7 +430,7 @@ export class EmployeeAttendanceController {
     }
   }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, ReceptionistReadOnlyGuard)
   @Delete(':id')
   @ApiOperation({ summary: 'Delete an employee attendance record by ID' })
   async remove(@Param('id', ParseIntPipe) id: number) {
@@ -444,7 +445,7 @@ export class EmployeeAttendanceController {
 
 
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, ReceptionistReadOnlyGuard)
   @Post('attendance-data/:employeeId')
   @ApiOperation({ summary: 'Bulk create/update attendance records' })
   @ApiBody({ type: [EmployeeAttendanceDto] })
@@ -461,7 +462,7 @@ export class EmployeeAttendanceController {
     }
   }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, ReceptionistReadOnlyGuard)
   @Post('auto-update')
   @ApiOperation({ summary: 'Auto update timesheet for current month' })
   @ApiBody({ schema: { type: 'object', properties: { employeeId: { type: 'string' }, month: { type: 'string' }, year: { type: 'string' }, dryRun: { type: 'boolean' } } } })
@@ -479,7 +480,7 @@ export class EmployeeAttendanceController {
   }
 
   @Get('monthly-details-all/:month/:year')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, ReceptionistReadOnlyGuard)
   @ApiOperation({ summary: 'Get all employees monthly attendance' })
   @ApiParam({ name: 'month', type: String })
   @ApiParam({ name: 'year', type: String })

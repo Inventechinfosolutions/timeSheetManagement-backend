@@ -13,6 +13,7 @@ import { EmployeeDetails } from '../entities/employeeDetails.entity';
 import { EmployeeDetailsDto } from '../dto/employeeDetails.dto';
 import { Department } from '../enums/department.enum';
 import { EmploymentType } from '../enums/employment-type.enum';
+import { Gender } from '../enums/gender.enum';
 import { ResetPasswordDto } from '../dto/resetPassword.dto';
 import { UsersService } from '../../users/service/user.service';
 import { UserType } from '../../users/enums/user-type.enum';
@@ -718,8 +719,8 @@ export class EmployeeDetailsService {
                 where: { loginId: updatedEmployeeId },
               });
 
-              // Ensure user password matches employee password
-              if (updatedEmployee && updatedUser && updatedEmployee.password !== updatedUser.password) {
+              // Ensure user password matches employee password (only when employee has a password set)
+              if (updatedEmployee && updatedUser && updatedEmployee.password != null && updatedEmployee.password !== updatedUser.password) {
                 updatedUser.password = updatedEmployee.password;
                 updatedUser.resetRequired = true; // Set resetRequired to true so user must change password
                 await this.userRepository.save(updatedUser);
@@ -762,8 +763,8 @@ export class EmployeeDetailsService {
                 where: { loginId: updatedEmployeeId },
               });
 
-              // Ensure user password matches employee password
-              if (updatedEmployee && updatedUser && updatedEmployee.password !== updatedUser.password) {
+              // Ensure user password matches employee password (only when employee has a password set)
+              if (updatedEmployee && updatedUser && updatedEmployee.password != null && updatedEmployee.password !== updatedUser.password) {
                 updatedUser.password = updatedEmployee.password;
                 updatedUser.resetRequired = true; // Set resetRequired to true so user must change password
                 await this.userRepository.save(updatedUser);
@@ -1055,8 +1056,23 @@ export class EmployeeDetailsService {
 
       return { stream, meta };
     } catch (error) {
-      this.logger.error(`Error streaming profile image for employee ${employeeId}: ${error.message}`, error.stack);
       if (error instanceof HttpException) throw error;
+      if (error instanceof NotFoundException) throw error;
+      const msg = error?.message || '';
+      const isStorageUnavailable =
+        msg.includes('ETIMEDOUT') ||
+        msg.includes('ECONNREFUSED') ||
+        msg.includes('connect ') ||
+        msg.includes('ENOTFOUND') ||
+        msg.includes('NetworkError');
+      if (isStorageUnavailable) {
+        this.logger.warn(`Profile image storage unavailable for employee ${employeeId}: ${msg}`);
+        throw new HttpException(
+          'Profile image storage temporarily unavailable. Please try again later.',
+          HttpStatus.SERVICE_UNAVAILABLE,
+        );
+      }
+      this.logger.error(`Error streaming profile image for employee ${employeeId}: ${error.message}`, error.stack);
       throw new HttpException('Error streaming profile image', HttpStatus.INTERNAL_SERVER_ERROR);
     }
   }
@@ -1066,11 +1082,11 @@ export class EmployeeDetailsService {
    */
   private parseExcelFile(buffer: Buffer): any[] {
     try {
-      const workbook = XLSX.read(buffer, { type: 'buffer' });
+      const workbook = XLSX.read(buffer, { type: 'buffer', cellDates: true });
       const sheetName = workbook.SheetNames[0];
       const worksheet = workbook.Sheets[sheetName];
 
-      // Convert to JSON with header row
+      // Convert to JSON with header row; cellDates already applied in read()
       const data = XLSX.utils.sheet_to_json(worksheet);
 
       this.logger.log(`Parsed ${data.length} rows from Excel file`);
@@ -1079,6 +1095,40 @@ export class EmployeeDetailsService {
       this.logger.error(`Error parsing Excel file: ${error.message}`, error.stack);
       throw new BadRequestException('Invalid Excel file format');
     }
+  }
+
+  /**
+   * Parse date from Excel: serial number, YYYY-MM-DD, dd/mm/yyyy, dd-mm-yyyy, or mm/dd/yyyy string.
+   */
+  private parseExcelDate(value: unknown): Date | null {
+    if (value == null || value === '') return null;
+    if (typeof value === 'number' && !Number.isNaN(value)) {
+      // Excel serial date: 1 = 1900-01-01 (Unix epoch offset ~25569)
+      const date = new Date((value - 25569) * 86400 * 1000);
+      return Number.isNaN(date.getTime()) ? null : date;
+    }
+    const str = String(value).trim();
+    if (!str) return null;
+
+    // YYYY-MM-DD (ISO) – parses reliably
+    const isoMatch = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(str);
+    if (isoMatch) {
+      const [, y, m, d] = isoMatch;
+      const date = new Date(parseInt(y, 10), parseInt(m, 10) - 1, parseInt(d, 10));
+      return Number.isNaN(date.getTime()) ? null : date;
+    }
+
+    // dd/mm/yyyy or dd-mm-yyyy (e.g. 09/06/2025 or 9-6-2025)
+    const dmyMatch = /^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/.exec(str);
+    if (dmyMatch) {
+      const [, d, m, y] = dmyMatch;
+      const date = new Date(parseInt(y, 10), parseInt(m, 10) - 1, parseInt(d, 10));
+      return Number.isNaN(date.getTime()) ? null : date;
+    }
+
+    // Fallback: native parse (e.g. mm/dd/yyyy)
+    const date = new Date(str);
+    return Number.isNaN(date.getTime()) ? null : date;
   }
 
   /**
@@ -1201,13 +1251,37 @@ export class EmployeeDetailsService {
             hashedPassword = await bcrypt.hash(String(rowData.password).trim(), salt);
           }
 
+          const departmentVal = String(rowData.department || '').trim();
+          const employmentTypeVal = rowData.employmentType != null && String(rowData.employmentType).trim() !== ''
+            ? (String(rowData.employmentType).trim().toUpperCase() as EmploymentType)
+            : null;
+          const genderVal = rowData.gender != null && String(rowData.gender).trim() !== ''
+            ? (String(rowData.gender).trim().toUpperCase() as Gender)
+            : null;
+          const roleVal = rowData.role != null && String(rowData.role).trim() !== ''
+            ? (String(rowData.role).trim().toUpperCase() as UserType)
+            : null;
+          const userStatusVal = rowData.userStatus != null && String(rowData.userStatus).trim() !== ''
+            ? (String(rowData.userStatus).trim().toUpperCase().replace(' ', '_') as UserStatus)
+            : UserStatus.ACTIVE;
+          const joiningDateRaw = rowData.joiningDate ?? rowData.dateOfJoining ?? rowData['Joining Date'] ?? rowData['Date of Joining'];
+          const conversionDateRaw = rowData.conversionDate ?? rowData['Conversion Date'] ?? rowData['Date of Conversion'];
+          const joiningDateParsed = this.parseExcelDate(joiningDateRaw);
+          const conversionDateParsed = this.parseExcelDate(conversionDateRaw);
+
           const employee = this.employeeDetailsRepository.create({
             fullName: String(rowData.fullName).trim(),
             employeeId: employeeId,
-            department: String(rowData.department).trim() as Department,
+            department: departmentVal as Department,
             designation: String(rowData.designation).trim(),
             email: email,
-            password: hashedPassword,
+            password: hashedPassword ?? null,
+            employmentType: employmentTypeVal && Object.values(EmploymentType).includes(employmentTypeVal) ? employmentTypeVal : null,
+            joiningDate: joiningDateParsed ?? undefined,
+            conversionDate: conversionDateParsed ?? undefined,
+            userStatus: Object.values(UserStatus).includes(userStatusVal) ? userStatusVal : UserStatus.ACTIVE,
+            gender: genderVal && Object.values(Gender).includes(genderVal) ? genderVal : undefined,
+            role: roleVal && Object.values(UserType).includes(roleVal) ? roleVal : undefined,
           });
 
           const savedEmployee = await this.employeeDetailsRepository.save(employee);

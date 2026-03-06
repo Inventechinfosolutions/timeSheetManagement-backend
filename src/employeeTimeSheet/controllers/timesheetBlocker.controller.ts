@@ -2,10 +2,11 @@ import { Controller, Post, Body, Get, Param, Delete, UseGuards, Req, Logger, For
 import { TimesheetBlockerService } from '../services/timesheetBlocker.service';
 import { TimesheetBlocker } from '../entities/timesheetBlocker.entity';
 import { JwtAuthGuard } from 'src/auth/guards/jwt-auth.guard';
+import { ReceptionistReadOnlyGuard } from 'src/auth/guards/receptionist-readonly.guard';
 import { UserType } from 'src/users/enums/user-type.enum';
 
 @Controller('timesheet-blockers')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, ReceptionistReadOnlyGuard)
 export class TimesheetBlockerController {
   private readonly logger = new Logger(TimesheetBlockerController.name);
   constructor(private readonly blockerService: TimesheetBlockerService) { }
