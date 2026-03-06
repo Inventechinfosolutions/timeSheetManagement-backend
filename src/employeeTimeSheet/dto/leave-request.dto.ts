@@ -81,4 +81,8 @@ export class LeaveRequestDto {
   @IsArray()
   @IsString({ each: true })
   documentKeys?: string[];
+
+  @IsOptional()
+  @IsString()
+  availableDates?: string;
 }
