@@ -7,6 +7,10 @@ export enum AttendanceStatus {
   WEEKEND = 'Weekend',
   HOLIDAY = 'Holiday',
   ABSENT = 'Absent',
-  UPCOMING = 'UPCOMING',
+  UPCOMING = 'Upcoming',
+  WFH = 'WFH',
+  CLIENT_VISIT = 'Client Visit',
+  PRESENT = 'Present',
+  BLOCKED = 'Blocked',
 }
 

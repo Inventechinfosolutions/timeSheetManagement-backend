@@ -27,11 +27,11 @@ export class EmployeeAttendance {
   })
   status: AttendanceStatus | null;
 
-  @Column({ name: 'first_half', type: 'varchar', nullable: true })
-  firstHalf: WorkLocation | AttendanceStatus | null;
+  @Column({ name: 'first_half', type: 'enum', enum: WorkLocation, nullable: true })
+  firstHalf: WorkLocation | null;
 
-  @Column({ name: 'second_half', type: 'varchar', nullable: true })
-  secondHalf: WorkLocation | AttendanceStatus | null;
+  @Column({ name: 'second_half', type: 'enum', enum: WorkLocation, nullable: true })
+  secondHalf: WorkLocation | null;
 
   @Column({ name: 'source_request_id', type: 'int', nullable: true })
   sourceRequestId?: number | null;

@@ -31,7 +31,7 @@ import { EmploymentType } from '../enums/employment-type.enum';
 import { EmailService } from '../../email/email.service';
 import { DocumentUploaderService } from '../../common/document-uploader/services/document-uploader.service';
 import { LeaveRequestType } from '../enums/leave-request-type.enum';
-import { WorkLocation } from '../enums/work-location.enum';
+import { WorkLocation, WorkLocationKeyword } from '../enums/work-location.enum';
 import { HalfDayType } from '../enums/half-day-type.enum';
 import { ManagerMappingStatus } from '../../managerMapping/entities/managerMapping.entity';
 import { UserType } from '../../users/enums/user-type.enum';
@@ -42,6 +42,7 @@ import {
 } from '../../common/document-uploader/models/documentmetainfo.model';
 import dayjs from 'dayjs';
 import { EmployeeAttendanceService } from './employeeAttendance.service';
+import { CompOffService } from './comp-off.service';
 import {
   getRequestNotificationTemplate,
   getStatusUpdateTemplate,
@@ -137,6 +138,7 @@ export class LeaveRequestsService {
     private notificationsService: NotificationsService,
     private employeeAttendanceService: EmployeeAttendanceService,
     private configService: ConfigService,
+    private compOffService: CompOffService,
   ) {}
 
   // Helper to check if holiday
@@ -189,19 +191,15 @@ export class LeaveRequestsService {
 
       // 2. Otherwise use system defaults based on activities
       const isWork = (half: string | null): boolean => {
-        if (
-          !half ||
-          half === AttendanceStatus.LEAVE ||
-          half === AttendanceStatus.ABSENT
-        )
+        if (!half || half === WorkLocation.LEAVE || half === AttendanceStatus.ABSENT)
           return false;
-        const normalized = half.toLowerCase();
+        const normalized = half.toLowerCase().trim();
         return (
-          normalized.includes(WorkLocation.OFFICE.toLowerCase()) ||
-          normalized.includes(WorkLocation.WFH.toLowerCase()) ||
-          normalized.includes(WorkLocation.WORK_FROM_HOME.toLowerCase()) ||
-          normalized.includes(WorkLocation.CLIENT_VISIT.toLowerCase()) ||
-          normalized.includes(WorkLocation.PRESENT.toLowerCase())
+          normalized.includes(WorkLocationKeyword.OFFICE) ||
+          normalized.includes(WorkLocationKeyword.WFH) ||
+          normalized.includes(WorkLocationKeyword.WORK_FROM_HOME) ||
+          normalized.includes(WorkLocationKeyword.CLIENT_VISIT) ||
+          normalized.includes(WorkLocationKeyword.PRESENT)
         );
       };
 
@@ -224,6 +222,14 @@ export class LeaveRequestsService {
       `Starting creation of leave request for employee: ${data.employeeId}, Type: ${data.requestType}`,
     );
     try {
+      const employee = await this.employeeDetailsRepository.findOne({
+        where: { employeeId: data.employeeId },
+      });
+      
+      if (employee?.employmentType === EmploymentType.INTERN && data.requestType === LeaveRequestType.COMP_OFF) {
+        throw new ForbiddenException('Interns are not eligible for Comp Offs.');
+      }
+
       // Check for overlapping dates based on request type
       if (data.fromDate && data.toDate && data.requestType) {
         this.logger.debug(
@@ -337,11 +343,11 @@ export class LeaveRequestsService {
             const existingConsumesFirst =
               existingIsFull ||
               (existing.firstHalf &&
-                existing.firstHalf !== WorkLocation.OFFICE);
+                !existing.firstHalf.toLowerCase().includes(WorkLocationKeyword.OFFICE));
             const existingConsumesSecond =
               existingIsFull ||
               (existing.secondHalf &&
-                existing.secondHalf !== WorkLocation.OFFICE);
+                !existing.secondHalf.toLowerCase().includes(WorkLocationKeyword.OFFICE));
 
             const newWantsFirst =
               !data.isHalfDay || data.halfDayType === HalfDayType.FIRST_HALF;
@@ -380,6 +386,54 @@ export class LeaveRequestsService {
         this.logger.debug(
           `[CREATE] Calculated duration: ${data.duration} days, dates: ${workingDateList.length}`,
         );
+
+        // --- NEW: Strict Validation for Comp Off ---
+        if (data.requestType === LeaveRequestType.COMP_OFF) {
+          let compOffDateArray = (data as any).compOffDates;
+          if (typeof compOffDateArray === 'string') {
+            try {
+              compOffDateArray = JSON.parse(compOffDateArray);
+            } catch (e) {}
+          }
+
+          if (
+            !Array.isArray(compOffDateArray) ||
+            compOffDateArray.length === 0
+          ) {
+            throw new BadRequestException(
+              'Please select at least one Comp Off credit from the dropdown to proceed with this request type.',
+            );
+          }
+
+          // Enforce 1-to-1 Date Count Mapping
+          if (compOffDateArray.length !== workingDateList.length) {
+            this.logger.warn(
+              `[CREATE] Comp Off Date Mapping Mismatch: ${compOffDateArray.length} credits selected for ${workingDateList.length} leave days.`,
+            );
+            throw new BadRequestException(
+              `Note: You have selected ${compOffDateArray.length} Comp Off credit dates, but your leave request covers ${workingDateList.length} working days. ` +
+                `The system requires a exact 1-to-1 mapping. Please adjust either your date range or your selected credits to match.`,
+            );
+          }
+
+          const totalCredits = await this.compOffService.calculateTotalDays(
+            data.employeeId,
+            compOffDateArray,
+          );
+          const requestedDuration = Number(data.duration || 0);
+
+          if (requestedDuration > totalCredits) {
+            this.logger.warn(
+              `[CREATE] Comp Off Balance Mismatch: ${requestedDuration} days requested, but only ${totalCredits} credits selected.`,
+            );
+            throw new BadRequestException(
+              `Note: You have selected ${totalCredits} days of Comp Off credits, but your leave request is for ${requestedDuration} days. ` +
+                `You can only apply for a Comp Off leave that matches your selected credits. ` +
+                `Action: Please reduce your date range to ${totalCredits} days. ` +
+                `For the additional ${Number((requestedDuration - totalCredits).toFixed(1))} day(s), please submit a separate 'Apply Leave' or 'Work Management' request.`,
+            );
+          }
+        }
       }
 
       if (!data.submittedDate) {
@@ -392,12 +446,16 @@ export class LeaveRequestsService {
       }
 
       // --- LOGIC: Populate firstHalf and secondHalf ---
+      const mainType =
+        data.requestType === LeaveRequestType.COMP_OFF
+          ? WorkLocation.COMP_OFF_LEAVE
+          : data.requestType === LeaveRequestType.APPLY_LEAVE ||
+            data.requestType === LeaveRequestType.HALF_DAY ||
+            data.requestType === LeaveRequestType.LEAVE
+            ? WorkLocation.LEAVE
+            : data.requestType || WorkLocation.OFFICE;
+
       if (data.isHalfDay) {
-        const mainType =
-          (data.requestType === LeaveRequestType.APPLY_LEAVE ||
-          data.requestType === LeaveRequestType.HALF_DAY
-            ? AttendanceStatus.LEAVE
-            : data.requestType) || WorkLocation.OFFICE;
         const otherHalf = data.otherHalfType || WorkLocation.OFFICE;
 
         if (data.halfDayType === HalfDayType.FIRST_HALF) {
@@ -406,21 +464,31 @@ export class LeaveRequestsService {
         } else if (data.halfDayType === HalfDayType.SECOND_HALF) {
           data.firstHalf = otherHalf;
           data.secondHalf = mainType;
+        } else {
+          // Fallback if halfDayType is missing but isHalfDay is true
+          data.firstHalf = mainType;
+          data.secondHalf = otherHalf;
         }
       } else {
-        const mainType =
-          (data.requestType === LeaveRequestType.APPLY_LEAVE ||
-          data.requestType === LeaveRequestType.HALF_DAY
-            ? AttendanceStatus.LEAVE
-            : data.requestType) || WorkLocation.OFFICE;
         data.firstHalf = mainType;
         data.secondHalf = mainType;
       }
 
       const leaveRequest = this.leaveRequestRepository.create({
-        ...data,
+        employeeId: data.employeeId,
+        requestType: data.requestType,
         fromDate: data.fromDate,
         toDate: data.toDate,
+        title: data.title,
+        description: data.description,
+        status: data.status as any,
+        duration: data.duration,
+        halfDayType: data.halfDayType,
+        otherHalfType: data.otherHalfType,
+        isHalfDay: data.isHalfDay,
+        firstHalf: data.firstHalf as any,
+        secondHalf: data.secondHalf as any,
+        submittedDate: data.submittedDate,
         ccEmails: data.ccEmails?.length ? JSON.stringify(data.ccEmails) : null,
         availableDates: (data as any).availableDates,
       } as unknown as DeepPartial<LeaveRequest>);
@@ -429,6 +497,46 @@ export class LeaveRequestsService {
       this.logger.log(
         `[CREATE] Successfully saved leave request ID: ${savedRequest.id} for employee: ${data.employeeId}`,
       );
+
+      if (data.requestType === LeaveRequestType.COMP_OFF && (data as any).compOffDates) {
+        try {
+          const compOffDateArray = typeof (data as any).compOffDates === 'string' ? JSON.parse((data as any).compOffDates) : (data as any).compOffDates;
+          
+          let workingDateArray: string[] = [];
+          if ((data as any).availableDates) {
+            try {
+              workingDateArray = JSON.parse((data as any).availableDates);
+            } catch (e) {
+              this.logger.warn(`[CREATE] Failed to parse availableDates: ${e.message}`);
+            }
+          }
+          
+          if (Array.isArray(compOffDateArray) && compOffDateArray.length > 0) {
+            const durationPerDay = data.isHalfDay ? 0.5 : 1.0;
+            let halfDayLabel = 'Full';
+            if (data.isHalfDay) {
+              if (data.halfDayType === HalfDayType.FIRST_HALF) {
+                halfDayLabel = 'First Half';
+              } else if (data.halfDayType === HalfDayType.SECOND_HALF) {
+                halfDayLabel = 'Second Half';
+              } else {
+                halfDayLabel = 'Half Day';
+              }
+            }
+
+            await this.compOffService.markAsPending(
+              data.employeeId, 
+              compOffDateArray, 
+              workingDateArray,
+              durationPerDay, 
+              savedRequest.id,
+              halfDayLabel
+            );
+          }
+        } catch (e) {
+          this.logger.warn(`[CREATE] Failed to handle CompOff dates: ${e.message}`);
+        }
+      }
 
       // Link documents to the saved request.
       // Strategy A (precise): when the frontend sends explicit documentKeys (IDs),
@@ -1706,6 +1814,11 @@ export class LeaveRequestsService {
           this.logger.log(
             `[UPDATE_STATUS] Wiped availableDates for request ${id} (Status: ${status})`,
           );
+
+          // Restore CompOffs if this was a CompOff request
+          if (request.requestType === LeaveRequestType.COMP_OFF) {
+            await this.compOffService.restoreCompOffs(id);
+          }
         }
       }
       const attendanceUpdates: any[] = [];
@@ -1748,6 +1861,15 @@ export class LeaveRequestsService {
             } catch (e) {}
           }
 
+          let allowedCompOffDays = await this.compOffService.getAvailableBalance(
+            request.employeeId,
+            request.id,
+          );
+          const reqTypeForLoop = String(request.requestType).toLowerCase();
+          // The compOffDates column was removed from LeaveRequest entity. 
+          // Logic for limiting comp-off days based on that column is also removed.
+          let usedCompOffDays = 0;
+
           for (let i = 0; i <= diff; i++) {
             const targetDate = startDate.add(i, 'day');
             const targetDateStr = targetDate.format('YYYY-MM-DD');
@@ -1783,8 +1905,30 @@ export class LeaveRequestsService {
               },
             });
 
-            const firstHalf = request.firstHalf || WorkLocation.OFFICE;
-            const secondHalf = request.secondHalf || WorkLocation.OFFICE;
+            let firstHalf = request.firstHalf || WorkLocation.OFFICE;
+            let secondHalf = request.secondHalf || WorkLocation.OFFICE;
+
+            if (reqTypeForLoop === LeaveRequestType.COMP_OFF.toLowerCase()) {
+              const dayCost = request.isHalfDay ? 0.5 : 1;
+
+              // Use 'Comp-Off Leave' label for attendance records
+              if (
+                String(firstHalf) === (LeaveRequestType.COMP_OFF as string) ||
+                String(firstHalf).toLowerCase().includes('comp off')
+              ) {
+                firstHalf = WorkLocation.COMP_OFF_LEAVE;
+              }
+              if (
+                String(secondHalf) === (LeaveRequestType.COMP_OFF as string) ||
+                String(secondHalf).toLowerCase().includes('comp off')
+              ) {
+                secondHalf = WorkLocation.COMP_OFF_LEAVE;
+              }
+
+              if (usedCompOffDays + dayCost <= allowedCompOffDays) {
+                usedCompOffDays += dayCost;
+              }
+            }
             const calculatedHours = this.calculateTotalHours(
               firstHalf,
               secondHalf,
@@ -1821,8 +1965,8 @@ export class LeaveRequestsService {
                 .set({
                   totalHours: calculatedHours,
                   status: derivedStatus,
-                  firstHalf: firstHalf,
-                  secondHalf: secondHalf,
+                  firstHalf: firstHalf as any,
+                  secondHalf: secondHalf as any,
                   sourceRequestId: request.id,
                   workLocation: null,
                 })
@@ -1840,6 +1984,12 @@ export class LeaveRequestsService {
               totalHours: calculatedHours,
             });
           }
+
+          if (reqType === LeaveRequestType.COMP_OFF.toLowerCase()) {
+            await this.compOffService.consumeCompOffs(request.id);
+            this.logger.log(`[UPDATE_STATUS] Consumed Comp Off day(s) for ${request.employeeId} via leaveRequestId ${request.id}`);
+          }
+
         } catch (e) {
           this.logger.error(
             `[UPDATE_STATUS] Error in approval automation: ${e.message}`,
@@ -1903,6 +2053,11 @@ export class LeaveRequestsService {
                 action: 'CLEARED',
                 affectedCount: result.affected,
               });
+            }
+
+            if (request.requestType === LeaveRequestType.COMP_OFF || String(request.requestType).toLowerCase() === LeaveRequestType.COMP_OFF.toLowerCase()) {
+                // Restoration is now handled earlier in the updateStatus via leaveRequestId link
+                await this.compOffService.restoreCompOffs(id);
             }
           }
         } catch (err) {
@@ -2093,7 +2248,7 @@ export class LeaveRequestsService {
                 const isParentHalfDay = parent.isHalfDay || (originalWorkingDays > 0 && parent.duration < originalWorkingDays);
                 
                 parent.duration = isParentHalfDay
-                  ? Number((remainingWorkingDays * 0.5).toFixed(2))
+                  ? Number((remainingWorkingDays * 0.5).toFixed(1))
                   : remainingWorkingDays;
                 parent.fromDate = remainingDates[0];
                 parent.toDate = remainingDates[remainingDates.length - 1];
@@ -3573,13 +3728,9 @@ export class LeaveRequestsService {
       }
 
       if (updateData.firstHalf !== undefined)
-        updatedData.firstHalf = updateData.firstHalf as
-          | WorkLocation
-          | AttendanceStatus;
+        updatedData.firstHalf = updateData.firstHalf as any;
       if (updateData.secondHalf !== undefined)
-        updatedData.secondHalf = updateData.secondHalf as
-          | WorkLocation
-          | AttendanceStatus;
+        updatedData.secondHalf = updateData.secondHalf as any;
       if (updateData.ccEmails !== undefined)
         updatedData.ccEmails = updateData.ccEmails?.length
           ? JSON.stringify(updateData.ccEmails)
@@ -4196,11 +4347,14 @@ export class LeaveRequestsService {
           const attendance = attendanceMap.get(`${curYear}-${m}`) || [];
           const monthlyUsage = attendance.reduce((acc, rec) => {
             let dailyUsage = 0;
-            const status = (rec.status || '').toLowerCase();
+            const status = (rec.status || '').toLowerCase().trim();
             if (rec.firstHalf || rec.secondHalf) {
               const processHalf = (half: string | null) => {
                 if (!half) return 0;
-                const h = half.toLowerCase();
+                const h = half.toLowerCase().trim();
+                // Exclude Comp Off from standard leave deduction
+                if (h.includes('comp off') || h === 'comp-off leave') return 0;
+
                 return h.includes(AttendanceStatus.LEAVE.toLowerCase()) ||
                   h.includes(AttendanceStatus.ABSENT.toLowerCase())
                   ? 0.5
@@ -4209,7 +4363,10 @@ export class LeaveRequestsService {
               dailyUsage =
                 processHalf(rec.firstHalf) + processHalf(rec.secondHalf);
             } else {
-              if (
+              // Exclude Comp Off from standard leave deduction
+              if (status.includes('comp off') || status === 'comp-off leave') {
+                dailyUsage = 0;
+              } else if (
                 status.includes(AttendanceStatus.LEAVE.toLowerCase()) ||
                 status.includes(AttendanceStatus.ABSENT.toLowerCase())
               ) {

@@ -10,6 +10,7 @@ import { MasterHolidayService } from '../master/service/master-holiday.service';
 import { NotificationsService } from '../notifications/Services/notifications.service';
 import { UserStatus } from '../users/enums/user-status.enum';
 import { MonthStatus } from '../employeeTimeSheet/enums/month-status.enum';
+import { WorkLocation } from '../employeeTimeSheet/enums/work-location.enum';
 
 @Injectable()
 export class AttendanceCronService {
@@ -197,23 +198,21 @@ export class AttendanceCronService {
       `Weekend Check: ${employeesNeedingRecord.length} needing new records, ${nullStatusRecords.length} needing status updates on ${dateStr}`,
     );
 
-    // 6. Bulk Insert/Update WEEKEND Records
-    const newWeekendRecords = employeesNeedingRecord.map((emp) => {
-      return this.attendanceRepo.create({
-        employeeId: emp.employeeId,
-        workingDate: new Date(dateStr),
-        status: AttendanceStatus.WEEKEND,
-        firstHalf: AttendanceStatus.WEEKEND,
-        secondHalf: AttendanceStatus.WEEKEND,
-        totalHours: 0,
-      });
-    });
+    // 6. Bulk Create WEEKEND Records
+    const newWeekendRecords = this.attendanceRepo.create(employeesNeedingRecord.map((emp) => ({
+      employeeId: emp.employeeId,
+      workingDate: new Date(dateStr),
+      status: AttendanceStatus.WEEKEND,
+      firstHalf: WorkLocation.WEEKEND,
+      secondHalf: WorkLocation.WEEKEND,
+      totalHours: 0,
+    })));
 
     // Update NULL status records
     for (const record of nullStatusRecords) {
       record.status = AttendanceStatus.WEEKEND;
-      record.firstHalf = AttendanceStatus.WEEKEND;
-      record.secondHalf = AttendanceStatus.WEEKEND;
+      record.firstHalf = WorkLocation.WEEKEND;
+      record.secondHalf = WorkLocation.WEEKEND;
       record.totalHours = 0;
     }
 
@@ -276,27 +275,29 @@ export class AttendanceCronService {
     const targetStatus = holiday
       ? AttendanceStatus.HOLIDAY
       : AttendanceStatus.NOT_UPDATED;
+    
+    const targetLocation = holiday 
+      ? WorkLocation.HOLIDAY 
+      : WorkLocation.NOT_UPDATED;
 
     this.logger.log(
       `Found ${employeesNeedingRecord.length} missing and ${nullStatusRecords.length} NULL status entries on ${dateStr}. Marking as ${targetStatus}`,
     );
 
-    // 6. Bulk Insert/Update Records
-    const newRecords = employeesNeedingRecord.map((emp) => {
-      return this.attendanceRepo.create({
-        employeeId: emp.employeeId,
-        workingDate: new Date(dateStr),
-        status: targetStatus,
-        firstHalf: targetStatus,
-        secondHalf: targetStatus,
-        totalHours: 0,
-      });
-    });
+    // 6. Bulk Create Records
+    const newRecords = this.attendanceRepo.create(employeesNeedingRecord.map((emp) => ({
+      employeeId: emp.employeeId,
+      workingDate: new Date(dateStr),
+      status: targetStatus,
+      firstHalf: targetLocation,
+      secondHalf: targetLocation,
+      totalHours: 0,
+    })));
 
     for (const record of nullStatusRecords) {
       record.status = targetStatus;
-      record.firstHalf = targetStatus;
-      record.secondHalf = targetStatus;
+      record.firstHalf = targetLocation;
+      record.secondHalf = targetLocation;
       record.totalHours = 0;
     }
 
@@ -361,8 +362,8 @@ export class AttendanceCronService {
     // Update status and split fields to ABSENT
     for (const record of recordsToUpdate) {
       record.status = AttendanceStatus.ABSENT;
-      record.firstHalf = AttendanceStatus.ABSENT;
-      record.secondHalf = AttendanceStatus.ABSENT;
+      record.firstHalf = WorkLocation.ABSENT;
+      record.secondHalf = WorkLocation.ABSENT;
       record.totalHours = 0;
     }
 

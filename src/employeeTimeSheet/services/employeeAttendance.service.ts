@@ -13,14 +13,17 @@ import { EmployeeAttendance } from '../entities/employeeAttendance.entity';
 import { AttendanceStatus } from '../enums/attendance-status.enum';
 import { LeaveRequestStatus } from '../enums/leave-notification-status.enum';
 import { MonthStatus } from '../enums/month-status.enum';
-import { WorkLocation } from '../enums/work-location.enum';
+import { WorkLocation, WorkLocationKeyword } from '../enums/work-location.enum';
 import { LeaveRequestType } from '../enums/leave-request-type.enum';
 import { UserStatus } from '../../users/enums/user-status.enum';
+import { Department } from '../enums/department.enum';
+import { CompOffService } from './comp-off.service';
 import { LeaveRequest } from '../entities/leave-request.entity';
 import { EmployeeAttendanceDto } from '../dto/employeeAttendance.dto';
 import { MasterHolidayService } from '../../master/service/master-holiday.service';
 import { TimesheetBlockerService } from './timesheetBlocker.service';
 import { EmployeeDetails } from '../entities/employeeDetails.entity';
+import { EmploymentType } from '../enums/employment-type.enum';
 import { ManagerMapping, ManagerMappingStatus } from '../../managerMapping/entities/managerMapping.entity';
 import * as ExcelJS from 'exceljs';
 import PDFDocument from 'pdfkit';
@@ -41,6 +44,7 @@ export class EmployeeAttendanceService {
     private readonly employeeDetailsRepository: Repository<EmployeeDetails>,
     private readonly masterHolidayService: MasterHolidayService,
     private readonly blockerService: TimesheetBlockerService,
+    private readonly compOffService: CompOffService,
   ) { }
 
   /**
@@ -60,12 +64,12 @@ export class EmployeeAttendanceService {
       // 2. Otherwise use system defaults based on activities
       const isWork = (half: string | null): boolean => {
         if (!half || half === AttendanceStatus.LEAVE || half === AttendanceStatus.ABSENT) return false;
-        const normalized = half.toLowerCase();
-        return normalized.includes(WorkLocation.OFFICE.toLowerCase()) ||
-          normalized.includes(WorkLocation.WFH) ||
-          normalized.includes(WorkLocation.WORK_FROM_HOME) ||
-          normalized.includes(WorkLocation.CLIENT_VISIT) ||
-          normalized.includes(WorkLocation.PRESENT);
+        const normalized = half.toLowerCase().trim();
+        return normalized.includes(WorkLocationKeyword.OFFICE) ||
+          normalized.includes(WorkLocationKeyword.WFH) ||
+          normalized.includes(WorkLocationKeyword.WORK_FROM_HOME) ||
+          normalized.includes(WorkLocationKeyword.CLIENT_VISIT) ||
+          normalized.includes(WorkLocationKeyword.PRESENT);
       };
 
       const h1Work = isWork(firstHalf);
@@ -80,18 +84,18 @@ export class EmployeeAttendanceService {
     }
   }
 
-  private determineDefaultActivity(firstHalf: WorkLocation | AttendanceStatus | null, secondHalf: WorkLocation | AttendanceStatus | null): WorkLocation {
+  private determineDefaultActivity(firstHalf: WorkLocation | AttendanceStatus | string | null, secondHalf: WorkLocation | AttendanceStatus | string | null): WorkLocation {
     try {
       const h1 = (firstHalf || '').toLowerCase();
       const h2 = (secondHalf || '').toLowerCase();
 
       // If one half has a work activity, use that
-      if (h1.includes(WorkLocation.WFH) || h1.includes(WorkLocation.WORK_FROM_HOME)) return WorkLocation.WORK_FROM_HOME;
-      if (h2.includes(WorkLocation.WFH) || h2.includes(WorkLocation.WORK_FROM_HOME)) return WorkLocation.WORK_FROM_HOME;
-      if (h1.includes(WorkLocation.CLIENT_VISIT)) return WorkLocation.CLIENT_VISIT;
-      if (h2.includes(WorkLocation.CLIENT_VISIT)) return WorkLocation.CLIENT_VISIT;
-      if (h1.includes(WorkLocation.OFFICE.toLowerCase())) return WorkLocation.OFFICE;
-      if (h2.includes(WorkLocation.OFFICE.toLowerCase())) return WorkLocation.OFFICE;
+      if (h1.includes(WorkLocationKeyword.WFH) || h1.includes(WorkLocationKeyword.WORK_FROM_HOME)) return WorkLocation.WORK_FROM_HOME;
+      if (h2.includes(WorkLocationKeyword.WFH) || h2.includes(WorkLocationKeyword.WORK_FROM_HOME)) return WorkLocation.WORK_FROM_HOME;
+      if (h1.includes(WorkLocationKeyword.CLIENT_VISIT) || h1.includes(WorkLocationKeyword.CV)) return WorkLocation.CLIENT_VISIT;
+      if (h2.includes(WorkLocationKeyword.CLIENT_VISIT) || h2.includes(WorkLocationKeyword.CV)) return WorkLocation.CLIENT_VISIT;
+      if (h1.includes(WorkLocationKeyword.OFFICE)) return WorkLocation.OFFICE;
+      if (h2.includes(WorkLocationKeyword.OFFICE)) return WorkLocation.OFFICE;
 
       return WorkLocation.OFFICE; // Default to Office
     } catch (error) {
@@ -100,7 +104,7 @@ export class EmployeeAttendanceService {
     }
   }
 
-  private isActivity(half: string | null, pattern: string): boolean {
+  private isActivity(half: string | null, pattern: WorkLocationKeyword | string): boolean {
     try {
       if (!half || !pattern) return false;
       return half.toLowerCase().includes(pattern.toLowerCase());
@@ -140,27 +144,32 @@ export class EmployeeAttendanceService {
       endOfDay.setHours(23, 59, 59, 999);
 
       // --- Holiday/Weekend Blocking Logic (Start) ---
-      const dateStrLocal = startOfDay.toISOString().split('T')[0];
-      const holiday = await this.masterHolidayService.findByDate(dateStrLocal);
+      const topDateStrLocal = startOfDay.toISOString().split('T')[0];
+      const holiday = await this.masterHolidayService.findByDate(topDateStrLocal);
       const isSun = startOfDay.getDay() === 0;
       const isSatLocal = startOfDay.getDay() === 6;
 
       if (!isPrivileged) {
-        if (holiday) {
+        const detail = await this.employeeDetailsRepository.findOne({ where: { employeeId: createEmployeeAttendanceDto.employeeId } });
+        const isIT = detail?.department === Department.IT || detail?.department === Department.IT_SUPPORT;
+        const isFullTimer = detail?.employmentType === EmploymentType.FULL_TIMER;
+
+        if (holiday && !(isIT && isFullTimer)) {
           throw new BadRequestException('Attendance is blocked for Holidays.');
         }
-        if (isSun) {
+        if (isSun && !(isIT && isFullTimer)) {
           throw new BadRequestException('Attendance is blocked for Sundays.');
         }
         
-        // Saturday Rule: 4-9 hours validation
+        // Weekend/Holiday Rule: 4-9 hours validation
         const incomingHours = createEmployeeAttendanceDto.totalHours !== undefined && createEmployeeAttendanceDto.totalHours !== null 
           ? Number(createEmployeeAttendanceDto.totalHours) 
           : null;
 
-        if (isSatLocal && incomingHours !== null && incomingHours > 0) {
+        if ((isSatLocal || ((isSun || holiday) && (isIT && isFullTimer))) && incomingHours !== null && incomingHours > 0) {
           if (incomingHours < 4 || incomingHours > 9) {
-            throw new BadRequestException('Saturday hours must be between 4 and 9.');
+            const msg = isSatLocal ? 'Saturday' : (isSun ? 'Sunday' : 'Holiday');
+            throw new BadRequestException(`${msg} hours must be between 4 and 9.`);
           }
         }
       }
@@ -232,28 +241,40 @@ export class EmployeeAttendanceService {
         }
 
         // CRITICAL: Synchronize splits and status for UPDATED existing records in create branch
-        const hours = Number(existingRecord.totalHours || 0);
-        const isSat = new Date(existingRecord.workingDate).getDay() === 6;
+        const hoursFromExisting = Number(existingRecord.totalHours || 0);
+        const dateObjFromExisting = new Date(existingRecord.workingDate);
+        const isSaturdayFromExisting = dateObjFromExisting.getDay() === 6;
+        const isSundayFromExisting = dateObjFromExisting.getDay() === 0;
+        const dateStrLocalFromExisting = dateObjFromExisting.toISOString().split('T')[0];
+        const currentHolidayFromExisting = await this.masterHolidayService.findByDate(dateStrLocalFromExisting);
+        
+        const empDetailFromExisting = await this.employeeDetailsRepository.findOne({ where: { employeeId: existingRecord.employeeId } });
+        const isITDeptFromExisting = empDetailFromExisting?.department === Department.IT || empDetailFromExisting?.department === Department.IT_SUPPORT;
+        const isFTFromExisting = empDetailFromExisting?.employmentType === EmploymentType.FULL_TIMER;
+        const isWeekendOrHoliday = isSaturdayFromExisting || isSundayFromExisting || !!currentHolidayFromExisting;
+        const isEligibleForCompOff = isWeekendOrHoliday && isITDeptFromExisting && isFTFromExisting;
 
-        if (isSat && hours > 3) {
+        if (isEligibleForCompOff && hoursFromExisting > 3 && hoursFromExisting <= 9) {
           existingRecord.status = AttendanceStatus.FULL_DAY;
-        } else if (hours > 0 && hours <= 6) {
+          existingRecord.firstHalf = WorkLocation.OFFICE;
+          existingRecord.secondHalf = WorkLocation.OFFICE;
+        } else if (hoursFromExisting > 0 && hoursFromExisting <= 6 && !isWeekendOrHoliday) {
           // Relaxed enforcement: Only set defaults if no source request is linked and splits are empty
           if (!existingRecord.sourceRequestId && (!existingRecord.firstHalf || !existingRecord.secondHalf)) {
             existingRecord.firstHalf = WorkLocation.OFFICE;
-            existingRecord.secondHalf = AttendanceStatus.LEAVE;
+            existingRecord.secondHalf = WorkLocation.LEAVE;
             this.logger.log(`[ATTENDANCE_CREATE] Enforced default Half Day splits for Record ${existingRecord.id}`);
           }
           existingRecord.status = AttendanceStatus.HALF_DAY;
           this.logger.log(`[ATTENDANCE_CREATE] Synchronized Half Day status (<= 6h)`);
-        } else if (hours === 9 || (isSat && hours > 3 && hours <= 6) || hours > 6) {
+        } else if ((hoursFromExisting > 6 && !isWeekendOrHoliday) || (isWeekendOrHoliday && hoursFromExisting >= 4)) {
           // STRICT OVERWRITE: Any entry considered "Full Day" must have "Office" splits
           existingRecord.firstHalf = WorkLocation.OFFICE;
           existingRecord.secondHalf = WorkLocation.OFFICE;
           createEmployeeAttendanceDto.firstHalf = WorkLocation.OFFICE as any;
           createEmployeeAttendanceDto.secondHalf = WorkLocation.OFFICE as any;
           existingRecord.status = AttendanceStatus.FULL_DAY;
-          this.logger.log(`[ATTENDANCE_OVERWRITE] Enforced Full Day synchronization for existing record (${hours}h) with Office splits`);
+          this.logger.log(`[ATTENDANCE_OVERWRITE] Enforced Full Day synchronization for existing record (${hoursFromExisting}h) with Office splits`);
         } else if (existingRecord.totalHours === 0 || existingRecord.totalHours === null) {
           const isClear = existingRecord.totalHours === null;
 
@@ -301,6 +322,9 @@ export class EmployeeAttendanceService {
         }
 
         const saved = await this.employeeAttendanceRepository.save(existingRecord);
+        if (isEligibleForCompOff && hoursFromExisting > 3 && hoursFromExisting <= 9) {
+          await this.compOffService.createOrUpdateCompOff(saved.employeeId, dateStrLocalFromExisting, saved.id, hoursFromExisting);
+        }
         this.logger.log(`[ATTENDANCE_CREATE] Updated record ID: ${saved.id}, sourceRequestId after save: ${saved.sourceRequestId}`);
         return saved;
       }
@@ -337,28 +361,41 @@ export class EmployeeAttendanceService {
       }
 
       // CRITICAL: Strictly enforce synchronization rules for BOTH branches (Create/Update)
-      const hours = Number(newAttendance.totalHours || 0);
-      const isSat = new Date(newAttendance.workingDate).getDay() === 6;
+      const hoursFromNew = Number(newAttendance.totalHours || 0);
+      const dateObjFromNew = new Date(newAttendance.workingDate);
+      const isSaturdayFromNew = dateObjFromNew.getDay() === 6;
+      const isSundayFromNew = dateObjFromNew.getDay() === 0;
+      const dateStrLocalFromNew = dateObjFromNew.toISOString().split('T')[0];
+      const currentHolidayFromNew = await this.masterHolidayService.findByDate(dateStrLocalFromNew);
+      
+      const empDetailFromNew = await this.employeeDetailsRepository.findOne({ where: { employeeId: newAttendance.employeeId } });
+      const isITDeptFromNew = empDetailFromNew?.department === Department.IT || empDetailFromNew?.department === Department.IT_SUPPORT;
+      const isFTFromNew = empDetailFromNew?.employmentType === EmploymentType.FULL_TIMER;
 
-      if (isSat && hours > 3) {
+      const isWeekendOrHoliday = isSaturdayFromNew || isSundayFromNew || !!currentHolidayFromNew;
+      const isEligibleForCompOff = isWeekendOrHoliday && isITDeptFromNew && isFTFromNew;
+
+      if (isEligibleForCompOff && hoursFromNew > 3 && hoursFromNew <= 9) {
         newAttendance.status = AttendanceStatus.FULL_DAY;
-      } else if (hours > 0 && hours <= 6) {
+        newAttendance.firstHalf = WorkLocation.OFFICE;
+        newAttendance.secondHalf = WorkLocation.OFFICE;
+      } else if (hoursFromNew > 0 && hoursFromNew <= 6 && !isWeekendOrHoliday) {
         // Relaxed enforcement: Only set defaults if no source request is linked and splits are empty
         if (!newAttendance.sourceRequestId && (!newAttendance.firstHalf || !newAttendance.secondHalf)) {
           newAttendance.firstHalf = WorkLocation.OFFICE;
-          newAttendance.secondHalf = AttendanceStatus.LEAVE;
+          newAttendance.secondHalf = WorkLocation.LEAVE;
           this.logger.log(`[ATTENDANCE_CREATE] Enforced default Half Day splits for NEW record`);
         }
         newAttendance.status = AttendanceStatus.HALF_DAY;
         this.logger.log(`[ATTENDANCE_CREATE] Synchronized Half Day status (<= 6h)`);
-      } else if (hours === 9 || (isSat && hours > 3 && hours <= 6) || hours > 6) {
+      } else if ((hoursFromNew > 6 && !isWeekendOrHoliday) || (isWeekendOrHoliday && hoursFromNew >= 4)) {
         // STRICT OVERWRITE: Any entry considered "Full Day" must have "Office" splits
         newAttendance.firstHalf = WorkLocation.OFFICE;
         newAttendance.secondHalf = WorkLocation.OFFICE;
         createEmployeeAttendanceDto.firstHalf = WorkLocation.OFFICE as any;
         createEmployeeAttendanceDto.secondHalf = WorkLocation.OFFICE as any;
         newAttendance.status = AttendanceStatus.FULL_DAY;
-        this.logger.log(`[ATTENDANCE_OVERWRITE] Enforced Full Day synchronization for NEW record (${hours}h) with Office splits`);
+        this.logger.log(`[ATTENDANCE_OVERWRITE] Enforced Full Day synchronization for NEW record (${hoursFromNew}h) with Office splits`);
       } else if (newAttendance.totalHours === 0 || newAttendance.totalHours === null) {
         const isClear = newAttendance.totalHours === null;
         let newStatus = isClear
@@ -404,6 +441,9 @@ export class EmployeeAttendanceService {
       }
 
       const saved = await this.employeeAttendanceRepository.save(newAttendance);
+      if (isEligibleForCompOff && hoursFromNew > 3 && hoursFromNew <= 9) {
+        await this.compOffService.createOrUpdateCompOff(saved.employeeId, dateStrLocalFromNew, saved.id, hoursFromNew);
+      }
       this.logger.log(`[ATTENDANCE_CREATE] Created attendance ID: ${saved.id}, sourceRequestId after save: ${saved.sourceRequestId}`);
 
       // Trigger monthStatus recalculation
@@ -460,10 +500,10 @@ export class EmployeeAttendanceService {
         // This effectively blocks editing for: Leave, WFH, Client Visit, and any split containing them.
         const isRestricted = (val: string) =>
           val &&
-          !val.toLowerCase().includes(WorkLocation.OFFICE.toLowerCase()) &&
-          !val.toLowerCase().includes(AttendanceStatus.NOT_UPDATED.toLowerCase()) &&
-          !val.toLowerCase().includes(AttendanceStatus.UPCOMING.toLowerCase()) &&
-          !val.toLowerCase().includes(AttendanceStatus.HOLIDAY.toLowerCase()) &&
+          !val.toLowerCase().includes(WorkLocationKeyword.OFFICE) &&
+          !val.toLowerCase().includes(WorkLocationKeyword.NOT_UPDATED) &&
+          !val.toLowerCase().includes(WorkLocationKeyword.UPCOMING) &&
+          !val.toLowerCase().includes(WorkLocationKeyword.HOLIDAY) &&
           !val.toLowerCase().includes(AttendanceStatus.WEEKEND.toLowerCase());
 
         if (isRestricted(h1) || isRestricted(h2)) {
@@ -778,27 +818,31 @@ export class EmployeeAttendanceService {
       }
 
       // --- Holiday/Weekend Blocking Logic (Start) ---
-      const dateStrLocal = workingDateObj.toISOString().split('T')[0];
-      const holiday = await this.masterHolidayService.findByDate(dateStrLocal);
-      const isSun = workingDateObj.getDay() === 0;
+      let dateStrLocal = workingDateObj.toISOString().split('T')[0];
+      let holiday = await this.masterHolidayService.findByDate(dateStrLocal);
+      let isSun = workingDateObj.getDay() === 0;
       const isSatLocal = workingDateObj.getDay() === 6;
 
       if (!isPrivileged) {
-        if (holiday) {
+        const detail = await this.employeeDetailsRepository.findOne({ where: { employeeId: attendance.employeeId } });
+        let isIT = detail?.department === Department.IT || detail?.department === Department.IT_SUPPORT;
+        let isFullTimer = detail?.employmentType === EmploymentType.FULL_TIMER;
+
+        if (holiday && !(isIT && isFullTimer)) {
           throw new BadRequestException('Attendance is blocked for Holidays.');
         }
-        if (isSun) {
+        if (isSun && !(isIT && isFullTimer)) {
           throw new BadRequestException('Attendance is blocked for Sundays.');
         }
         
-        // Saturday Rule: 4-9 hours validation
         const incomingHours = updateDto.totalHours !== undefined && updateDto.totalHours !== null 
           ? Number(updateDto.totalHours) 
-          : null;
+          : Number(attendance.totalHours || 0);
 
-        if (isSatLocal && incomingHours !== null && incomingHours > 0) {
+        if ((isSatLocal || (isSun && isIT && isFullTimer) || (holiday && isIT && isFullTimer)) && incomingHours > 0) {
           if (incomingHours < 4 || incomingHours > 9) {
-            throw new BadRequestException('Saturday hours must be between 4 and 9.');
+            const msg = isSatLocal ? 'Saturday' : (isSun ? 'Sunday' : 'Holiday');
+            throw new BadRequestException(`${msg} hours must be between 4 and 9.`);
           }
         }
       }
@@ -829,13 +873,22 @@ export class EmployeeAttendanceService {
         attendance.sourceRequestId = (updateDto as any).sourceRequestId;
       }
 
+      // Collect metadata for status and comp-off rules
+      const dateObj = new Date(attendance.workingDate);
+      const isSat = dateObj.getDay() === 6;
+      isSun = dateObj.getDay() === 0;
+      const empDetail = await this.employeeDetailsRepository.findOne({ where: { employeeId: attendance.employeeId } });
+      const isITMetadata = empDetail?.department === Department.IT || empDetail?.department === Department.IT_SUPPORT;
+      const isFTMetadata = empDetail?.employmentType === EmploymentType.FULL_TIMER;
+      const isWeekendOrHoliday = isSat || isSun || !!holiday;
+      const isEligibleForCompOff = isWeekendOrHoliday && isITMetadata && isFTMetadata;
+
       // CRITICAL FIX: Synchronize splits and status with the new totalHours
       if (updateDto.totalHours !== undefined) {
         const hours = Number(updateDto.totalHours);
 
-        // STRICT OVERWRITE: If hours > 6 (or Sat > 3), it's ALWAYS a Full Day with Office splits.
-        const isSat = new Date(attendance.workingDate).getDay() === 6;
-        if (hours > 6 || (isSat && hours > 3)) {
+        // STRICT OVERWRITE: If hours > 6 (or Weekend/Holiday >= 4), it's ALWAYS a Full Day with Office splits.
+        if (hours > 6 || (isWeekendOrHoliday && hours >= 4)) {
           attendance.status = AttendanceStatus.FULL_DAY;
           updateDto.status = AttendanceStatus.FULL_DAY;
 
@@ -847,17 +900,10 @@ export class EmployeeAttendanceService {
           this.logger.log(`[ATTENDANCE_OVERWRITE] Synchronized Full Day (${hours}h) with Office splits`);
         }
         // If hours is <= 6 and > 0 (and not a Full Day Saturday), it's Half Day.
-        else if (hours > 0 && hours <= 6) {
-          const isSat = new Date(attendance.workingDate).getDay() === 6;
-
-          if (isSat && hours > 3) {
-            attendance.status = AttendanceStatus.FULL_DAY;
-            updateDto.status = AttendanceStatus.FULL_DAY;
-          } else {
-            attendance.status = AttendanceStatus.HALF_DAY;
-            updateDto.status = AttendanceStatus.HALF_DAY;
-            this.logger.log(`[ATTENDANCE_UPDATE] Synchronized Half Day (${hours}h) status`);
-          }
+        else if (hours > 0 && hours <= 6 && !isWeekendOrHoliday) {
+          attendance.status = AttendanceStatus.HALF_DAY;
+          updateDto.status = AttendanceStatus.HALF_DAY;
+          this.logger.log(`[ATTENDANCE_UPDATE] Synchronized Half Day (${hours}h) status`);
         }
         else if (updateDto.totalHours === 0 || updateDto.totalHours === null) {
           const isClear = updateDto.totalHours === null;
@@ -872,7 +918,7 @@ export class EmployeeAttendanceService {
               ? attendance.workingDate.toISOString().split('T')[0]
               : (attendance.workingDate as string).split('T')[0];
 
-            const holiday = await this.masterHolidayService.findByDate(dateStr);
+            holiday = await this.masterHolidayService.findByDate(dateStr);
             if (holiday) {
               newStatus = AttendanceStatus.HOLIDAY;
             } else if (this.masterHolidayService.isWeekend(new Date(attendance.workingDate))) {
@@ -944,7 +990,13 @@ export class EmployeeAttendanceService {
         this.logger.log(`[ATTENDANCE_UPDATE] Auto-filled missing splits for Full Day: ${attendance.firstHalf}, ${attendance.secondHalf}`);
       }
 
+      // Comp-Off Earning Logic: Only for eligible IT Full-Timers handled after save below
+      const finalHours = Number(attendance.totalHours || 0);
+
       const saved = await this.employeeAttendanceRepository.save(attendance);
+      if (isEligibleForCompOff && finalHours > 3 && finalHours <= 9) {
+        await this.compOffService.createOrUpdateCompOff(saved.employeeId, dateStrLocal, saved.id, finalHours);
+      }
 
       // Trigger monthStatus recalculation
       this.triggerMonthStatusRecalc(saved.employeeId, saved.workingDate).catch(() => { });
@@ -977,12 +1029,15 @@ export class EmployeeAttendanceService {
       const dateStr = `${year}-${month}-${day}`;
 
       const isSat = dateObj.getDay() === 6;
+      const isSun = dateObj.getDay() === 0;
+      const holidayObj = await this.masterHolidayService.findByDate(dateStr);
+      const isWeekendOrHoliday = isSat || isSun || !!holidayObj;
 
       // 0. Primary Rule: Hours strictly dictate status if available
-      if (isSat && hours > 3) {
+      if (isWeekendOrHoliday && hours >= 4) {
         return AttendanceStatus.FULL_DAY;
       }
-      if (hours > 0 && hours <= 6) {
+      if (hours > 0 && hours <= 6 && !isWeekendOrHoliday) {
         return AttendanceStatus.HALF_DAY;
       }
       if (hours > 6) {
@@ -991,21 +1046,24 @@ export class EmployeeAttendanceService {
 
       // 1. Check Split-Day Logic if halves are provided (fallback/validation)
       if (firstHalf || secondHalf) {
-        const h1 = (firstHalf || '').toLowerCase();
-        const h2 = (secondHalf || '').toLowerCase();
+        const h1 = (firstHalf || '').toLowerCase().trim();
+        const h2 = (secondHalf || '').toLowerCase().trim();
 
-        const isWork = (val: string) => val.includes(WorkLocation.OFFICE.toLowerCase()) ||
-          val.includes(WorkLocation.WFH.toLowerCase()) ||
-          val.includes(WorkLocation.WORK_FROM_HOME.toLowerCase()) ||
-          val.includes(WorkLocation.CLIENT_VISIT.toLowerCase()) ||
-          val.includes(WorkLocation.PRESENT.toLowerCase());
-        const isLeave = (val: string) => val.includes(AttendanceStatus.LEAVE.toLowerCase());
-        const isAbsent = (val: string) => val.includes(AttendanceStatus.ABSENT.toLowerCase());
+        const isWork = (val: string) => 
+          val.includes(WorkLocationKeyword.OFFICE) ||
+          val.includes(WorkLocationKeyword.WFH) ||
+          val.includes(WorkLocationKeyword.WORK_FROM_HOME) ||
+          val.includes(WorkLocationKeyword.CLIENT_VISIT) ||
+          val.includes(WorkLocationKeyword.CV) ||
+          val.includes(WorkLocationKeyword.PRESENT);
+          
+        const isLeave = (val: string) => val.includes(WorkLocationKeyword.LEAVE);
+        const isAbsent = (val: string) => val.includes(WorkLocationKeyword.ABSENT) || val === 'absent';
 
         if (isWork(h1) && isWork(h2)) return AttendanceStatus.FULL_DAY;
         if ((isWork(h1) && isLeave(h2)) || (isLeave(h1) && isWork(h2))) return AttendanceStatus.HALF_DAY;
         if ((isWork(h1) && isAbsent(h2)) || (isAbsent(h1) && isWork(h2))) return AttendanceStatus.HALF_DAY;
-        if (isLeave(h1) && isLeave(h2)) return AttendanceStatus.LEAVE; // Custom string or enum value if exists
+        if (isLeave(h1) && isLeave(h2)) return AttendanceStatus.LEAVE;
       }
 
       if (hours === 0 || hours === null || hours === undefined) {
@@ -1050,8 +1108,6 @@ export class EmployeeAttendanceService {
       );
     }
   }
-
-
 
   async findByDate(workingDate: string, employeeId: string): Promise<EmployeeAttendance[]> {
     this.logger.log(`Fetching attendance for employee: ${employeeId}, Date: ${workingDate}`);
@@ -1319,30 +1375,51 @@ export class EmployeeAttendanceService {
             month: monthNames[date.getMonth()],
             year: date.getFullYear(),
             totalLeaves: 0,
+            compOffLeaves: 0,
             workFromHome: 0,
             clientVisits: 0
           });
         }
 
         const stats = monthlyStatsMap.get(key);
-        const status = (record.status || '').toLowerCase();
+        const recordStatus = (record.status || '').toLowerCase().trim();
+        const fHalf = (record.firstHalf || '').toLowerCase().trim();
+        const sHalf = (record.secondHalf || '').toLowerCase().trim();
+
+        const isCompOff = 
+          recordStatus.includes('comp off') || 
+          recordStatus === WorkLocationKeyword.COMP_OFF_LEAVE ||
+          fHalf.includes('comp off') || 
+          fHalf === WorkLocationKeyword.COMP_OFF_LEAVE ||
+          sHalf.includes('comp off') ||
+          sHalf === WorkLocationKeyword.COMP_OFF_LEAVE;
 
         // Check for Full Leaves (1.0) and Half Days (0.5)
-        if (status === AttendanceStatus.LEAVE.toLowerCase() || status === AttendanceStatus.ABSENT.toLowerCase()) {
-          stats.totalLeaves += 1;
+        if (recordStatus === AttendanceStatus.LEAVE.toLowerCase() || recordStatus === 'absent' || isCompOff) {
+          if (isCompOff) {
+            stats.compOffLeaves += 1;
+          } else {
+            stats.totalLeaves += 1;
+          }
         }
-        else if (status === AttendanceStatus.HALF_DAY.toLowerCase()) {
-          stats.totalLeaves += 0.5;
+        else if (recordStatus === AttendanceStatus.HALF_DAY.toLowerCase()) {
+          if (isCompOff) {
+            stats.compOffLeaves += 0.5;
+          } else {
+            stats.totalLeaves += 0.5;
+          }
         }
 
         // Check for WFH in either split
-        if (this.isActivity(record.firstHalf, WorkLocation.WFH.toLowerCase()) || this.isActivity(record.firstHalf, WorkLocation.WORK_FROM_HOME.toLowerCase()) ||
-          this.isActivity(record.secondHalf, WorkLocation.WFH.toLowerCase()) || this.isActivity(record.secondHalf, WorkLocation.WORK_FROM_HOME.toLowerCase())) {
+        if (this.isActivity(record.firstHalf, WorkLocation.WFH.toLowerCase()) || 
+            this.isActivity(record.firstHalf, WorkLocation.WORK_FROM_HOME.toLowerCase()) ||
+            this.isActivity(record.secondHalf, WorkLocation.WFH.toLowerCase()) || 
+            this.isActivity(record.secondHalf, WorkLocation.WORK_FROM_HOME.toLowerCase())) {
           stats.workFromHome++;
         }
         // Check for Client Visit in either split
         else if (this.isActivity(record.firstHalf, WorkLocation.CLIENT_VISIT.toLowerCase()) ||
-          this.isActivity(record.secondHalf, WorkLocation.CLIENT_VISIT.toLowerCase())) {
+                 this.isActivity(record.secondHalf, WorkLocation.CLIENT_VISIT.toLowerCase())) {
           stats.clientVisits++;
         }
       });
@@ -1398,6 +1475,7 @@ export class EmployeeAttendanceService {
             month: monthNames[m],
             year: y,
             totalLeaves: 0,
+            compOffLeaves: 0,
             workFromHome: 0,
             clientVisits: 0,
             office: 0
@@ -1410,9 +1488,15 @@ export class EmployeeAttendanceService {
         if (record.firstHalf || record.secondHalf) {
           const processHalf = (half: string | null) => {
             if (!half) return;
-            const h = half.toLowerCase();
-            if (h.includes(AttendanceStatus.LEAVE.toLowerCase()) || h.includes(AttendanceStatus.ABSENT.toLowerCase())) {
-              stats.totalLeaves += 0.5;
+            const h = half.toLowerCase().trim();
+            const isCompOffActivity = h.includes('comp off') || h === WorkLocationKeyword.COMP_OFF_LEAVE;
+            
+            if (h.includes(AttendanceStatus.LEAVE.toLowerCase()) || h.includes(AttendanceStatus.ABSENT.toLowerCase()) || isCompOffActivity) {
+              if (isCompOffActivity) {
+                stats.compOffLeaves += 0.5;
+              } else {
+                stats.totalLeaves += 0.5;
+              }
             } else if (h.includes(WorkLocation.WFH.toLowerCase()) || h.includes(WorkLocation.WORK_FROM_HOME.toLowerCase())) {
               stats.workFromHome += 0.5;
             } else if (h.includes(WorkLocation.CLIENT_VISIT.toLowerCase())) {
@@ -1450,6 +1534,7 @@ export class EmployeeAttendanceService {
       const results = Array.from(monthlyStatsMap.values()).map(item => ({
         ...item,
         totalLeaves: Math.round(item.totalLeaves * 10) / 10,
+        compOffLeaves: Math.round(item.compOffLeaves * 10) / 10,
         workFromHome: Math.round(item.workFromHome * 10) / 10,
         clientVisits: Math.round(item.clientVisits * 10) / 10,
         office: Math.round(item.office * 10) / 10
@@ -1653,8 +1738,8 @@ export class EmployeeAttendanceService {
       }
 
       return {
-        totalWeekHours: parseFloat(Number(totalWeekHours).toFixed(2)),
-        totalMonthlyHours: parseFloat(Number(totalMonthlyHours).toFixed(2)),
+        totalWeekHours: parseFloat(Number(totalWeekHours).toFixed(1)),
+        totalMonthlyHours: parseFloat(Number(totalMonthlyHours).toFixed(1)),
         pendingUpdates,
         monthStatus: dbMonthStatus,
       };
@@ -1830,8 +1915,8 @@ export class EmployeeAttendanceService {
         }
 
         results[empId] = {
-          totalWeekHours: parseFloat(Number(totalWeekHours).toFixed(2)),
-          totalMonthlyHours: parseFloat(Number(totalMonthlyHours).toFixed(2)),
+          totalWeekHours: parseFloat(Number(totalWeekHours).toFixed(1)),
+          totalMonthlyHours: parseFloat(Number(totalMonthlyHours).toFixed(1)),
           pendingUpdates,
           monthStatus: emp.monthStatus || MonthStatus.PENDING,
         };

@@ -85,4 +85,8 @@ export class LeaveRequestDto {
   @IsOptional()
   @IsString()
   availableDates?: string;
+
+  @IsOptional()
+  @IsString()
+  compOffDates?: string;
 }

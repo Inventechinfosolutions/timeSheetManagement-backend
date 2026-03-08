@@ -58,11 +58,11 @@ export class LeaveRequest extends BaseEntity {
   @Column({ name: 'reviewed_by', type: 'varchar', nullable: true })
   reviewedBy: string;
 
-  @Column({ name: 'first_half', type: 'varchar', nullable: true })
-  firstHalf: WorkLocation | AttendanceStatus | null;
+  @Column({ name: 'first_half', type: 'enum', enum: WorkLocation, nullable: true })
+  firstHalf: WorkLocation | null;
 
-  @Column({ name: 'second_half', type: 'varchar', nullable: true })
-  secondHalf: WorkLocation | AttendanceStatus | null;
+  @Column({ name: 'second_half', type: 'enum', enum: WorkLocation, nullable: true })
+  secondHalf: WorkLocation | null;
 
   @Column({ name: 'is_half_day', type: 'boolean', default: false })
   isHalfDay: boolean;

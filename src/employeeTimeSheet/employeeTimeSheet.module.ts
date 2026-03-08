@@ -5,8 +5,10 @@ import { EmployeeAttendanceService } from './services/employeeAttendance.service
 import { EmployeeAttendance } from './entities/employeeAttendance.entity';
 import { EmployeeDetailsController } from './controllers/employeeDetails.controller';
 import { EmployeeLinkController } from './controllers/employeeLink.controller';
+import { CompOffController } from './controllers/comp-off.controller';
 import { EmployeeDetailsService } from './services/employeeDetails.service';
 import { EmployeeLinkService } from './services/employeeLink.service';
+import { CompOffService } from './services/comp-off.service';
 import { EmployeeDetails } from './entities/employeeDetails.entity';
 import { User } from '../users/entities/user.entity';
 import { ManagerMapping } from '../managerMapping/entities/managerMapping.entity';
@@ -26,6 +28,7 @@ import { LeaveRequestsService } from './services/leave-requests.service';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { FileService } from '../common/core/utils/fileType.utils';
 import { Notification } from '../notifications/entities/notification.entity';
+import { CompOff } from './entities/comp-off.entity';
 
 @Module({
   imports: [
@@ -39,6 +42,7 @@ import { Notification } from '../notifications/entities/notification.entity';
       ManagerMapping,
       MasterHolidays,
       Notification,
+      CompOff,
     ]),
     UsersModule,
     AuthModule,
@@ -53,6 +57,7 @@ import { Notification } from '../notifications/entities/notification.entity';
     EmployeeLinkController, 
     TimesheetBlockerController,
     LeaveRequestsController,
+    CompOffController,
   ],
   providers: [
     EmployeeAttendanceService, 
@@ -60,6 +65,7 @@ import { Notification } from '../notifications/entities/notification.entity';
     EmployeeLinkService, 
     TimesheetBlockerService,
     LeaveRequestsService,
+    CompOffService,
     FileService,
   ],
   exports: [EmployeeDetailsService, EmployeeLinkService],

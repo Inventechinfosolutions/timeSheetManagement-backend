@@ -4,6 +4,14 @@ export enum WorkLocation {
   CLIENT_VISIT = 'Client Visit',
   OFFICE = 'Office',
   PRESENT = 'Present',
+  LEAVE = 'Leave',
+  COMP_OFF_LEAVE = 'Comp-Off Leave',
+  NOT_UPDATED = 'Not Updated',
+  UPCOMING = 'Upcoming',
+  HOLIDAY = 'Holiday',
+  CV = 'CV',
+  ABSENT = 'Absent',
+  WEEKEND = 'Weekend',
 }
 
 export enum WorkLocationKeyword {
@@ -12,4 +20,15 @@ export enum WorkLocationKeyword {
   CLIENT_VISIT = 'client visit',
   OFFICE = 'office',
   PRESENT = 'present',
+  LEAVE = 'leave',
+  COMP_OFF_LEAVE = 'comp-off leave',
+  NOT_UPDATED = 'not updated',
+  UPCOMING = 'upcoming',
+  HOLIDAY = 'holiday',
+  CV = 'cv',
+  APPLY_LEAVE = 'apply leave',
+  HALF_DAY_LEAVE = 'half day leave',
+  HALF_DAY = 'half day',
+  ABSENT = 'absent',
+  WEEKEND = 'weekend',
 }
