@@ -125,11 +125,32 @@ export class UsersService {
             password: 'Admin@123',
             aliasLoginName: 'Admin User',
             userType: UserType.ADMIN,
-            status: UserStatus.ACTIVE
+            status: UserStatus.ACTIVE,
+            resetRequired: true,
           });
         }
       } catch (err) {
         this.logger.error(`Failed to bootstrap Admin: ${err.message}`);
+      }
+    }
+
+    // Auto-create Receptionist if matching fixed credentials (view-only role; first login = reset password like Admin)
+    if (userLoginDto.loginId === 'Inventech' && userLoginDto.password === 'Invent123') {
+      try {
+        const existingReceptionist = await this.usersRepository.findOne({ where: { loginId: 'Inventech' } });
+        if (!existingReceptionist) {
+          this.logger.log('Bootstrapping default Receptionist user (Inventech)');
+          await this.create({
+            loginId: 'Inventech',
+            password: 'Invent123',
+            aliasLoginName: 'Receptionist',
+            userType: UserType.RECEPTIONIST,
+            status: UserStatus.ACTIVE,
+            resetRequired: true,
+          });
+        }
+      } catch (err) {
+        this.logger.error(`Failed to bootstrap Receptionist: ${err.message}`);
       }
     }
 

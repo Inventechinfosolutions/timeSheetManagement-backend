@@ -1,4 +1,4 @@
-import { IsEmail, IsNotEmpty, MinLength, IsString, IsOptional, IsEnum } from 'class-validator';
+import { IsNotEmpty, MinLength, IsString, IsOptional, IsEnum } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 import { UserType } from '../enums/user-type.enum';
 
@@ -8,17 +8,18 @@ export class CreateUserDto {
   @IsNotEmpty()
   name: string;
 
-  @ApiProperty({ example: 'user@example.com', description: 'The loginId of the user' })
-  @IsEmail()
+  @ApiProperty({ example: 'user@example.com', description: 'Login ID (email or e.g. Inventech for receptionist)' })
+  @IsString()
   @IsNotEmpty()
   loginId: string;
 
-  @ApiProperty({ example: 'password123', description: 'The password of the user', minLength: 6 })
+  @ApiProperty({ example: 'password123', description: 'Optional; for Receptionist defaults to Invent123', minLength: 6 })
+  @IsOptional()
   @IsString()
   @MinLength(6)
-  password: string;
+  password?: string;
 
-  @ApiProperty({ example: 'EMPLOYEE', description: 'The role of the user', enum: UserType })
+  @ApiProperty({ example: 'RECEPTIONIST', description: 'Role; RECEPTIONIST gets default password Invent123 and must reset on first login', enum: UserType })
   @IsEnum(UserType)
   @IsOptional()
   role?: UserType;

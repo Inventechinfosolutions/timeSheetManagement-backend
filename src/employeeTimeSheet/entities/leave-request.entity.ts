@@ -79,4 +79,7 @@ export class LeaveRequest extends BaseEntity {
   /** Optional additional CC email addresses for leave request notifications (JSON array string). */
   @Column({ name: 'cc_emails', type: 'text', nullable: true })
   ccEmails: string | null;
+
+  @Column({ name: 'available_dates', type: 'text', nullable: true })
+  availableDates: string | null;
 }

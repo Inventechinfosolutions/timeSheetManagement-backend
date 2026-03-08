@@ -1,5 +1,6 @@
 import { Controller, Get, Post, Body, Query, Delete, Param, Patch, UseInterceptors, UploadedFiles, ParseIntPipe, Req, Res, HttpException, HttpStatus, HttpCode, UseGuards, Logger } from '@nestjs/common';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
+import { ReceptionistReadOnlyGuard } from '../../auth/guards/receptionist-readonly.guard';
 import { FileFieldsInterceptor } from '@nestjs/platform-express';
 import { LeaveRequestsService } from '../services/leave-requests.service';
 import { LeaveRequestDto } from '../dto/leave-request.dto';
@@ -54,7 +55,7 @@ export class LeaveRequestsController {
   }
 
   @Get()
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, ReceptionistReadOnlyGuard)
   findAll(
     @Req() req: any,
     @Query('employeeId') employeeId?: string,
@@ -122,7 +123,7 @@ export class LeaveRequestsController {
   }
 
   @Get('monthly-details/:month/:year')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, ReceptionistReadOnlyGuard)
   async findAllMonthlyDetails(
     @Req() req: any,
     @Param('month') month: string,
@@ -177,7 +178,7 @@ export class LeaveRequestsController {
   }
 
   @Get('notifications/unread')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, ReceptionistReadOnlyGuard)
   findUnread(@Req() req: any) {
     try {
       const user = req.user;
@@ -224,7 +225,7 @@ export class LeaveRequestsController {
   }
 
   @Post('notifications/mark-all-read')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, ReceptionistReadOnlyGuard)
   markAllAsRead(@Req() req: any) {
     try {
       const user = req.user;
@@ -260,7 +261,7 @@ export class LeaveRequestsController {
   }
 
   @Post(':id/update-status')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, ReceptionistReadOnlyGuard)
   updateStatus(
     @Param('id') id: string,
     @Body('status') status: string,
@@ -279,7 +280,7 @@ export class LeaveRequestsController {
   }
 
   @Patch(':id/:employeeId/clear-attendance')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, ReceptionistReadOnlyGuard)
   clearAttendance(@Param('id') id: string, @Param('employeeId') employeeId: string) {
     try {
       this.logger.log(`Clearing attendance for leave request: ${id}`);
@@ -291,7 +292,7 @@ export class LeaveRequestsController {
   }
 
   @Patch(':id/modify')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, ReceptionistReadOnlyGuard)
   modifyRequest(
     @Param('id') id: string,
     @Body() updateData: { title?: string; description?: string; firstHalf?: string; secondHalf?: string; employeeId?: string; ccEmails?: string[] },
@@ -333,7 +334,7 @@ export class LeaveRequestsController {
   }
 
   @Patch(':id/reject-cancellation')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, ReceptionistReadOnlyGuard)
   async rejectCancellation(
     @Param('id') id: string,
     @Body('employeeId') employeeId: string,
@@ -363,7 +364,7 @@ export class LeaveRequestsController {
   }
 
   @Get(':id/cancellable-dates')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, ReceptionistReadOnlyGuard)
   async getCancellableDates(
     @Param('id') id: string,
     @Query('employeeId') employeeId: string,
@@ -379,7 +380,7 @@ export class LeaveRequestsController {
   }
 
   @Patch(':id/cancel-dates')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, ReceptionistReadOnlyGuard)
   async cancelApprovedDates(
     @Param('id') id: string,
     @Body('employeeId') employeeId: string,

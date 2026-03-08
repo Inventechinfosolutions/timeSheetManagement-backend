@@ -47,9 +47,10 @@ export class EmployeeDetails extends BaseEntity {
   @Column({ name: 'conversion_date', type: 'date', nullable: true })
   conversionDate: Date;
 
-  @Column({ name: 'password', length: 255, nullable: true })
-  password: string;
-
+  /** Optional; not required in bulk Excel upload. When empty, set null so upload does not error. */
+  @Column({ name: 'password', type: 'varchar', length: 255, nullable: true })
+  password: string | null;
+  
   @Column({
     name: 'user_status',
     type: 'enum',

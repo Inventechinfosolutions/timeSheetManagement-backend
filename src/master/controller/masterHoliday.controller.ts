@@ -27,6 +27,7 @@ import { CreateHolidayDto } from '../dto/create-holiday.dto';
 import { UpdateHolidayDto } from '../dto/update-holiday.dto';
 import { HolidayDateRangeDto } from '../dto/holiday-date-range.dto';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
+import { ReceptionistReadOnlyGuard } from '../../auth/guards/receptionist-readonly.guard';
 import { EntityType, ReferenceType } from '../../common/document-uploader/models/documentmetainfo.model';
 import { FileService } from '../../common/core/utils/fileType.utils';
 import { DocumentUploaderService } from '../../common/document-uploader/services/document-uploader.service';
@@ -34,7 +35,7 @@ import { Readable } from 'stream';
 
 @ApiTags('Master Holidays')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, ReceptionistReadOnlyGuard)
 @Controller('master-holidays')
 export class MasterHolidayController {
   private readonly logger = new Logger(MasterHolidayController.name);
