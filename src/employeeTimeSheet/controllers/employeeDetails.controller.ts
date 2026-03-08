@@ -18,6 +18,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
+import { ReceptionistReadOnlyGuard } from '../../auth/guards/receptionist-readonly.guard';
 import { UserType } from '../../users/enums/user-type.enum';
 import { Response } from 'express';
 import { Readable } from 'stream';
@@ -71,6 +72,19 @@ export class EmployeeDetailsController {
       return await this.employeeDetailsService.getRoles();
     } catch (error) {
       this.logger.error(`Error fetching roles: ${error.message}`, error.stack);
+      throw error;
+    }
+  }
+
+  @Get('statuses')
+  @ApiOperation({ summary: 'Get all monthly statuses from enum' })
+  @ApiOkResponse({ type: [String] })
+  async getStatuses() {
+    try {
+      this.logger.log('Fetching all month statuses');
+      return await this.employeeDetailsService.getStatuses();
+    } catch (error) {
+      this.logger.error(`Error fetching statuses: ${error.message}`, error.stack);
       throw error;
     }
   }
@@ -164,7 +178,7 @@ export class EmployeeDetailsController {
   @ApiQuery({ name: 'sort', required: false, type: String })
   @ApiQuery({ name: 'order', required: false, enum: ['ASC', 'DESC'] })
   @Get('timesheet-list')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, ReceptionistReadOnlyGuard)
   @ApiOperation({ summary: 'Get employees for timesheet list' })
   @ApiQuery({ name: 'search', required: false, type: String })
   @ApiQuery({ name: 'sort', required: false, type: String })
@@ -238,7 +252,7 @@ export class EmployeeDetailsController {
   }
 
   @Get()
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, ReceptionistReadOnlyGuard)
   @ApiOperation({ summary: 'Get all employees with optional search' })
   @ApiQuery({
     name: 'search',

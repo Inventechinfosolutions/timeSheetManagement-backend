@@ -1,7 +1,27 @@
-import { Injectable, ConflictException, ForbiddenException, NotFoundException, Logger, InternalServerErrorException, HttpException, HttpStatus, BadRequestException } from '@nestjs/common';
+import {
+  Injectable,
+  ConflictException,
+  ForbiddenException,
+  NotFoundException,
+  Logger,
+  InternalServerErrorException,
+  HttpException,
+  HttpStatus,
+  BadRequestException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, LessThanOrEqual, MoreThanOrEqual, MoreThan, In, Brackets, Between, DeepPartial } from 'typeorm';
+import {
+  Repository,
+  LessThanOrEqual,
+  MoreThanOrEqual,
+  MoreThan,
+  In,
+  Brackets,
+  Between,
+  DeepPartial,
+  Like,
+} from 'typeorm';
 import { LeaveRequest } from '../entities/leave-request.entity';
 import { EmployeeAttendance } from '../entities/employeeAttendance.entity';
 import { AttendanceStatus } from '../enums/attendance-status.enum';
@@ -15,7 +35,11 @@ import { WorkLocation } from '../enums/work-location.enum';
 import { HalfDayType } from '../enums/half-day-type.enum';
 import { ManagerMappingStatus } from '../../managerMapping/entities/managerMapping.entity';
 import { UserType } from '../../users/enums/user-type.enum';
-import { DocumentMetaInfo, EntityType, ReferenceType } from '../../common/document-uploader/models/documentmetainfo.model';
+import {
+  DocumentMetaInfo,
+  EntityType,
+  ReferenceType,
+} from '../../common/document-uploader/models/documentmetainfo.model';
 import dayjs from 'dayjs';
 import { EmployeeAttendanceService } from './employeeAttendance.service';
 import {
@@ -26,7 +50,7 @@ import {
   getRejectionConfirmationTemplate,
   getCancellationRejectionConfirmationTemplate,
   getApprovalConfirmationTemplate,
-  getCancellationApprovalConfirmationTemplate
+  getCancellationApprovalConfirmationTemplate,
 } from '../../common/mail/templates';
 import { ManagerMapping } from '../../managerMapping/entities/managerMapping.entity';
 import { User } from '../../users/entities/user.entity';
@@ -46,30 +70,50 @@ export class LeaveRequestsService {
   }
 
   // Helper to check if weekend based on department
-  private async _isWeekend(date: dayjs.Dayjs, employeeId: string): Promise<boolean> {
+  private async _isWeekend(
+    date: dayjs.Dayjs,
+    employeeId: string,
+  ): Promise<boolean> {
     try {
       // Always block Sunday (0) and Saturday (6)
       const day = date.day();
       const isWknd = day === 0 || day === 6;
       if (isWknd) {
-        this.logger.debug(`[WEEKEND_CHECK] Date ${date.format('YYYY-MM-DD')} is a weekend for employee ${employeeId}`);
+        this.logger.debug(
+          `[WEEKEND_CHECK] Date ${date.format('YYYY-MM-DD')} is a weekend for employee ${employeeId}`,
+        );
       }
       return isWknd;
     } catch (error) {
-      this.logger.error(`[WEEKEND_CHECK] Failed for ${employeeId} on ${date.format('YYYY-MM-DD')}: ${error.message}`);
+      this.logger.error(
+        `[WEEKEND_CHECK] Failed for ${employeeId} on ${date.format('YYYY-MM-DD')}: ${error.message}`,
+      );
       return false; // Default to not weekend on error
     }
   }
 
   // Helper: recalculate and persist monthStatus for an employee based on a date in their month
-  private async _recalcMonthStatus(employeeId: string, refDate: string | Date): Promise<void> {
-    this.logger.log(`[MONTH_STATUS] Triggering recalc for employee: ${employeeId}, refDate: ${refDate}`);
+  private async _recalcMonthStatus(
+    employeeId: string,
+    refDate: string | Date,
+  ): Promise<void> {
+    this.logger.log(
+      `[MONTH_STATUS] Triggering recalc for employee: ${employeeId}, refDate: ${refDate}`,
+    );
     try {
       // [DB_TRUTH]: Delegate all status recalculations to EmployeeAttendanceService.
-      await this.employeeAttendanceService.triggerMonthStatusRecalc(employeeId, refDate);
-      this.logger.log(`[MONTH_STATUS] Recalc triggered successfully for ${employeeId}`);
+      await this.employeeAttendanceService.triggerMonthStatusRecalc(
+        employeeId,
+        refDate,
+      );
+      this.logger.log(
+        `[MONTH_STATUS] Recalc triggered successfully for ${employeeId}`,
+      );
     } catch (err) {
-      this.logger.error(`[MONTH_STATUS] Delegation failed for ${employeeId}: ${err.message}`, err.stack);
+      this.logger.error(
+        `[MONTH_STATUS] Delegation failed for ${employeeId}: ${err.message}`,
+        err.stack,
+      );
     }
   }
 
@@ -93,24 +137,30 @@ export class LeaveRequestsService {
     private notificationsService: NotificationsService,
     private employeeAttendanceService: EmployeeAttendanceService,
     private configService: ConfigService,
-  ) { }
+  ) {}
 
   // Helper to check if holiday
   private async _isHoliday(date: dayjs.Dayjs): Promise<boolean> {
     const dateStr = date.format('YYYY-MM-DD');
     try {
       // Using QueryBuilder for robust Date comparison in MySQL
-      const holiday = await this.masterHolidayRepository.createQueryBuilder('h')
+      const holiday = await this.masterHolidayRepository
+        .createQueryBuilder('h')
         .where('h.date = :dateStr', { dateStr })
         .getOne();
 
       const exists = !!holiday;
       if (exists) {
-        this.logger.debug(`[HOLIDAY_CHECK] Date ${dateStr} is a holiday: ${holiday.name}`);
+        this.logger.debug(
+          `[HOLIDAY_CHECK] Date ${dateStr} is a holiday: ${holiday.name}`,
+        );
       }
       return exists;
     } catch (error) {
-      this.logger.error(`[HOLIDAY_CHECK] Failed for ${dateStr}: ${error.message}`, error.stack);
+      this.logger.error(
+        `[HOLIDAY_CHECK] Failed for ${dateStr}: ${error.message}`,
+        error.stack,
+      );
       return false; // Default to not holiday on error
     }
   }
@@ -122,22 +172,37 @@ export class LeaveRequestsService {
    * @param providedHours - Optional hours provided by user
    * @returns Total working hours (0, 6, or 9)
    */
-  private calculateTotalHours(firstHalf: string | null, secondHalf: string | null, providedHours?: number | null): number {
+  private calculateTotalHours(
+    firstHalf: string | null,
+    secondHalf: string | null,
+    providedHours?: number | null,
+  ): number {
     try {
       // 1. If user provided a specific value, respect it
-      if (providedHours !== undefined && providedHours !== null && providedHours > 0) {
+      if (
+        providedHours !== undefined &&
+        providedHours !== null &&
+        providedHours > 0
+      ) {
         return Number(providedHours);
       }
 
       // 2. Otherwise use system defaults based on activities
       const isWork = (half: string | null): boolean => {
-        if (!half || half === AttendanceStatus.LEAVE || half === AttendanceStatus.ABSENT) return false;
+        if (
+          !half ||
+          half === AttendanceStatus.LEAVE ||
+          half === AttendanceStatus.ABSENT
+        )
+          return false;
         const normalized = half.toLowerCase();
-        return normalized.includes(WorkLocation.OFFICE.toLowerCase()) ||
+        return (
+          normalized.includes(WorkLocation.OFFICE.toLowerCase()) ||
           normalized.includes(WorkLocation.WFH.toLowerCase()) ||
           normalized.includes(WorkLocation.WORK_FROM_HOME.toLowerCase()) ||
           normalized.includes(WorkLocation.CLIENT_VISIT.toLowerCase()) ||
-          normalized.includes(WorkLocation.PRESENT.toLowerCase());
+          normalized.includes(WorkLocation.PRESENT.toLowerCase())
+        );
       };
 
       const h1Work = isWork(firstHalf);
@@ -147,74 +212,61 @@ export class LeaveRequestsService {
       if (h1Work || h2Work) return 6;
       return 0;
     } catch (error) {
-      this.logger.error(`[CALC_HOURS] Error calculating hours: ${error.message}`);
+      this.logger.error(
+        `[CALC_HOURS] Error calculating hours: ${error.message}`,
+      );
       return 0; // Default to 0 on error
     }
   }
 
-
   async create(data: LeaveRequestDto) {
-    this.logger.log(`Starting creation of leave request for employee: ${data.employeeId}, Type: ${data.requestType}`);
+    this.logger.log(
+      `Starting creation of leave request for employee: ${data.employeeId}, Type: ${data.requestType}`,
+    );
     try {
       // Check for overlapping dates based on request type
       if (data.fromDate && data.toDate && data.requestType) {
-        this.logger.debug(`[CREATE] Checking for overlaps: ${data.fromDate} to ${data.toDate}`);
+        this.logger.debug(
+          `[CREATE] Checking for overlaps: ${data.fromDate} to ${data.toDate}`,
+        );
         const requestType = data.requestType;
 
         let conflictingTypes: string[] = [];
 
-        if (requestType === LeaveRequestType.APPLY_LEAVE || requestType === LeaveRequestType.LEAVE) {
-          conflictingTypes = [LeaveRequestType.APPLY_LEAVE, LeaveRequestType.LEAVE];
+        if (
+          requestType === LeaveRequestType.APPLY_LEAVE ||
+          requestType === LeaveRequestType.LEAVE
+        ) {
+          conflictingTypes = [
+            LeaveRequestType.APPLY_LEAVE,
+            LeaveRequestType.LEAVE,
+          ];
         } else if (requestType === LeaveRequestType.WORK_FROM_HOME) {
-          conflictingTypes = [LeaveRequestType.APPLY_LEAVE, LeaveRequestType.LEAVE, LeaveRequestType.WORK_FROM_HOME];
+          conflictingTypes = [
+            LeaveRequestType.APPLY_LEAVE,
+            LeaveRequestType.LEAVE,
+            LeaveRequestType.WORK_FROM_HOME,
+          ];
         } else if (requestType === LeaveRequestType.CLIENT_VISIT) {
-          conflictingTypes = [LeaveRequestType.APPLY_LEAVE, LeaveRequestType.LEAVE, LeaveRequestType.CLIENT_VISIT];
+          conflictingTypes = [
+            LeaveRequestType.APPLY_LEAVE,
+            LeaveRequestType.LEAVE,
+            LeaveRequestType.CLIENT_VISIT,
+          ];
         } else if (requestType === LeaveRequestType.HALF_DAY) {
-          conflictingTypes = [LeaveRequestType.APPLY_LEAVE, LeaveRequestType.LEAVE, LeaveRequestType.HALF_DAY];
+          conflictingTypes = [
+            LeaveRequestType.APPLY_LEAVE,
+            LeaveRequestType.LEAVE,
+            LeaveRequestType.HALF_DAY,
+          ];
         } else {
           conflictingTypes = [requestType];
         }
 
-        const existingRequests = await this.leaveRequestRepository.find({
-          where: {
-            employeeId: data.employeeId,
-            status: In([LeaveRequestStatus.PENDING, LeaveRequestStatus.APPROVED, LeaveRequestStatus.REQUEST_MODIFIED]),
-            requestType: In(conflictingTypes),
-            fromDate: LessThanOrEqual(data.toDate),
-            toDate: MoreThanOrEqual(data.fromDate),
-          },
-        });
-
-        for (const existing of existingRequests) {
-          const existingIsFull = !existing.isHalfDay;
-          const existingConsumesFirst = existingIsFull || (existing.firstHalf && existing.firstHalf !== WorkLocation.OFFICE);
-          const existingConsumesSecond = existingIsFull || (existing.secondHalf && existing.secondHalf !== WorkLocation.OFFICE);
-
-          const newWantsFirst = !data.isHalfDay || data.halfDayType === HalfDayType.FIRST_HALF;
-          const newWantsSecond = !data.isHalfDay || data.halfDayType === HalfDayType.SECOND_HALF;
-
-          if ((newWantsFirst && existingConsumesFirst) || (newWantsSecond && existingConsumesSecond)) {
-            const existingTypeLabel = existingIsFull ? HalfDayType.FULL_DAY :
-              (existingConsumesFirst && !existingConsumesSecond) ? HalfDayType.FIRST_HALF :
-                (!existingConsumesFirst && existingConsumesSecond) ? HalfDayType.SECOND_HALF : HalfDayType.SPLIT_DAY;
-
-            this.logger.warn(`[CREATE] Conflict detected for employee ${data.employeeId}: Existing ${existingTypeLabel} request on ${existing.fromDate}`);
-            throw new ConflictException(
-              `Conflict: Request already exists for ${existing.fromDate} to ${existing.toDate} (${existingTypeLabel})`,
-            );
-          }
-        }
-      }
-
-      if (!data.submittedDate) {
-        data.submittedDate = dayjs().format('YYYY-MM-DD');
-      }
-
-      // Calculate duration
-      if (data.fromDate && data.toDate) {
+        // Calculate working dates for the NEW request first
         const start = dayjs(data.fromDate);
         const end = dayjs(data.toDate);
-
+        const workingDateList: string[] = [];
         let workingDays = 0;
         const diff = end.diff(start, 'day');
 
@@ -222,23 +274,130 @@ export class LeaveRequestsService {
           const current = start.add(i, 'day');
           const isWeekend = await this._isWeekend(current, data.employeeId);
           const isHoliday = await this._isHoliday(current);
-
           if (!isWeekend && !isHoliday) {
             workingDays++;
+            workingDateList.push(current.format('YYYY-MM-DD'));
           }
         }
 
+        if (workingDateList.length === 0) {
+          throw new BadRequestException(
+            'The selected date range contains no working days.',
+          );
+        }
+
+        // --- CONFLICT CHECK (Explict Date Aware) ---
+        const existingRequests = await this.leaveRequestRepository.find({
+          where: {
+            employeeId: data.employeeId,
+            status: In([
+              LeaveRequestStatus.PENDING,
+              LeaveRequestStatus.APPROVED,
+              LeaveRequestStatus.REQUEST_MODIFIED,
+              LeaveRequestStatus.REQUESTING_FOR_CANCELLATION,
+              LeaveRequestStatus.REQUESTING_FOR_MODIFICATION,
+              LeaveRequestStatus.MODIFICATION_APPROVED,
+              LeaveRequestStatus.CANCELLATION_REJECTED,
+              LeaveRequestStatus.MODIFICATION_REJECTED,
+            ]),
+            requestType: In(conflictingTypes),
+            fromDate: LessThanOrEqual(data.toDate),
+            toDate: MoreThanOrEqual(data.fromDate),
+          },
+        });
+
+        for (const existing of existingRequests) {
+          // Determine if there is a REAL date overlap
+          let hasExplicitOverlap = false;
+          let overlapDate = '';
+
+          if (existing.availableDates) {
+            try {
+              const existingDates: string[] = JSON.parse(
+                existing.availableDates,
+              );
+              const overlap = workingDateList.find((d) =>
+                existingDates.includes(d),
+              );
+              if (overlap) {
+                hasExplicitOverlap = true;
+                overlapDate = overlap;
+              }
+            } catch (e) {
+              // Fallback to range if JSON is corrupt
+              hasExplicitOverlap = true;
+            }
+          } else {
+            // Legacy Record (Range based)
+            hasExplicitOverlap = true;
+          }
+
+          if (hasExplicitOverlap) {
+            const existingIsFull = !existing.isHalfDay;
+            const existingConsumesFirst =
+              existingIsFull ||
+              (existing.firstHalf &&
+                existing.firstHalf !== WorkLocation.OFFICE);
+            const existingConsumesSecond =
+              existingIsFull ||
+              (existing.secondHalf &&
+                existing.secondHalf !== WorkLocation.OFFICE);
+
+            const newWantsFirst =
+              !data.isHalfDay || data.halfDayType === HalfDayType.FIRST_HALF;
+            const newWantsSecond =
+              !data.isHalfDay || data.halfDayType === HalfDayType.SECOND_HALF;
+
+            if (
+              (newWantsFirst && existingConsumesFirst) ||
+              (newWantsSecond && existingConsumesSecond)
+            ) {
+              const existingTypeLabel = existingIsFull
+                ? HalfDayType.FULL_DAY
+                : existingConsumesFirst && !existingConsumesSecond
+                  ? HalfDayType.FIRST_HALF
+                  : !existingConsumesFirst && existingConsumesSecond
+                    ? HalfDayType.SECOND_HALF
+                    : HalfDayType.SPLIT_DAY;
+
+              this.logger.warn(
+                `[CREATE] Conflict detected for employee ${data.employeeId}: Existing ${existingTypeLabel} request overlaps with ${overlapDate || existing.fromDate}`,
+              );
+              throw new ConflictException(
+                `Conflict: Request already exists for ${overlapDate || existing.fromDate} (${existingTypeLabel})`,
+              );
+            }
+          }
+        }
+
+        // Set duration and list for the rest of the method
         if (data.isHalfDay) {
           data.duration = workingDays * 0.5;
         } else {
           data.duration = workingDays;
         }
-        this.logger.debug(`[CREATE] Calculated duration: ${data.duration} days`);
+        (data as any).availableDates = JSON.stringify(workingDateList);
+        this.logger.debug(
+          `[CREATE] Calculated duration: ${data.duration} days, dates: ${workingDateList.length}`,
+        );
+      }
+
+      if (!data.submittedDate) {
+        data.submittedDate = dayjs().format('YYYY-MM-DD');
+      }
+
+      // Calculation moved to top of method for conflict detection
+      if (data.fromDate && data.toDate) {
+        // No action needed here
       }
 
       // --- LOGIC: Populate firstHalf and secondHalf ---
       if (data.isHalfDay) {
-        const mainType = (data.requestType === LeaveRequestType.APPLY_LEAVE || data.requestType === LeaveRequestType.HALF_DAY ? AttendanceStatus.LEAVE : data.requestType) || WorkLocation.OFFICE;
+        const mainType =
+          (data.requestType === LeaveRequestType.APPLY_LEAVE ||
+          data.requestType === LeaveRequestType.HALF_DAY
+            ? AttendanceStatus.LEAVE
+            : data.requestType) || WorkLocation.OFFICE;
         const otherHalf = data.otherHalfType || WorkLocation.OFFICE;
 
         if (data.halfDayType === HalfDayType.FIRST_HALF) {
@@ -249,7 +408,11 @@ export class LeaveRequestsService {
           data.secondHalf = mainType;
         }
       } else {
-        const mainType = (data.requestType === LeaveRequestType.APPLY_LEAVE || data.requestType === LeaveRequestType.HALF_DAY ? AttendanceStatus.LEAVE : data.requestType) || WorkLocation.OFFICE;
+        const mainType =
+          (data.requestType === LeaveRequestType.APPLY_LEAVE ||
+          data.requestType === LeaveRequestType.HALF_DAY
+            ? AttendanceStatus.LEAVE
+            : data.requestType) || WorkLocation.OFFICE;
         data.firstHalf = mainType;
         data.secondHalf = mainType;
       }
@@ -259,62 +422,108 @@ export class LeaveRequestsService {
         fromDate: data.fromDate,
         toDate: data.toDate,
         ccEmails: data.ccEmails?.length ? JSON.stringify(data.ccEmails) : null,
-      } as unknown as DeepPartial<LeaveRequest>) as LeaveRequest;
+        availableDates: (data as any).availableDates,
+      } as unknown as DeepPartial<LeaveRequest>);
 
       const savedRequest = await this.leaveRequestRepository.save(leaveRequest);
-      this.logger.log(`[CREATE] Successfully saved leave request ID: ${savedRequest.id} for employee: ${data.employeeId}`);
+      this.logger.log(
+        `[CREATE] Successfully saved leave request ID: ${savedRequest.id} for employee: ${data.employeeId}`,
+      );
 
       // Link documents to the saved request.
-      // Strategy A (precise): when the frontend sends explicit documentKeys (UUIDs),
-      //   link only those exact records. Works for both employee and admin uploads.
-      // Strategy B (fallback): time-window sweep for any unlinked doc uploaded in the
+      // Strategy A (precise): when the frontend sends explicit documentKeys (IDs),
+      //   link only those exact records. Handles split requests by cloning metadata if already linked.
+      // Strategy B (fallback): time-window sweep for any orphaned doc uploaded in the
       //   last 12 h for this employee – covers legacy/offline code paths.
       try {
         const employee = await this.employeeDetailsRepository.findOne({
-          where: { employeeId: savedRequest.employeeId }
+          where: { employeeId: savedRequest.employeeId },
         });
 
         if (employee) {
           if (data.documentKeys && data.documentKeys.length > 0) {
             // Strategy A – precise linking by document ID
-            const updateResult = await this.documentRepo.update(
-              {
-                id: In(data.documentKeys),
-                entityType: EntityType.LEAVE_REQUEST,
-                entityId: employee.id,
-                refId: 0,
-              },
-              { refId: savedRequest.id }
-            );
-            if (updateResult && typeof updateResult.affected === 'number' && updateResult.affected > 0) {
-              this.logger.log(`[CREATE] Linked ${updateResult.affected} precise document(s) for request ${savedRequest.id}`);
+            let linkedCount = 0;
+            for (const docId of data.documentKeys) {
+              const docMeta = await this.documentRepo.findOne({
+                where: {
+                  id: docId,
+                  entityType: EntityType.LEAVE_REQUEST,
+                  entityId: employee.id,
+                },
+              });
+              if (docMeta) {
+                if (docMeta.refId === 0) {
+                  // Direct link for the first time
+                  await this.documentRepo.update(
+                    { id: docId },
+                    { refId: savedRequest.id },
+                  );
+                  linkedCount++;
+                } else if (docMeta.refId !== savedRequest.id) {
+                  // If already linked (e.g. in a split request loop), CLONE metadata for this segment
+                  const clonedDoc = this.documentRepo.create({
+                    ...docMeta,
+                    id: undefined, // New UUID
+                    refId: savedRequest.id,
+                    createdAt: new Date(),
+                    updatedAt: new Date(),
+                  });
+                  await this.documentRepo.save(clonedDoc);
+                  linkedCount++;
+                }
+              }
+            }
+            if (linkedCount > 0) {
+              this.logger.log(
+                `[CREATE] Linked/Cloned ${linkedCount} precise document(s) for request ${savedRequest.id}`,
+              );
             }
           } else {
             // Strategy B – fallback: link any recent orphaned docs for this employee
-            const updateResult = await this.documentRepo.update(
-              {
+            const orphanedDocs = await this.documentRepo.find({
+              where: {
                 entityType: EntityType.LEAVE_REQUEST,
                 entityId: employee.id,
                 refId: 0,
-                createdAt: MoreThan(dayjs().subtract(12, 'hour').toDate()),
+                createdAt: MoreThan(dayjs().subtract(1, 'hour').toDate()),
               },
-              { refId: savedRequest.id }
-            );
-            if (updateResult && typeof updateResult.affected === 'number' && updateResult.affected > 0) {
-              this.logger.log(`[CREATE] Linked ${updateResult.affected} orphaned document(s) (time-window) for request ${savedRequest.id}`);
+            });
+
+            if (orphanedDocs.length > 0) {
+              await this.documentRepo.update(
+                { id: In(orphanedDocs.map((d) => d.id)) },
+                { refId: savedRequest.id },
+              );
+              this.logger.log(
+                `[CREATE] Linked ${orphanedDocs.length} orphaned document(s) (time-window) for request ${savedRequest.id}`,
+              );
             }
           }
         }
       } catch (error) {
-        this.logger.error(`[CREATE] Failed to link documents for request ${savedRequest.id}: ${error.message}`);
+        this.logger.error(
+          `[CREATE] Failed to link documents for request ${savedRequest.id}: ${error.message}`,
+        );
       }
 
-      await this.notifyManagerOfRequest(savedRequest).catch(e => this.logger.error(`[CREATE] notifyManagerOfRequest failed: ${e.message}`));
-      await this.notifyEmployeeOfSubmission(savedRequest).catch(e => this.logger.error(`[CREATE] notifyEmployeeOfSubmission failed: ${e.message}`));
+      await this.notifyManagerOfRequest(savedRequest).catch((e) =>
+        this.logger.error(
+          `[CREATE] notifyManagerOfRequest failed: ${e.message}`,
+        ),
+      );
+      await this.notifyEmployeeOfSubmission(savedRequest).catch((e) =>
+        this.logger.error(
+          `[CREATE] notifyEmployeeOfSubmission failed: ${e.message}`,
+        ),
+      );
 
       return savedRequest;
     } catch (error) {
-      this.logger.error(`[CREATE] Failed for employee ${data.employeeId}: ${error.message}`, error.stack);
+      this.logger.error(
+        `[CREATE] Failed for employee ${data.employeeId}: ${error.message}`,
+        error.stack,
+      );
       if (error instanceof HttpException) throw error;
       throw new HttpException(
         error.message || 'Failed to create leave request',
@@ -326,29 +535,41 @@ export class LeaveRequestsService {
   getLeaveDurationTypes() {
     return [
       { label: 'Full Day Application', value: HalfDayType.FULL_DAY },
-      { label: 'Half Day Application', value: HalfDayType.HALF_DAY }
+      { label: 'Half Day Application', value: HalfDayType.HALF_DAY },
     ];
   }
 
-  async findUnifiedRequests(
-    filters: {
-      employeeId?: string;
-      department?: string;
-      status?: string;
-      search?: string;
-      month?: string;
-      year?: string;
-      page?: number;
-      limit?: number;
-      managerName?: string;
-      managerId?: string;
-    }
-  ) {
-    this.logger.log(`[FETCH] Starting unified request fetch. Filters: ${JSON.stringify(filters)}`);
+  async findUnifiedRequests(filters: {
+    employeeId?: string;
+    department?: string;
+    status?: string;
+    search?: string;
+    month?: string;
+    year?: string;
+    page?: number;
+    limit?: number;
+    managerName?: string;
+    managerId?: string;
+  }) {
+    this.logger.log(
+      `[FETCH] Starting unified request fetch. Filters: ${JSON.stringify(filters)}`,
+    );
     try {
-      const { employeeId, department, status, search, month = 'All', year = 'All', page = 1, limit = 10, managerName, managerId } = filters;
+      const {
+        employeeId,
+        department,
+        status,
+        search,
+        month = 'All',
+        year = 'All',
+        page = 1,
+        limit = 10,
+        managerName,
+        managerId,
+      } = filters;
 
-      const query = this.leaveRequestRepository.createQueryBuilder('lr')
+      const query = this.leaveRequestRepository
+        .createQueryBuilder('lr')
         .leftJoin(EmployeeDetails, 'ed', 'ed.employeeId = lr.employeeId')
         .select([
           'lr.id AS id',
@@ -370,7 +591,7 @@ export class LeaveRequestsService {
           'lr.isHalfDay AS isHalfDay',
           'lr.ccEmails AS ccEmails',
           'ed.department AS department',
-          'ed.fullName AS fullName'
+          'ed.fullName AS fullName',
         ]);
 
       // 1. Employee Filter
@@ -380,20 +601,25 @@ export class LeaveRequestsService {
 
       // 2. Manager Filter (from Upstream)
       if (managerName || managerId) {
-        const { ManagerMapping } = require('../../managerMapping/entities/managerMapping.entity');
+        const {
+          ManagerMapping,
+        } = require('../../managerMapping/entities/managerMapping.entity');
         query.leftJoin(ManagerMapping, 'mm', 'mm.employeeId = lr.employeeId');
         query.andWhere(
           '(lr.employeeId = :exactManagerId OR (mm.managerName LIKE :managerNameQuery OR mm.managerName LIKE :managerIdQuery))',
           {
             exactManagerId: managerId,
             managerNameQuery: `%${managerName}%`,
-            managerIdQuery: `%${managerId}%`
-          }
+            managerIdQuery: `%${managerId}%`,
+          },
         );
-        query.andWhere('(mm.status = :mmStatus OR lr.employeeId = :exactManagerId)', {
-          mmStatus: ManagerMappingStatus.ACTIVE,
-          exactManagerId: managerId
-        });
+        query.andWhere(
+          '(mm.status = :mmStatus OR lr.employeeId = :exactManagerId)',
+          {
+            mmStatus: ManagerMappingStatus.ACTIVE,
+            exactManagerId: managerId,
+          },
+        );
       }
 
       // 3. Department Filter
@@ -408,12 +634,20 @@ export class LeaveRequestsService {
 
       // 5. Search Filter
       if (search && search.trim() !== '') {
-        query.andWhere(new Brackets(qb => {
-          const searchPattern = `%${search.toLowerCase()}%`;
-          qb.where('LOWER(ed.fullName) LIKE :searchPattern', { searchPattern })
-            .orWhere('LOWER(lr.employeeId) LIKE :searchPattern', { searchPattern })
-            .orWhere('LOWER(lr.title) LIKE :searchPattern', { searchPattern });
-        }));
+        query.andWhere(
+          new Brackets((qb) => {
+            const searchPattern = `%${search.toLowerCase()}%`;
+            qb.where('LOWER(ed.fullName) LIKE :searchPattern', {
+              searchPattern,
+            })
+              .orWhere('LOWER(lr.employeeId) LIKE :searchPattern', {
+                searchPattern,
+              })
+              .orWhere('LOWER(lr.title) LIKE :searchPattern', {
+                searchPattern,
+              });
+          }),
+        );
       }
 
       // 6. Date Boundaries Filter
@@ -425,19 +659,25 @@ export class LeaveRequestsService {
           const lastDay = new Date(yearInt, monthInt, 0).getDate();
           const monthEnd = `${year}-${month.padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
 
-          query.andWhere('lr.fromDate <= :monthEnd', { monthEnd })
+          query
+            .andWhere('lr.fromDate <= :monthEnd', { monthEnd })
             .andWhere('lr.toDate >= :monthStart', { monthStart });
         } else if (year !== 'All' && month === 'All') {
           const yearStart = `${year}-01-01`;
           const yearEnd = `${year}-12-31`;
-          query.andWhere('lr.fromDate <= :yearEnd', { yearEnd })
+          query
+            .andWhere('lr.fromDate <= :yearEnd', { yearEnd })
             .andWhere('lr.toDate >= :yearStart', { yearStart });
         } else if (year === 'All' && month !== 'All') {
           const m = parseInt(month);
-          query.andWhere(new Brackets(qb => {
-            qb.where('MONTH(lr.fromDate) = :m', { m })
-              .orWhere('MONTH(lr.toDate) = :m', { m });
-          }));
+          query.andWhere(
+            new Brackets((qb) => {
+              qb.where('MONTH(lr.fromDate) = :m', { m }).orWhere(
+                'MONTH(lr.toDate) = :m',
+                { m },
+              );
+            }),
+          );
         }
       }
 
@@ -451,7 +691,9 @@ export class LeaveRequestsService {
         .limit(limit)
         .getRawMany();
 
-      this.logger.log(`[FETCH] Retrieved ${data.length} requests out of ${total} total`);
+      this.logger.log(
+        `[FETCH] Retrieved ${data.length} requests out of ${total} total`,
+      );
       return {
         data,
         total,
@@ -460,36 +702,79 @@ export class LeaveRequestsService {
         totalPages: Math.ceil(total / limit),
       };
     } catch (error) {
-      this.logger.error(`[FETCH] Unified fetch failed: ${error.message}`, error.stack);
+      this.logger.error(
+        `[FETCH] Unified fetch failed: ${error.message}`,
+        error.stack,
+      );
       if (error instanceof HttpException) throw error;
-      throw new HttpException(`Failed to fetch requests: ${error.message}`, HttpStatus.INTERNAL_SERVER_ERROR);
+      throw new HttpException(
+        `Failed to fetch requests: ${error.message}`,
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
     }
   }
 
-  async findAll(department?: string, status?: string, search?: string, page: number = 1, limit: number = 10, managerName?: string, managerId?: string) {
-    this.logger.log(`[FETCH] findAll: Dept=${department}, Status=${status}, Page=${page}`);
+  async findAll(
+    department?: string,
+    status?: string,
+    search?: string,
+    page: number = 1,
+    limit: number = 10,
+    managerName?: string,
+    managerId?: string,
+  ) {
+    this.logger.log(
+      `[FETCH] findAll: Dept=${department}, Status=${status}, Page=${page}`,
+    );
     try {
-      return await this.findUnifiedRequests({ department, status, search, page, limit, managerName, managerId });
+      return await this.findUnifiedRequests({
+        department,
+        status,
+        search,
+        page,
+        limit,
+        managerName,
+        managerId,
+      });
     } catch (error) {
       if (error instanceof HttpException) throw error;
-      throw new HttpException(`Failed to fetch all requests: ${error.message}`, HttpStatus.INTERNAL_SERVER_ERROR);
+      throw new HttpException(
+        `Failed to fetch all requests: ${error.message}`,
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
     }
   }
 
-  async findByEmployeeId(employeeId: string, status?: string, page: number = 1, limit: number = 10) {
-    this.logger.log(`[FETCH] findByEmployeeId: ID=${employeeId}, Status=${status}`);
+  async findByEmployeeId(
+    employeeId: string,
+    status?: string,
+    page: number = 1,
+    limit: number = 10,
+  ) {
+    this.logger.log(
+      `[FETCH] findByEmployeeId: ID=${employeeId}, Status=${status}`,
+    );
     try {
-      return await this.findUnifiedRequests({ employeeId, status, page, limit });
+      return await this.findUnifiedRequests({
+        employeeId,
+        status,
+        page,
+        limit,
+      });
     } catch (error) {
       if (error instanceof HttpException) throw error;
-      throw new HttpException(`Failed to fetch employee requests: ${error.message}`, HttpStatus.INTERNAL_SERVER_ERROR);
+      throw new HttpException(
+        `Failed to fetch employee requests: ${error.message}`,
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
     }
   }
 
   async findOne(id: number) {
     this.logger.log(`[FETCH] findOne: ID=${id}`);
     try {
-      const result = await this.leaveRequestRepository.createQueryBuilder('lr')
+      const result = await this.leaveRequestRepository
+        .createQueryBuilder('lr')
         .leftJoin(EmployeeDetails, 'ed', 'ed.employeeId = lr.employeeId')
         .where('lr.id = :id', { id })
         .select([
@@ -511,7 +796,7 @@ export class LeaveRequestsService {
           'lr.isHalfDay AS isHalfDay',
           'lr.ccEmails AS ccEmails',
           'ed.department AS department',
-          'ed.fullName AS fullName'
+          'ed.fullName AS fullName',
         ])
         .getRawOne();
 
@@ -520,9 +805,13 @@ export class LeaveRequestsService {
         throw new NotFoundException(`Leave request with ID ${id} not found`);
       }
 
-      const assignedManagerEmail = await this.getAssignedManagerEmail(result.employeeId);
+      const assignedManagerEmail = await this.getAssignedManagerEmail(
+        result.employeeId,
+      );
       const hrEmail = this.getHrEmail();
-      const ccEmailsParsed = result.ccEmails ? this._parseCcEmails(result.ccEmails) : [];
+      const ccEmailsParsed = result.ccEmails
+        ? this._parseCcEmails(result.ccEmails)
+        : [];
 
       return {
         ...result,
@@ -531,16 +820,23 @@ export class LeaveRequestsService {
         ccEmails: ccEmailsParsed,
       };
     } catch (error) {
-      this.logger.error(`[FETCH] findOne failed for ID ${id}: ${error.message}`, error.stack);
+      this.logger.error(
+        `[FETCH] findOne failed for ID ${id}: ${error.message}`,
+        error.stack,
+      );
       if (error instanceof HttpException) throw error;
-      throw new HttpException(`Failed to fetch request: ${error.message}`, HttpStatus.INTERNAL_SERVER_ERROR);
+      throw new HttpException(
+        `Failed to fetch request: ${error.message}`,
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
     }
   }
 
   async findUnread(managerName?: string) {
     this.logger.log(`[FETCH] findUnread: Manager=${managerName || 'All'}`);
     try {
-      const qb = this.leaveRequestRepository.createQueryBuilder('lr')
+      const qb = this.leaveRequestRepository
+        .createQueryBuilder('lr')
         .leftJoin(EmployeeDetails, 'ed', 'ed.employeeId = lr.employeeId')
         .where('lr.isRead = :isRead', { isRead: false })
         .select([
@@ -553,9 +849,10 @@ export class LeaveRequestsService {
           'lr.status AS status',
           'lr.createdAt AS createdAt',
           'lr.requestModifiedFrom AS requestModifiedFrom',
-          'ed.fullName AS employeeName'
+          'ed.fullName AS employeeName',
         ])
-        .addSelect(`CASE 
+        .addSelect(
+          `CASE 
           WHEN lr.status = '${LeaveRequestStatus.PENDING}' THEN 1 
           WHEN lr.status = '${LeaveRequestStatus.REQUESTING_FOR_CANCELLATION}' THEN 2
           WHEN lr.status = '${LeaveRequestStatus.APPROVED}' THEN 3
@@ -564,30 +861,45 @@ export class LeaveRequestsService {
           WHEN lr.status = '${LeaveRequestStatus.REJECTED}' THEN 5
           WHEN lr.status = '${LeaveRequestStatus.CANCELLED}' THEN 6
           ELSE 7 
-        END`, 'priority');
+        END`,
+          'priority',
+        );
 
       if (managerName) {
-        qb.innerJoin(ManagerMapping, 'mm', 'mm.employeeId = lr.employeeId AND mm.status = :mStatus', { mStatus: ManagerMappingStatus.ACTIVE })
-          .andWhere('mm.managerName = :managerName', { managerName });
+        qb.innerJoin(
+          ManagerMapping,
+          'mm',
+          'mm.employeeId = lr.employeeId AND mm.status = :mStatus',
+          { mStatus: ManagerMappingStatus.ACTIVE },
+        ).andWhere('mm.managerName = :managerName', { managerName });
       }
 
-      const requests = await qb.orderBy('priority', 'ASC')
+      const requests = await qb
+        .orderBy('priority', 'ASC')
         .addOrderBy('lr.id', 'DESC')
         .getRawMany();
 
       this.logger.log(`[FETCH] Retrieved ${requests.length} unread requests`);
       return requests;
     } catch (error) {
-      this.logger.error(`[FETCH] findUnread failed: ${error.message}`, error.stack);
+      this.logger.error(
+        `[FETCH] findUnread failed: ${error.message}`,
+        error.stack,
+      );
       if (error instanceof HttpException) throw error;
-      throw new HttpException(`Failed to fetch unread requests: ${error.message}`, HttpStatus.INTERNAL_SERVER_ERROR);
+      throw new HttpException(
+        `Failed to fetch unread requests: ${error.message}`,
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
     }
   }
 
   async markAsRead(id: number) {
     this.logger.log(`[UPDATE] markAsRead: ID=${id}`);
     try {
-      const request = await this.leaveRequestRepository.findOne({ where: { id } });
+      const request = await this.leaveRequestRepository.findOne({
+        where: { id },
+      });
       if (!request) {
         this.logger.warn(`[UPDATE] markAsRead failed: Request ${id} not found`);
         throw new NotFoundException('Leave request not found');
@@ -597,27 +909,44 @@ export class LeaveRequestsService {
       this.logger.log(`[UPDATE] Successfully marked request ${id} as read`);
       return saved;
     } catch (error) {
-      this.logger.error(`[UPDATE] markAsRead failed for ID ${id}: ${error.message}`, error.stack);
+      this.logger.error(
+        `[UPDATE] markAsRead failed for ID ${id}: ${error.message}`,
+        error.stack,
+      );
       if (error instanceof HttpException) throw error;
-      throw new HttpException(`Failed to mark request as read: ${error.message}`, HttpStatus.INTERNAL_SERVER_ERROR);
+      throw new HttpException(
+        `Failed to mark request as read: ${error.message}`,
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
     }
   }
 
   // --- Partial Cancellation Logic ---
 
   async getCancellableDates(id: number, employeeId: string, user?: any) {
-    this.logger.log(`[CANCEL] getCancellableDates: ID=${id}, Employee=${employeeId}`);
+    this.logger.log(
+      `[CANCEL] getCancellableDates: ID=${id}, Employee=${employeeId}`,
+    );
     try {
       const request = await this.leaveRequestRepository.findOne({
         where: { id, employeeId },
       });
       if (!request) {
-        this.logger.warn(`[CANCEL] Request ${id} not found for employee ${employeeId}`);
+        this.logger.warn(
+          `[CANCEL] Request ${id} not found for employee ${employeeId}`,
+        );
         throw new NotFoundException('Request not found');
       }
-      if (request.status !== LeaveRequestStatus.APPROVED && request.status !== LeaveRequestStatus.PENDING) {
-        this.logger.warn(`[CANCEL] Request ${id} is not in APPROVED or PENDING status. Current status: ${request.status}`);
-        throw new ForbiddenException('Only approved or pending requests can be checked for cancellation');
+      if (
+        request.status !== LeaveRequestStatus.APPROVED &&
+        request.status !== LeaveRequestStatus.PENDING
+      ) {
+        this.logger.warn(
+          `[CANCEL] Request ${id} is not in APPROVED or PENDING status. Current status: ${request.status}`,
+        );
+        throw new ForbiddenException(
+          'Only approved or pending requests can be checked for cancellation',
+        );
       }
 
       const isPending = request.status === LeaveRequestStatus.PENDING;
@@ -626,92 +955,186 @@ export class LeaveRequestsService {
       const endDate = dayjs(request.toDate);
       const diffDays = endDate.diff(startDate, 'day');
 
-      const results: { date: string; isCancellable: boolean; reason: string }[] = [];
+      const results: {
+        date: string;
+        isCancellable: boolean;
+        reason: string;
+      }[] = [];
       const now = dayjs();
 
       const roleUpper = (user?.role || '').toUpperCase();
-      const isPrivileged = user && (user.userType === UserType.ADMIN || user.userType === UserType.MANAGER || roleUpper.includes(UserType.ADMIN) || roleUpper.includes('MNG') || roleUpper.includes(UserType.MANAGER));
+      const isPrivileged =
+        user &&
+        (user.userType === UserType.ADMIN ||
+          user.userType === UserType.MANAGER ||
+          roleUpper.includes(UserType.ADMIN) ||
+          roleUpper.includes('MNG') ||
+          roleUpper.includes(UserType.MANAGER));
 
+      const statuses = [
+        LeaveRequestStatus.REQUESTING_FOR_CANCELLATION,
+        LeaveRequestStatus.CANCELLATION_APPROVED,
+        LeaveRequestStatus.REQUESTING_FOR_MODIFICATION,
+        LeaveRequestStatus.MODIFICATION_APPROVED,
+        LeaveRequestStatus.CANCELLED,
+        LeaveRequestStatus.REQUEST_MODIFIED,
+      ];
+
+      // Use a LIKE query to catch both simple IDs and composite ID:TYPE formats
       const existingCancellations = await this.leaveRequestRepository.find({
-        where: {
-          employeeId,
-          requestType: request.requestType,
-          status: In([
-            LeaveRequestStatus.REQUESTING_FOR_CANCELLATION,
-            LeaveRequestStatus.CANCELLATION_APPROVED,
-            LeaveRequestStatus.REQUESTING_FOR_MODIFICATION,
-            LeaveRequestStatus.MODIFICATION_APPROVED,
-            LeaveRequestStatus.CANCELLED,
-          ]),
-        },
+        where: [
+          { requestModifiedFrom: id.toString(), status: In(statuses) },
+          { requestModifiedFrom: Like(`${id}:%`), status: In(statuses) },
+        ],
       });
+
+      // NEW: If the request has availableDates stored, use that as the source of truth
+      let datesFromColumn: string[] | null = null;
+      if (request.availableDates) {
+        try {
+          const parsed = JSON.parse(request.availableDates);
+          if (Array.isArray(parsed)) datesFromColumn = parsed;
+        } catch (e) {
+          this.logger.error(
+            `[GET_CANCELLABLE] Failed to parse availableDates for ${id}`,
+          );
+        }
+      }
 
       for (let i = 0; i <= diffDays; i++) {
         const currentDate = startDate.add(i, 'day');
+        const currentStr = currentDate.format('YYYY-MM-DD');
+
+        // Filter: only include dates that ARE in the availableDates list (if column exists)
+        if (datesFromColumn && !datesFromColumn.includes(currentStr)) {
+          continue;
+        }
 
         const isWknd = await this._isWeekend(currentDate, employeeId);
         if (isWknd) continue;
-
         const isHol = await this._isHoliday(currentDate);
         if (isHol) continue;
 
-        const currentStr = currentDate.format('YYYY-MM-DD');
+        // Block dates covered by existing cancellation/modification child record
+        const isAlreadyCancelled = existingCancellations.some((c: any) => {
+          let datesInChild: string[] | null = null;
+          if (c.availableDates) {
+            try {
+              const parsed = JSON.parse(c.availableDates);
+              if (Array.isArray(parsed)) datesInChild = parsed;
+            } catch (e) {}
+          }
 
-        // Skip dates already covered by an existing cancellation/modification child record
-        // (applies to BOTH pending and approved requests)
-        const isAlreadyCancelled = existingCancellations.some((c) => {
-          const cStart = dayjs(c.fromDate);
-          const cEnd = dayjs(c.toDate);
-          return (currentDate.isSame(cStart, 'day') || currentDate.isAfter(cStart, 'day')) &&
-            (currentDate.isSame(cEnd, 'day') || currentDate.isBefore(cEnd, 'day'));
+          if (datesInChild) {
+            return datesInChild.includes(currentStr);
+          } else {
+            const cStart = dayjs(c.fromDate);
+            const cEnd = dayjs(c.toDate);
+            return (
+              (currentDate.isSame(cStart, 'day') ||
+                currentDate.isAfter(cStart, 'day')) &&
+              (currentDate.isSame(cEnd, 'day') ||
+                currentDate.isBefore(cEnd, 'day'))
+            );
+          }
         });
-        if (isAlreadyCancelled) continue;
 
-        // For pending requests: all dates are immediately cancellable (no approval needed to cancel)
+        if (isAlreadyCancelled) {
+          results.push({
+            date: currentStr,
+            isCancellable: false,
+            reason: 'Already Modified or Cancelled',
+          });
+          continue;
+        }
+
         const deadline = currentDate.hour(18).minute(30).second(0);
-        const isCancellable = isPending ? true : (isPrivileged || now.isBefore(deadline));
+        const isCancellable = isPending
+          ? true
+          : isPrivileged || now.isBefore(deadline);
 
         results.push({
           date: currentStr,
           isCancellable,
           reason: isCancellable
-            ? (isPending ? 'Pending request — cancellable' : (isPrivileged ? 'Admin/Manager Bypass' : `Deadline: ${deadline.format('DD-MMM HH:mm')}`))
+            ? isPending
+              ? 'Pending request — cancellable'
+              : isPrivileged
+                ? 'Admin/Manager Bypass'
+                : `Deadline: ${deadline.format('DD-MMM HH:mm')}`
             : `Deadline passed (${deadline.format('DD-MMM HH:mm')})`,
         });
       }
-      this.logger.log(`[CANCEL] Found ${results.length} cancellable dates for request ${id}`);
+      this.logger.log(
+        `[CANCEL] Found ${results.length} cancellable dates for request ${id}`,
+      );
       return results;
     } catch (error) {
-      this.logger.error(`[CANCEL] getCancellableDates failed for ID ${id}: ${error.message}`, error.stack);
+      this.logger.error(
+        `[CANCEL] getCancellableDates failed for ID ${id}: ${error.message}`,
+        error.stack,
+      );
       if (error instanceof HttpException) throw error;
-      throw new HttpException(`Failed to get cancellable dates: ${error.message}`, HttpStatus.INTERNAL_SERVER_ERROR);
+      throw new HttpException(
+        `Failed to get cancellable dates: ${error.message}`,
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
     }
   }
 
-
-
-  private async notifyAdminOfCancellationRequest(request: LeaveRequest, employeeId: string, totalDays?: number) {
-    this.logger.log(`[NOTIFY] notifyAdminOfCancellationRequest: RequestID=${request.id}, Employee=${employeeId}`);
+  private async notifyAdminOfCancellationRequest(
+    request: LeaveRequest,
+    employeeId: string,
+    totalDays?: number,
+  ) {
+    this.logger.log(
+      `[NOTIFY] notifyAdminOfCancellationRequest: RequestID=${request.id}, Employee=${employeeId}`,
+    );
     try {
       const employee = await this.employeeDetailsRepository.findOne({
         where: { employeeId },
       });
 
       if (employee) {
-        await this.sendCancellationEmails(request, employee, 'request', totalDays);
+        await this.sendCancellationEmails(
+          request,
+          employee,
+          'request',
+          totalDays,
+        );
       }
     } catch (error) {
-      this.logger.error(`[NOTIFY] notifyAdminOfCancellationRequest failed: ${error.message}`, error.stack);
+      this.logger.error(
+        `[NOTIFY] notifyAdminOfCancellationRequest failed: ${error.message}`,
+        error.stack,
+      );
     }
   }
 
   private async copyRequestDocuments(sourceRefId: number, targetRefId: number) {
-    this.logger.log(`[DOCS] copyRequestDocuments: Source=${sourceRefId}, Target=${targetRefId}`);
+    this.logger.log(
+      `[DOCS] copyRequestDocuments: Source=${sourceRefId}, Target=${targetRefId}`,
+    );
     try {
+      // Get the correct entityId from the target request's owner
+      const targetRequest = await this.leaveRequestRepository.findOne({
+        where: { id: targetRefId },
+      });
+      let correctEntityId: number | undefined;
+
+      if (targetRequest) {
+        const employee = await this.employeeDetailsRepository.findOne({
+          where: { employeeId: targetRequest.employeeId },
+        });
+        if (employee) {
+          correctEntityId = employee.id;
+        }
+      }
+
       const originalDocs = await this.documentRepo.find({
         where: {
           refId: sourceRefId,
-          entityType: EntityType.LEAVE_REQUEST
+          entityType: EntityType.LEAVE_REQUEST,
         },
       });
 
@@ -721,6 +1144,7 @@ export class LeaveRequestsService {
           return this.documentRepo.create({
             ...docData,
             refId: targetRefId,
+            entityId: correctEntityId || doc.entityId, // Prefer the looked up ID
             s3Key: doc.s3Key || doc.id.toString(),
             createdAt: new Date(),
             updatedAt: new Date(),
@@ -728,38 +1152,59 @@ export class LeaveRequestsService {
         });
 
         await this.documentRepo.save(clonedDocs);
-        this.logger.log(`[DOCS] Copied ${clonedDocs.length} documents from request ${sourceRefId} to ${targetRefId}`);
+        this.logger.log(
+          `[DOCS] Copied ${clonedDocs.length} documents from request ${sourceRefId} to ${targetRefId}`,
+        );
       }
     } catch (error) {
-      this.logger.error(`[DOCS] copyRequestDocuments failed: ${error.message}`, error.stack);
+      this.logger.error(
+        `[DOCS] copyRequestDocuments failed: ${error.message}`,
+        error.stack,
+      );
     }
   }
 
   async undoCancellationRequest(id: number, employeeId: string) {
-    this.logger.log(`[UNDO_CANCEL] Starting undo for request ID: ${id}, Employee: ${employeeId}`);
+    this.logger.log(
+      `[UNDO_CANCEL] Starting undo for request ID: ${id}, Employee: ${employeeId}`,
+    );
     try {
       const request = await this.leaveRequestRepository.findOne({
         where: { id, employeeId },
       });
 
       if (!request) {
-        this.logger.warn(`[UNDO_CANCEL] Request with ID ${id} not found for employee ${employeeId}`);
+        this.logger.warn(
+          `[UNDO_CANCEL] Request with ID ${id} not found for employee ${employeeId}`,
+        );
         throw new NotFoundException('Request not found');
       }
 
       if (request.status !== LeaveRequestStatus.REQUESTING_FOR_CANCELLATION) {
-        this.logger.warn(`[UNDO_CANCEL] Invalid request status for undo: ${request.status} (ID: ${id})`);
-        throw new ForbiddenException('Only pending cancellation requests can be undone');
+        this.logger.warn(
+          `[UNDO_CANCEL] Invalid request status for undo: ${request.status} (ID: ${id})`,
+        );
+        throw new ForbiddenException(
+          'Only pending cancellation requests can be undone',
+        );
       }
 
       // Time Check: Next Day 10 AM
       const submissionTime = dayjs(request.submittedDate || request.createdAt);
-      const deadline = submissionTime.add(1, 'day').hour(10).minute(0).second(0);
+      const deadline = submissionTime
+        .add(1, 'day')
+        .hour(10)
+        .minute(0)
+        .second(0);
       const now = dayjs();
 
       if (now.isAfter(deadline)) {
-        this.logger.warn(`[UNDO_CANCEL] Undo deadline passed at ${deadline.format()}. Current time: ${now.format()}`);
-        throw new ForbiddenException(`Undo window closed. Deadline was ${deadline.format('DD-MMM HH:mm')}`);
+        this.logger.warn(
+          `[UNDO_CANCEL] Undo deadline passed at ${deadline.format()}. Current time: ${now.format()}`,
+        );
+        throw new ForbiddenException(
+          `Undo window closed. Deadline was ${deadline.format('DD-MMM HH:mm')}`,
+        );
       }
 
       // Revert Duration on Master Request
@@ -778,12 +1223,31 @@ export class LeaveRequestsService {
         const restoreDuration = Number(request.duration || 0);
         masterRequest.duration = currentDuration + restoreDuration;
         await this.leaveRequestRepository.save(masterRequest);
-        this.logger.log(`[UNDO_CANCEL] Restored ${restoreDuration} days to master request ${masterRequest.id}`);
+        this.logger.log(
+          `[UNDO_CANCEL] Restored ${restoreDuration} days to master request ${masterRequest.id}`,
+        );
       }
 
-      request.status = LeaveRequestStatus.CANCELLATION_REVERTED;
+      if (request.requestModifiedFrom) {
+        // PARTIAL cancellation (child record)
+        request.status = LeaveRequestStatus.CANCELLATION_REVERTED;
+        request.availableDates = JSON.stringify([]); // Stop claiming dates from the parent
+        this.logger.log(
+          `[UNDO_CANCEL] Wiped availableDates for child cancellation request ${id}`,
+        );
+      } else {
+        // FULL cancellation (parent record itself)
+        // Revert it back to APPROVED so the original leave remains active
+        request.status = LeaveRequestStatus.APPROVED;
+        this.logger.log(
+          `[UNDO_CANCEL] Reverted parent request ${id} to APPROVED status.`,
+        );
+      }
+
       const saved = await this.leaveRequestRepository.save(request);
-      this.logger.log(`[UNDO_CANCEL] Successfully reverted cancellation request ID: ${id}`);
+      this.logger.log(
+        `[UNDO_CANCEL] Successfully processed undo for request ID: ${id} with status ${request.status}`,
+      );
 
       // --- Email Notifications ---
       try {
@@ -795,16 +1259,27 @@ export class LeaveRequestsService {
           await this.sendCancellationEmails(request, employee, 'revert');
         }
       } catch (error) {
-        this.logger.error(`[UNDO_CANCEL] Notification failure: ${error.message}`);
+        this.logger.error(
+          `[UNDO_CANCEL] Notification failure: ${error.message}`,
+        );
       }
 
-      this._recalcMonthStatus(request.employeeId, request.fromDate.toString()).catch(() => { });
+      this._recalcMonthStatus(
+        request.employeeId,
+        request.fromDate.toString(),
+      ).catch(() => {});
 
       return saved;
     } catch (error) {
-      this.logger.error(`[UNDO_CANCEL] Failed for request ${id}: ${error.message}`, error.stack);
+      this.logger.error(
+        `[UNDO_CANCEL] Failed for request ${id}: ${error.message}`,
+        error.stack,
+      );
       if (error instanceof HttpException) throw error;
-      throw new HttpException(`Failed to undo cancellation: ${error.message}`, HttpStatus.INTERNAL_SERVER_ERROR);
+      throw new HttpException(
+        `Failed to undo cancellation: ${error.message}`,
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
     }
   }
 
@@ -812,12 +1287,16 @@ export class LeaveRequestsService {
     this.logger.log(`[UPDATE] markAllAsRead: ManagerName=${managerName}`);
     try {
       if (managerName) {
-        const subquery = this.managerMappingRepository.createQueryBuilder('mm')
+        const subquery = this.managerMappingRepository
+          .createQueryBuilder('mm')
           .select('mm.employeeId')
           .where('mm.managerName = :managerName', { managerName })
-          .andWhere('mm.status = :mStatus', { mStatus: ManagerMappingStatus.ACTIVE });
+          .andWhere('mm.status = :mStatus', {
+            mStatus: ManagerMappingStatus.ACTIVE,
+          });
 
-        return await this.leaveRequestRepository.createQueryBuilder()
+        return await this.leaveRequestRepository
+          .createQueryBuilder()
           .update()
           .set({ isRead: true })
           .where('isRead = :isRead', { isRead: false })
@@ -825,25 +1304,40 @@ export class LeaveRequestsService {
           .setParameters(subquery.getParameters())
           .execute();
       }
-      return await this.leaveRequestRepository.update({ isRead: false }, { isRead: true });
+      return await this.leaveRequestRepository.update(
+        { isRead: false },
+        { isRead: true },
+      );
     } catch (error) {
-      this.logger.error(`[UPDATE] markAllAsRead failed: ${error.message}`, error.stack);
+      this.logger.error(
+        `[UPDATE] markAllAsRead failed: ${error.message}`,
+        error.stack,
+      );
       if (error instanceof HttpException) throw error;
-      throw new HttpException(`Failed to mark all as read: ${error.message}`, HttpStatus.INTERNAL_SERVER_ERROR);
+      throw new HttpException(
+        `Failed to mark all as read: ${error.message}`,
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
     }
   }
 
   async remove(id: number) {
     this.logger.log(`[DELETE] remove: ID=${id}`);
     try {
-      const request = await this.leaveRequestRepository.findOne({ where: { id } });
+      const request = await this.leaveRequestRepository.findOne({
+        where: { id },
+      });
       if (!request) {
         this.logger.warn(`[DELETE] Request ${id} not found`);
         throw new NotFoundException('Leave request not found');
       }
       if (request.status !== LeaveRequestStatus.PENDING) {
-        this.logger.warn(`[DELETE] Request ${id} is not PENDING. Status: ${request.status}`);
-        throw new ForbiddenException('Only pending leave requests can be deleted');
+        this.logger.warn(
+          `[DELETE] Request ${id} is not PENDING. Status: ${request.status}`,
+        );
+        throw new ForbiddenException(
+          'Only pending leave requests can be deleted',
+        );
       }
 
       // --- Admin Notification Logic (Before Deletion) ---
@@ -856,31 +1350,50 @@ export class LeaveRequestsService {
           await this.sendCancellationEmails(request, employee, 'revert_back');
         }
       } catch (notifyError) {
-        this.logger.error(`[DELETE] Failed to send admin notification for request ${id}: ${notifyError.message}`);
+        this.logger.error(
+          `[DELETE] Failed to send admin notification for request ${id}: ${notifyError.message}`,
+        );
       }
 
       // Mark as CANCELLED (as per the existing file requirement: "Instead of deleting, mark as Cancelled so Admin gets a notification")
       request.status = LeaveRequestStatus.CANCELLED;
       request.isRead = false;
+      request.availableDates = JSON.stringify([]);
       const result = await this.leaveRequestRepository.save(request);
 
-      this.logger.log(`[DELETE] Successfully marked request ${id} as CANCELLED`);
+      this.logger.log(
+        `[DELETE] Successfully marked request ${id} as CANCELLED. Wiping attendance...`,
+      );
+      await this.clearAttendanceForRequest(id).catch((e) =>
+        this.logger.error(`[DELETE] Clear attendance failed: ${e.message}`),
+      );
 
       // Trigger month recalculation
-      this._recalcMonthStatus(request.employeeId, request.fromDate.toString()).catch(() => { });
+      this._recalcMonthStatus(
+        request.employeeId,
+        request.fromDate.toString(),
+      ).catch(() => {});
 
       return result;
     } catch (error) {
-      this.logger.error(`[DELETE] remove failed for ID ${id}: ${error.message}`, error.stack);
+      this.logger.error(
+        `[DELETE] remove failed for ID ${id}: ${error.message}`,
+        error.stack,
+      );
       if (error instanceof HttpException) throw error;
-      throw new HttpException(`Failed to remove request: ${error.message}`, HttpStatus.INTERNAL_SERVER_ERROR);
+      throw new HttpException(
+        `Failed to remove request: ${error.message}`,
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
     }
   }
 
   /** Leave balance: entitlement (18 full timer / 12 intern), used (approved leave in year), pending, balance */
   /** Leave balance: entitlement (18 full timer / 12 intern), used (approved leave in year), pending, balance */
   async getLeaveBalance(employeeId: string, year: string) {
-    this.logger.log(`[STATS] getLeaveBalance: Employee=${employeeId}, Year=${year}`);
+    this.logger.log(
+      `[STATS] getLeaveBalance: Employee=${employeeId}, Year=${year}`,
+    );
     try {
       const yearNum = parseInt(year, 10);
       if (isNaN(yearNum) || yearNum < 2000 || yearNum > 2100) {
@@ -891,7 +1404,14 @@ export class LeaveRequestsService {
 
       const employee = await this.employeeDetailsRepository.findOne({
         where: { employeeId },
-        select: ['id', 'employeeId', 'designation', 'employmentType', 'joiningDate', 'conversionDate'],
+        select: [
+          'id',
+          'employeeId',
+          'designation',
+          'employmentType',
+          'joiningDate',
+          'conversionDate',
+        ],
       });
       if (!employee) {
         this.logger.warn(`[STATS] Employee ${employeeId} not found`);
@@ -901,14 +1421,18 @@ export class LeaveRequestsService {
       // Explicit employment type: FULL_TIMER = 18, INTERN = 12. Else infer from designation (contains "intern").
       const isIntern =
         employee.employmentType === EmploymentType.INTERN ||
-        (employee.designation || '').toLowerCase().includes(EmploymentType.INTERN.toLowerCase());
+        (employee.designation || '')
+          .toLowerCase()
+          .includes(EmploymentType.INTERN.toLowerCase());
 
       // Prorate entitlement for the year based on status and conversion date
       const joinDate = dayjs(employee.joiningDate);
       const joinMonth = joinDate.isValid() ? joinDate.month() + 1 : 1;
       const joinYear = joinDate.isValid() ? joinDate.year() : yearNum;
 
-      const convDate = (employee as any).conversionDate ? dayjs((employee as any).conversionDate) : null;
+      const convDate = (employee as any).conversionDate
+        ? dayjs((employee as any).conversionDate)
+        : null;
 
       let entitlement = 0;
 
@@ -948,12 +1472,20 @@ export class LeaveRequestsService {
         .createQueryBuilder('lr')
         .select('SUM(lr.duration)', 'total')
         .where('lr.employeeId = :employeeId', { employeeId })
-        .andWhere(new Brackets(qb => {
-          qb.where('lr.requestType IN (:...leaveTypes)', { leaveTypes })
-            .orWhere('lr.firstHalf = :leave', { leave: AttendanceStatus.LEAVE })
-            .orWhere('lr.secondHalf = :leave', { leave: AttendanceStatus.LEAVE });
-        }))
-        .andWhere('lr.status = :status', { status: LeaveRequestStatus.APPROVED })
+        .andWhere(
+          new Brackets((qb) => {
+            qb.where('lr.requestType IN (:...leaveTypes)', { leaveTypes })
+              .orWhere('lr.firstHalf = :leave', {
+                leave: AttendanceStatus.LEAVE,
+              })
+              .orWhere('lr.secondHalf = :leave', {
+                leave: AttendanceStatus.LEAVE,
+              });
+          }),
+        )
+        .andWhere('lr.status = :status', {
+          status: LeaveRequestStatus.APPROVED,
+        })
         .andWhere('lr.fromDate <= :yearEnd', { yearEnd })
         .andWhere('lr.toDate >= :yearStart', { yearStart })
         .getRawOne();
@@ -964,11 +1496,17 @@ export class LeaveRequestsService {
         .createQueryBuilder('lr')
         .select('SUM(lr.duration)', 'total')
         .where('lr.employeeId = :employeeId', { employeeId })
-        .andWhere(new Brackets(qb => {
-          qb.where('lr.requestType IN (:...leaveTypes)', { leaveTypes })
-            .orWhere('lr.firstHalf = :leave', { leave: AttendanceStatus.LEAVE })
-            .orWhere('lr.secondHalf = :leave', { leave: AttendanceStatus.LEAVE });
-        }))
+        .andWhere(
+          new Brackets((qb) => {
+            qb.where('lr.requestType IN (:...leaveTypes)', { leaveTypes })
+              .orWhere('lr.firstHalf = :leave', {
+                leave: AttendanceStatus.LEAVE,
+              })
+              .orWhere('lr.secondHalf = :leave', {
+                leave: AttendanceStatus.LEAVE,
+              });
+          }),
+        )
         .andWhere('lr.status = :status', { status: LeaveRequestStatus.PENDING })
         .andWhere('lr.fromDate <= :yearEnd', { yearEnd })
         .andWhere('lr.toDate >= :yearStart', { yearStart })
@@ -977,17 +1515,31 @@ export class LeaveRequestsService {
       const pending = parseFloat(pendingResult?.total || '0');
       const balance = Math.max(0, entitlement - used);
 
-      this.logger.log(`[STATS] getLeaveBalance completed for ${employeeId}: Entitlement=${entitlement}, Used=${used}, Balance=${balance}`);
+      this.logger.log(
+        `[STATS] getLeaveBalance completed for ${employeeId}: Entitlement=${entitlement}, Used=${used}, Balance=${balance}`,
+      );
       return { employeeId, year: yearNum, entitlement, used, pending, balance };
     } catch (error) {
-      this.logger.error(`[STATS] getLeaveBalance failed for ${employeeId}: ${error.message}`, error.stack);
+      this.logger.error(
+        `[STATS] getLeaveBalance failed for ${employeeId}: ${error.message}`,
+        error.stack,
+      );
       if (error instanceof HttpException) throw error;
-      throw new HttpException(`Failed to fetch leave balance: ${error.message}`, HttpStatus.INTERNAL_SERVER_ERROR);
+      throw new HttpException(
+        `Failed to fetch leave balance: ${error.message}`,
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
     }
   }
 
-  async getStats(employeeId: string, month: string = 'All', year: string = 'All') {
-    this.logger.log(`[STATS] getStats: Employee=${employeeId}, Month=${month}, Year=${year}`);
+  async getStats(
+    employeeId: string,
+    month: string = 'All',
+    year: string = 'All',
+  ) {
+    this.logger.log(
+      `[STATS] getStats: Employee=${employeeId}, Month=${month}, Year=${year}`,
+    );
     try {
       const requests = await this.leaveRequestRepository.find({
         where: { employeeId },
@@ -1008,7 +1560,8 @@ export class LeaveRequestsService {
 
         const [reqYear, reqMonth] = reqDateStr.split('-');
         if (year !== 'All' && reqYear !== year) return false;
-        if (month !== 'All' && parseInt(reqMonth) !== parseInt(month)) return false;
+        if (month !== 'All' && parseInt(reqMonth) !== parseInt(month))
+          return false;
         return true;
       });
 
@@ -1042,11 +1595,17 @@ export class LeaveRequestsService {
 
         if (!target) return;
 
-        if (status !== LeaveRequestStatus.CANCELLATION_APPROVED && status !== LeaveRequestStatus.REQUESTING_FOR_CANCELLATION) {
+        if (
+          status !== LeaveRequestStatus.CANCELLATION_APPROVED &&
+          status !== LeaveRequestStatus.REQUESTING_FOR_CANCELLATION
+        ) {
           target.applied++;
         }
 
-        if (status === LeaveRequestStatus.APPROVED || status === LeaveRequestStatus.REQUESTING_FOR_CANCELLATION) {
+        if (
+          status === LeaveRequestStatus.APPROVED ||
+          status === LeaveRequestStatus.REQUESTING_FOR_CANCELLATION
+        ) {
           target.approved++;
         } else if (status === LeaveRequestStatus.REJECTED) {
           target.rejected++;
@@ -1058,30 +1617,53 @@ export class LeaveRequestsService {
       this.logger.log(`[STATS] getStats completed for ${employeeId}`);
       return stats;
     } catch (error) {
-      this.logger.error(`[STATS] getStats failed for ${employeeId}: ${error.message}`, error.stack);
+      this.logger.error(
+        `[STATS] getStats failed for ${employeeId}: ${error.message}`,
+        error.stack,
+      );
       if (error instanceof HttpException) throw error;
-      throw new HttpException(`Failed to fetch stats: ${error.message}`, HttpStatus.INTERNAL_SERVER_ERROR);
+      throw new HttpException(
+        `Failed to fetch stats: ${error.message}`,
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
     }
   }
 
-  async updateStatus(id: number, status: LeaveRequestStatus, employeeId?: string, reviewedBy?: string, reviewerEmail?: string) {
-    this.logger.log(`[UPDATE_STATUS] id=${id}, status=${status}, reviewedBy=${reviewedBy}`);
+  async updateStatus(
+    id: number,
+    status: LeaveRequestStatus,
+    employeeId?: string,
+    reviewedBy?: string,
+    reviewerEmail?: string,
+  ) {
+    this.logger.log(
+      `[UPDATE_STATUS] id=${id}, status=${status}, reviewedBy=${reviewedBy}`,
+    );
     try {
       if (reviewerEmail && !reviewerEmail.includes('@')) {
-        const reviewerEmp = await this.employeeDetailsRepository.findOne({ where: { employeeId: reviewerEmail } });
+        const reviewerEmp = await this.employeeDetailsRepository.findOne({
+          where: { employeeId: reviewerEmail },
+        });
         if (reviewerEmp?.email) reviewerEmail = reviewerEmp.email;
       }
       if (!reviewerEmail || !reviewerEmail.includes('@')) {
         if (reviewedBy) {
-          const mgr = await this.employeeDetailsRepository.findOne({ where: { fullName: reviewedBy } });
+          const mgr = await this.employeeDetailsRepository.findOne({
+            where: { fullName: reviewedBy },
+          });
           if (mgr?.email) reviewerEmail = mgr.email;
         }
-        if ((!reviewerEmail || !reviewerEmail.includes('@')) && (reviewedBy === UserType.ADMIN)) {
+        if (
+          (!reviewerEmail || !reviewerEmail.includes('@')) &&
+          reviewedBy === UserType.ADMIN
+        ) {
           reviewerEmail = process.env.ADMIN_EMAIL || process.env.SMTP_USERNAME;
         }
       }
 
-      const request = await this.leaveRequestRepository.findOne({ where: { id } });
+      const request = await this.leaveRequestRepository.findOne({
+        where: { id },
+      });
       if (!request) {
         this.logger.warn(`[UPDATE_STATUS] Request ${id} not found`);
         throw new NotFoundException('Leave request not found');
@@ -1094,50 +1676,119 @@ export class LeaveRequestsService {
       request.isReadEmployee = false;
 
       const savedRequest = await this.leaveRequestRepository.save(request);
-      const attendanceUpdates: any[] = [];
-      const reqType = request.requestType ? request.requestType.trim().toLowerCase() : '';
 
-      if (status === LeaveRequestStatus.APPROVED || status === LeaveRequestStatus.MODIFICATION_APPROVED) {
+      // If a request enters a terminal "FAILED" state, clear availableDates.
+      // This ensures they don't appear as barriers or claimed dates.
+      const terminalFailedStatuses = [
+        LeaveRequestStatus.REJECTED,
+        LeaveRequestStatus.CANCELLED,
+        LeaveRequestStatus.MODIFICATION_REJECTED,
+        LeaveRequestStatus.CANCELLATION_REJECTED,
+        LeaveRequestStatus.MODIFICATION_CANCELLED,
+        LeaveRequestStatus.CANCELLATION_REVERTED,
+      ];
+
+      if (terminalFailedStatuses.includes(status as any)) {
+        const isChild = !!request.requestModifiedFrom;
+        // 1. Child records ALWAYS get wiped on failure.
+        // 2. Parent records get wiped if they are TRULY terminal (REJECTED/CANCELLED)
+        //    and NOT being reverted to APPROVED (handled in reversion logic below).
+        //    Actually, we'll save the parent record again in reversion logic, so it's safe to wipe here if it's currently a failed status.
+        if (
+          isChild ||
+          status === LeaveRequestStatus.REJECTED ||
+          status === LeaveRequestStatus.CANCELLED ||
+          status === LeaveRequestStatus.MODIFICATION_REJECTED ||
+          status === LeaveRequestStatus.CANCELLATION_REJECTED
+        ) {
+          savedRequest.availableDates = JSON.stringify([]);
+          await this.leaveRequestRepository.save(savedRequest);
+          this.logger.log(
+            `[UPDATE_STATUS] Wiped availableDates for request ${id} (Status: ${status})`,
+          );
+        }
+      }
+      const attendanceUpdates: any[] = [];
+      const reqType = request.requestType
+        ? request.requestType.trim().toLowerCase()
+        : '';
+
+      if (
+        status === LeaveRequestStatus.APPROVED ||
+        status === LeaveRequestStatus.MODIFICATION_APPROVED
+      ) {
         try {
-          this.logger.log(`[UPDATE_STATUS] Processing Approval Automation for Request ID: ${id} (${reqType})`);
+          this.logger.log(
+            `[UPDATE_STATUS] Processing Approval Automation for Request ID: ${id} (${reqType})`,
+          );
           const startDate = dayjs(request.fromDate);
           const endDate = dayjs(request.toDate);
           const diff = endDate.diff(startDate, 'day');
 
+          // NEW: Ensure availableDates is populated if missing (legacy) or recalculated for modifications
+          if (
+            !request.availableDates ||
+            status === LeaveRequestStatus.MODIFICATION_APPROVED
+          ) {
+            const list: string[] = [];
+            for (let i = 0; i <= diff; i++) {
+              const d = startDate.add(i, 'day');
+              const isWknd = await this._isWeekend(d, request.employeeId);
+              const isHol = await this._isHoliday(d);
+              if (!isWknd && !isHol) list.push(d.format('YYYY-MM-DD'));
+            }
+            request.availableDates = JSON.stringify(list);
+            await this.leaveRequestRepository.save(request);
+          }
+
+          let validDates: string[] = [];
+          if (request.availableDates) {
+            try {
+              validDates = JSON.parse(request.availableDates);
+            } catch (e) {}
+          }
+
           for (let i = 0; i <= diff; i++) {
             const targetDate = startDate.add(i, 'day');
-            const isWknd = await this._isWeekend(targetDate, request.employeeId);
+            const targetDateStr = targetDate.format('YYYY-MM-DD');
+
+            if (validDates.length > 0 && !validDates.includes(targetDateStr)) {
+              this.logger.debug(
+                `[UPDATE_STATUS] Skipping date ${targetDateStr} as it is not in availableDates`,
+              );
+              continue;
+            }
+
+            const isWknd = await this._isWeekend(
+              targetDate,
+              request.employeeId,
+            );
             if (isWknd) continue;
 
             const isHol = await this._isHoliday(targetDate);
             if (isHol) {
-              this.logger.debug(`[UPDATE_STATUS] Skipping holiday date ${targetDate.format('YYYY-MM-DD')}`);
+              this.logger.debug(
+                `[UPDATE_STATUS] Skipping holiday date ${targetDateStr}`,
+              );
               continue;
             }
 
             const startOfDay = targetDate.startOf('day').toDate();
             const endOfDay = targetDate.endOf('day').toDate();
 
-            const isCancelled = await this.leaveRequestRepository.findOne({
+            let attendance = await this.employeeAttendanceRepository.findOne({
               where: {
                 employeeId: request.employeeId,
-                status: LeaveRequestStatus.CANCELLED,
-                fromDate: LessThanOrEqual(targetDate.format('YYYY-MM-DD')),
-                toDate: MoreThanOrEqual(targetDate.format('YYYY-MM-DD'))
-              }
-            });
-            if (isCancelled) {
-              this.logger.log(`[UPDATE_STATUS] Skipping cancelled date ${targetDate.format('YYYY-MM-DD')}`);
-              continue;
-            }
-
-            let attendance = await this.employeeAttendanceRepository.findOne({
-              where: { employeeId: request.employeeId, workingDate: Between(startOfDay, endOfDay) }
+                workingDate: Between(startOfDay, endOfDay),
+              },
             });
 
             const firstHalf = request.firstHalf || WorkLocation.OFFICE;
             const secondHalf = request.secondHalf || WorkLocation.OFFICE;
-            const calculatedHours = this.calculateTotalHours(firstHalf, secondHalf);
+            const calculatedHours = this.calculateTotalHours(
+              firstHalf,
+              secondHalf,
+            );
 
             let derivedStatus = AttendanceStatus.FULL_DAY;
             if (calculatedHours === 9) {
@@ -1160,9 +1811,12 @@ export class LeaveRequestsService {
                 workLocation: null,
               });
               await this.employeeAttendanceRepository.save(attendance);
-              this.logger.log(`[UPDATE_STATUS] Created attendance record for ${targetDate.format('YYYY-MM-DD')}`);
+              this.logger.log(
+                `[UPDATE_STATUS] Created attendance record for ${targetDate.format('YYYY-MM-DD')}`,
+              );
             } else {
-              await this.employeeAttendanceRepository.createQueryBuilder()
+              await this.employeeAttendanceRepository
+                .createQueryBuilder()
                 .update(EmployeeAttendance)
                 .set({
                   totalHours: calculatedHours,
@@ -1172,62 +1826,110 @@ export class LeaveRequestsService {
                   sourceRequestId: request.id,
                   workLocation: null,
                 })
-                .where("id = :id", { id: attendance.id })
+                .where('id = :id', { id: attendance.id })
                 .execute();
-              this.logger.log(`[UPDATE_STATUS] Updated attendance record ${attendance.id}`);
+              this.logger.log(
+                `[UPDATE_STATUS] Updated attendance record ${attendance.id}`,
+              );
             }
 
             attendanceUpdates.push({
               id: attendance.id,
               workingDate: targetDate.format('YYYY-MM-DD'),
               status: derivedStatus,
-              totalHours: calculatedHours
+              totalHours: calculatedHours,
             });
           }
         } catch (e) {
-          this.logger.error(`[UPDATE_STATUS] Error in approval automation: ${e.message}`, e.stack);
+          this.logger.error(
+            `[UPDATE_STATUS] Error in approval automation: ${e.message}`,
+            e.stack,
+          );
         }
       }
 
-      if (status === LeaveRequestStatus.REJECTED || status === LeaveRequestStatus.CANCELLED || status === LeaveRequestStatus.CANCELLATION_APPROVED) {
+      if (
+        status === LeaveRequestStatus.REJECTED ||
+        status === LeaveRequestStatus.CANCELLED ||
+        status === LeaveRequestStatus.CANCELLATION_APPROVED
+      ) {
         try {
-          this.logger.log(`[UPDATE_STATUS] Processing Cleanup for request ${id}`);
-          const query = this.employeeAttendanceRepository.createQueryBuilder().update(EmployeeAttendance);
-          query.set({ sourceRequestId: () => 'NULL' });
-          query.where(new Brackets(qb => {
-            qb.where("sourceRequestId = :requestId", { requestId: id });
-            if (request.requestModifiedFrom && !isNaN(Number(request.requestModifiedFrom))) {
-              qb.orWhere("sourceRequestId = :parentId", { parentId: Number(request.requestModifiedFrom) });
+          let cleanDates: string[] = [];
+          if (request.availableDates) {
+            try {
+              cleanDates = JSON.parse(request.availableDates);
+            } catch (e) {}
+          }
+          if (cleanDates.length === 0) {
+            let cur = dayjs(request.fromDate);
+            const end = dayjs(request.toDate);
+            while (cur.isBefore(end) || cur.isSame(end, 'day')) {
+              cleanDates.push(cur.format('YYYY-MM-DD'));
+              cur = cur.add(1, 'day');
             }
-            if (status === LeaveRequestStatus.CANCELLED) {
-              qb.orWhere(new Brackets(innerQb => {
-                innerQb.where("employeeId = :employeeId", { employeeId: request.employeeId })
-                  .andWhere("workingDate BETWEEN :startDate AND :endDate", {
-                    startDate: dayjs(request.fromDate).format('YYYY-MM-DD'),
-                    endDate: dayjs(request.toDate).format('YYYY-MM-DD')
-                  });
-              }));
-            }
-          }));
+          }
 
-          const result = await query.execute();
-          this.logger.log(`[UPDATE_STATUS] Unlocked ${result.affected ?? 0} records for request ${id}`);
-          if (result.affected && result.affected > 0) {
-            attendanceUpdates.push({ action: 'UNLOCKED', affectedCount: result.affected });
+          if (cleanDates.length > 0) {
+            const query = this.employeeAttendanceRepository
+              .createQueryBuilder()
+              .update(EmployeeAttendance);
+
+            // Wipe all associated attendance data for this request on these dates
+            query.set({
+              sourceRequestId: () => 'NULL',
+              status: () => 'NULL',
+              totalHours: () => 'NULL',
+              firstHalf: () => 'NULL',
+              secondHalf: () => 'NULL',
+              workLocation: () => 'NULL',
+            });
+
+            const parentIdVal = request.requestModifiedFrom
+              ? String(request.requestModifiedFrom).split(':')[0]
+              : null;
+            const idsToCheck = [id];
+            if (parentIdVal && !isNaN(Number(parentIdVal)))
+              idsToCheck.push(Number(parentIdVal));
+
+            query.where('sourceRequestId IN (:...idsToCheck)', { idsToCheck });
+            query.andWhere('workingDate IN (:...cleanDates)', { cleanDates });
+
+            const result = await query.execute();
+            this.logger.log(
+              `[UPDATE_STATUS] Cleared ${result.affected ?? 0} records for request ${id} on dates ${cleanDates.join(',')}`,
+            );
+            if (result.affected && result.affected > 0) {
+              attendanceUpdates.push({
+                action: 'CLEARED',
+                affectedCount: result.affected,
+              });
+            }
           }
         } catch (err) {
-          this.logger.error(`[UPDATE_STATUS] Failed to unlock attendance for request ${id}: ${err.message}`);
+          this.logger.error(
+            `[UPDATE_STATUS] Failed to clear attendance for request ${id}: ${err.message}`,
+          );
         }
       }
 
       // Notifications
       try {
-        const employee = await this.employeeDetailsRepository.findOne({ where: { employeeId: request.employeeId } });
+        const employee = await this.employeeDetailsRepository.findOne({
+          where: { employeeId: request.employeeId },
+        });
         if (employee) {
-          if (status === LeaveRequestStatus.CANCELLED && previousStatus === LeaveRequestStatus.PENDING) {
-            const adminEmail = (process.env.ADMIN_EMAIL || process.env.SMTP_USERNAME)?.trim();
+          if (
+            status === LeaveRequestStatus.CANCELLED &&
+            previousStatus === LeaveRequestStatus.PENDING
+          ) {
+            const adminEmail = (
+              process.env.ADMIN_EMAIL || process.env.SMTP_USERNAME
+            )?.trim();
             if (adminEmail) {
-              const requestTypeLabel = request.requestType === LeaveRequestType.APPLY_LEAVE ? AttendanceStatus.LEAVE : request.requestType;
+              const requestTypeLabel =
+                request.requestType === LeaveRequestType.APPLY_LEAVE
+                  ? AttendanceStatus.LEAVE
+                  : request.requestType;
               const adminHtml = getCancellationTemplate({
                 employeeName: employee.fullName,
                 employeeId: employee.employeeId,
@@ -1239,97 +1941,213 @@ export class LeaveRequestsService {
                 reason: request.description,
                 actionType: 'revert_back',
               });
-              const managerEmail = await this.getAssignedManagerEmail(request.employeeId);
+              const managerEmail = await this.getAssignedManagerEmail(
+                request.employeeId,
+              );
               const hrEmail = this.getHrEmail();
               const parsedCc = this._parseCcEmails(request.ccEmails);
-              const cancelCc = [managerEmail, hrEmail, ...parsedCc].filter((e): e is string => !!e && e.includes('@'));
-              const cancelCcList = [...new Set(cancelCc)].filter(e => e.toLowerCase() !== adminEmail.toLowerCase());
+              const cancelCc = [managerEmail, hrEmail, ...parsedCc].filter(
+                (e): e is string => !!e && e.includes('@'),
+              );
+              const cancelCcList = [...new Set(cancelCc)].filter(
+                (e) => e.toLowerCase() !== adminEmail.toLowerCase(),
+              );
               await this.emailService.sendEmail(
                 adminEmail,
                 `Request Cancelled: ${requestTypeLabel} - ${employee.fullName}`,
                 `Request Cancelled by ${employee.fullName}`,
                 adminHtml,
                 undefined,
-                cancelCcList.length > 0 ? cancelCcList : undefined
+                cancelCcList.length > 0 ? cancelCcList : undefined,
               );
-              this.logger.log(`[UPDATE_STATUS] Employee self-cancel notification sent to Admin (CC: Manager, HR, CC)`);
+              this.logger.log(
+                `[UPDATE_STATUS] Employee self-cancel notification sent to Admin (CC: Manager, HR, CC)`,
+              );
             }
           }
 
-          await this.sendStatusUpdateEmails(request, employee, status, previousStatus);
+          await this.sendStatusUpdateEmails(
+            request,
+            employee,
+            status,
+            previousStatus,
+          );
         }
       } catch (error) {
-        this.logger.error(`[UPDATE_STATUS] Notification error: ${error.message}`);
+        this.logger.error(
+          `[UPDATE_STATUS] Notification error: ${error.message}`,
+        );
       }
 
+      // NEW: REVERSION LOGIC
+      // If a Modification Request (either full parent or partial child) is REJECTED,
+      // and it was originally an Approved leave, we should ensure the "original" stays.
+      // 1. If it's a FULL modification (editing the parent directly), revert parent to APPROVED.
+      if (
+        status === LeaveRequestStatus.REJECTED &&
+        previousStatus === LeaveRequestStatus.REQUESTING_FOR_MODIFICATION
+      ) {
+        if (!request.requestModifiedFrom) {
+          // This was a full modification on the parent itself. Revert it.
+          request.status = LeaveRequestStatus.APPROVED;
+          await this.leaveRequestRepository.save(request);
+          this.logger.log(
+            `[UPDATE_STATUS] Reverted request ${id} back to APPROVED after modification rejection.`,
+          );
+        }
+      }
 
+      // 2. If a FULL cancellation request is REJECTED, revert it to APPROVED.
+      if (
+        status === LeaveRequestStatus.REJECTED &&
+        previousStatus === LeaveRequestStatus.REQUESTING_FOR_CANCELLATION
+      ) {
+        if (!request.requestModifiedFrom) {
+          request.status = LeaveRequestStatus.APPROVED;
+          await this.leaveRequestRepository.save(request);
+          this.logger.log(
+            `[UPDATE_STATUS] Reverted request ${id} back to APPROVED after cancellation rejection (full).`,
+          );
+        }
+      }
 
-
-
-      // If a cancellation request is approved, update the parent record
-      if (status === LeaveRequestStatus.CANCELLATION_APPROVED && request.requestModifiedFrom) {
+      // If a cancellation or modification request is approved, update the parent record
+      if (
+        (status === LeaveRequestStatus.CANCELLATION_APPROVED ||
+          status === LeaveRequestStatus.MODIFICATION_APPROVED) &&
+        request.requestModifiedFrom
+      ) {
         try {
-          const parentId = Number(request.requestModifiedFrom);
+          const parentId = Number(
+            String(request.requestModifiedFrom).split(':')[0],
+          );
           if (!isNaN(parentId)) {
-            const parent = await this.leaveRequestRepository.findOne({ where: { id: parentId } });
+            const parent = await this.leaveRequestRepository.findOne({
+              where: { id: parentId },
+            });
             if (parent) {
-              const cancelledDates = new Set<string>();
-              let cur = dayjs(request.fromDate);
-              const end = dayjs(request.toDate);
-              while (cur.isBefore(end) || cur.isSame(end, 'day')) {
-                cancelledDates.add(cur.format('YYYY-MM-DD'));
-                cur = cur.add(1, 'day');
+              // Dates being "removed" from the parent (either cancelled or modified elsewhere)
+              let removedDates: string[] = [];
+              if (request.availableDates) {
+                try {
+                  const parsed = JSON.parse(request.availableDates);
+                  if (Array.isArray(parsed)) removedDates = parsed;
+                } catch (e) {}
               }
 
-              const allParentDates: string[] = [];
-              let pCur = dayjs(parent.fromDate);
-              const pEnd = dayjs(parent.toDate);
-              while (pCur.isBefore(pEnd) || pCur.isSame(pEnd, 'day')) {
-                allParentDates.push(pCur.format('YYYY-MM-DD'));
-                pCur = pCur.add(1, 'day');
+              if (removedDates.length === 0) {
+                let cur = dayjs(request.fromDate);
+                const end = dayjs(request.toDate);
+                while (cur.isBefore(end) || cur.isSame(end, 'day')) {
+                  removedDates.push(cur.format('YYYY-MM-DD'));
+                  cur = cur.add(1, 'day');
+                }
+              }
+              const removedDatesSet = new Set(removedDates);
+
+              let allParentDates: string[] = [];
+              if (parent.availableDates) {
+                try {
+                  const parsed = JSON.parse(parent.availableDates);
+                  if (Array.isArray(parsed)) allParentDates = parsed;
+                } catch (e) {}
               }
 
-              const remainingDates = allParentDates.filter(d => !cancelledDates.has(d));
+              if (allParentDates.length === 0) {
+                let pCur = dayjs(parent.fromDate);
+                const pEnd = dayjs(parent.toDate);
+                while (pCur.isBefore(pEnd) || pCur.isSame(pEnd, 'day')) {
+                  const isWknd = await this._isWeekend(
+                    pCur,
+                    request.employeeId,
+                  );
+                  const isHol = await this._isHoliday(pCur);
+                  if (!isWknd && !isHol) {
+                    allParentDates.push(pCur.format('YYYY-MM-DD'));
+                  }
+                  pCur = pCur.add(1, 'day');
+                }
+              }
+
+              const remainingDates = allParentDates.filter(
+                (d) => !removedDatesSet.has(d),
+              );
 
               let remainingWorkingDays = 0;
               for (const rd of remainingDates) {
-                const isWknd = await this._isWeekend(dayjs(rd), request.employeeId);
+                const isWknd = await this._isWeekend(
+                  dayjs(rd),
+                  request.employeeId,
+                );
                 const isHol = await this._isHoliday(dayjs(rd));
                 if (!isWknd && !isHol) remainingWorkingDays++;
               }
 
               if (remainingWorkingDays === 0 || remainingDates.length === 0) {
-                parent.status = LeaveRequestStatus.CANCELLATION_APPROVED;
+                parent.status = status; // Reflect the final state
                 parent.duration = 0;
+                parent.availableDates = JSON.stringify([]);
               } else {
-                parent.duration = parent.isHalfDay ? remainingWorkingDays * 0.5 : remainingWorkingDays;
+                // Determine if parent was half day by checking original duration / original working dates
+                const originalWorkingDays = allParentDates.length;
+                const isParentHalfDay = parent.isHalfDay || (originalWorkingDays > 0 && parent.duration < originalWorkingDays);
+                
+                parent.duration = isParentHalfDay
+                  ? Number((remainingWorkingDays * 0.5).toFixed(2))
+                  : remainingWorkingDays;
                 parent.fromDate = remainingDates[0];
                 parent.toDate = remainingDates[remainingDates.length - 1];
+                parent.availableDates = JSON.stringify(remainingDates);
+                parent.isModified = true;
+                parent.modificationCount = (parent.modificationCount || 0) + 1;
+                parent.lastModifiedDate = new Date();
+                
+                if (isParentHalfDay) parent.isHalfDay = true;
               }
               await this.leaveRequestRepository.save(parent);
-              this.logger.log(`[UPDATE_STATUS] Updated parent request ${parentId} duration to ${parent.duration}`);
+              this.logger.log(
+                `[UPDATE_STATUS] Updated parent request ${parentId} (Modified: ${parent.isModified}) duration to ${parent.duration} due to ${status}`,
+              );
             }
           }
         } catch (err) {
-          this.logger.error(`[UPDATE_STATUS] Failed to update parent record: ${err.message}`);
+          this.logger.error(
+            `[UPDATE_STATUS] Failed to update parent record: ${err.message}`,
+          );
         }
       }
 
-      this._recalcMonthStatus(request.employeeId, String(request.fromDate)).catch(() => { });
+      this._recalcMonthStatus(
+        request.employeeId,
+        String(request.fromDate),
+      ).catch(() => {});
 
-      this.logger.log(`[UPDATE_STATUS] Successfully updated request ${id} to ${status}`);
+      this.logger.log(
+        `[UPDATE_STATUS] Successfully updated request ${id} to ${status}`,
+      );
       return {
         message: `Request ${status} successfully`,
-        status, id,
+        status,
+        id,
         employeeId: request.employeeId,
         requestType: request.requestType,
-        updatedRequest: { id: savedRequest.id, status: savedRequest.status, reviewedBy: savedRequest.reviewedBy },
-        attendanceUpdates
+        updatedRequest: {
+          id: savedRequest.id,
+          status: savedRequest.status,
+          reviewedBy: savedRequest.reviewedBy,
+        },
+        attendanceUpdates,
       };
     } catch (error) {
-      this.logger.error(`[UPDATE_STATUS] Failed for request ${id}: ${error.message}`, error.stack);
+      this.logger.error(
+        `[UPDATE_STATUS] Failed for request ${id}: ${error.message}`,
+        error.stack,
+      );
       if (error instanceof HttpException) throw error;
-      throw new HttpException(error.message || 'Failed to update leave request status', HttpStatus.INTERNAL_SERVER_ERROR);
+      throw new HttpException(
+        error.message || 'Failed to update leave request status',
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
     }
   }
 
@@ -1340,59 +2158,104 @@ export class LeaveRequestsService {
   async clearAttendanceForRequest(id: number) {
     this.logger.log(`[CLEAR_ATTENDANCE] id=${id}`);
     try {
-      const request = await this.leaveRequestRepository.findOne({ where: { id } });
+      const request = await this.leaveRequestRepository.findOne({
+        where: { id },
+      });
       if (!request) {
         throw new NotFoundException('Leave request not found');
       }
 
-      const query = this.employeeAttendanceRepository
-        .createQueryBuilder()
-        .update(EmployeeAttendance);
-
-      query.set({
-        status: () => 'NULL',
-        totalHours: () => 'NULL',
-        workLocation: () => 'NULL',
-        sourceRequestId: () => 'NULL',
-        firstHalf: () => 'NULL',
-        secondHalf: () => 'NULL'
-      });
-
-      query.where(new Brackets(qb => {
-        qb.where("sourceRequestId = :requestId", { requestId: id });
-        if (request.requestModifiedFrom && !isNaN(Number(request.requestModifiedFrom))) {
-          qb.orWhere("sourceRequestId = :parentId", { parentId: Number(request.requestModifiedFrom) });
+      let cleanDates: string[] = [];
+      if (request.availableDates) {
+        try {
+          cleanDates = JSON.parse(request.availableDates);
+        } catch (e) {}
+      }
+      if (cleanDates.length === 0) {
+        let cur = dayjs(request.fromDate);
+        const end = dayjs(request.toDate);
+        while (cur.isBefore(end) || cur.isSame(end, 'day')) {
+          cleanDates.push(cur.format('YYYY-MM-DD'));
+          cur = cur.add(1, 'day');
         }
-        qb.orWhere(new Brackets(innerQb => {
-          innerQb.where("employeeId = :employeeId", { employeeId: request.employeeId })
-            .andWhere("workingDate BETWEEN :startDate AND :endDate", {
-              startDate: dayjs(request.fromDate).format('YYYY-MM-DD'),
-              endDate: dayjs(request.toDate).format('YYYY-MM-DD')
-            });
-        }));
-      }));
+      }
 
-      const result = await query.execute();
-      this.logger.log(`[CLEAR_ATTENDANCE] Result: ${result.affected} records affected.`);
-      this._recalcMonthStatus(request.employeeId, request.fromDate.toString()).catch(() => { });
+      let affected = 0;
+      if (cleanDates.length > 0) {
+        const query = this.employeeAttendanceRepository
+          .createQueryBuilder()
+          .update(EmployeeAttendance);
+
+        query.set({
+          status: () => 'NULL',
+          totalHours: () => 'NULL',
+          workLocation: () => 'NULL',
+          sourceRequestId: () => 'NULL',
+          firstHalf: () => 'NULL',
+          secondHalf: () => 'NULL',
+        });
+
+        const parentIdVal = request.requestModifiedFrom
+          ? String(request.requestModifiedFrom).split(':')[0]
+          : null;
+        const idsToCheck = [id];
+        if (parentIdVal && !isNaN(Number(parentIdVal)))
+          idsToCheck.push(Number(parentIdVal));
+
+        query.where(
+          new Brackets((qb) => {
+            qb.where('sourceRequestId IN (:...idsToCheck)', {
+              idsToCheck,
+            }).orWhere('employeeId = :employeeId', {
+              employeeId: request.employeeId,
+            });
+          }),
+        );
+        query.andWhere('workingDate IN (:...cleanDates)', { cleanDates });
+
+        const result = await query.execute();
+        affected = result.affected ?? 0;
+        this.logger.log(
+          `[CLEAR_ATTENDANCE] Result: ${affected} records affected.`,
+        );
+      }
+      this._recalcMonthStatus(
+        request.employeeId,
+        request.fromDate.toString(),
+      ).catch(() => {});
 
       return {
         success: true,
-        affected: result.affected,
+        affected: affected,
         employeeId: request.employeeId,
-        clearedFields: ['status', 'totalHours', 'workLocation', 'sourceRequestId', 'firstHalf', 'secondHalf']
+        clearedFields: [
+          'status',
+          'totalHours',
+          'workLocation',
+          'sourceRequestId',
+          'firstHalf',
+          'secondHalf',
+        ],
       };
     } catch (err) {
-      this.logger.error(`[CLEAR_ATTENDANCE] Failed for request ${id}: ${err.message}`, err.stack);
+      this.logger.error(
+        `[CLEAR_ATTENDANCE] Failed for request ${id}: ${err.message}`,
+        err.stack,
+      );
       if (err instanceof HttpException) throw err;
-      throw new HttpException('Failed to clear attendance', HttpStatus.INTERNAL_SERVER_ERROR);
+      throw new HttpException(
+        'Failed to clear attendance',
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
     }
   }
 
   async createModification(id: number, data: any) {
     this.logger.log(`[MODIFY] createModification for parent ${id}`);
     try {
-      const parent = await this.leaveRequestRepository.findOne({ where: { id } });
+      const parent = await this.leaveRequestRepository.findOne({
+        where: { id },
+      });
       if (!parent) throw new NotFoundException('Original request not found');
 
       const modification = new LeaveRequest();
@@ -1402,28 +2265,57 @@ export class LeaveRequestsService {
       modification.toDate = data.toDate;
       modification.status = data.overrideStatus || 'Request Modified';
       modification.title = parent.title;
-      const descPrefix = data.overrideStatus === LeaveRequestStatus.APPROVED ? 'Split Segment' : 'Request Modified';
+      const descPrefix =
+        data.overrideStatus === LeaveRequestStatus.APPROVED
+          ? 'Split Segment'
+          : 'Request Modified';
       modification.description = `${descPrefix}: ${parent.description || ''} (Modification due to ${data.sourceRequestType} conflict)`;
       modification.submittedDate = new Date().toISOString().slice(0, 10);
       modification.isRead = true;
       modification.isReadEmployee = false;
-      modification.duration = data.duration || ((dayjs(data.toDate).diff(dayjs(data.fromDate), 'day') + 1) * (parent.isHalfDay ? 0.5 : 1));
-      modification.requestModifiedFrom = data.overrideStatus === LeaveRequestStatus.APPROVED ? parent.requestModifiedFrom : data.sourceRequestType;
+      modification.duration =
+        data.duration ||
+        (dayjs(data.toDate).diff(dayjs(data.fromDate), 'day') + 1) *
+          (parent.isHalfDay ? 0.5 : 1);
+      modification.requestModifiedFrom = `${parent.id}:${data.sourceRequestType || parent.requestType}`;
 
-      const savedModification = await this.leaveRequestRepository.save(modification);
-      await this.copyRequestDocuments(parent.id, savedModification.id);
+      // NEW: Calculate availableDates for the modification
+      const mStart = dayjs(modification.fromDate);
+      const mEnd = dayjs(modification.toDate);
+      const mDiff = mEnd.diff(mStart, 'day');
+      const mList: string[] = [];
+      for (let i = 0; i <= mDiff; i++) {
+        const d = mStart.add(i, 'day');
+        const isWknd = await this._isWeekend(d, modification.employeeId);
+        const isHol = await this._isHoliday(d);
+        if (!isWknd && !isHol) mList.push(d.format('YYYY-MM-DD'));
+      }
+      modification.availableDates = JSON.stringify(mList);
 
-      if (modification.status === LeaveRequestStatus.REQUESTING_FOR_MODIFICATION) {
+      const savedModification =
+        await this.leaveRequestRepository.save(modification);
+      // Removed copyRequestDocuments so modification only contains new modification documents
+
+      if (
+        modification.status === LeaveRequestStatus.REQUESTING_FOR_MODIFICATION
+      ) {
         try {
-          const mapping = await this.managerMappingRepository.findOne({ where: { employeeId: parent.employeeId, status: ManagerMappingStatus.ACTIVE } });
+          const mapping = await this.managerMappingRepository.findOne({
+            where: {
+              employeeId: parent.employeeId,
+              status: ManagerMappingStatus.ACTIVE,
+            },
+          });
           if (mapping) {
-            const manager = await this.userRepository.findOne({ where: { aliasLoginName: mapping.managerName } });
+            const manager = await this.userRepository.findOne({
+              where: { aliasLoginName: mapping.managerName },
+            });
             if (manager && manager.loginId) {
               await this.notificationsService.createNotification({
                 employeeId: manager.loginId,
                 title: 'Modification Request',
                 message: `${parent.employeeId} requested to Modify an approved Leave.`,
-                type: 'alert'
+                type: 'alert',
               });
             }
           }
@@ -1435,31 +2327,53 @@ export class LeaveRequestsService {
       this.logger.log(`[MODIFY] Created modification ${savedModification.id}`);
       return savedModification;
     } catch (error) {
-      this.logger.error(`[MODIFY] createModification failed for ${id}: ${error.message}`, error.stack);
+      this.logger.error(
+        `[MODIFY] createModification failed for ${id}: ${error.message}`,
+        error.stack,
+      );
       if (error instanceof HttpException) throw error;
-      throw new HttpException('Failed to create modification', HttpStatus.INTERNAL_SERVER_ERROR);
+      throw new HttpException(
+        'Failed to create modification',
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
     }
   }
 
   // NEW: Dedicated API for Rejecting Cancellation
-  async rejectCancellation(id: number, employeeId: string, reviewedBy?: string, reviewerEmail?: string) {
-    this.logger.log(`[REJECT_CANCELLATION] id=${id}, employee=${employeeId}, reviewedBy=${reviewedBy}`);
+  async rejectCancellation(
+    id: number,
+    employeeId: string,
+    reviewedBy?: string,
+    reviewerEmail?: string,
+  ) {
+    this.logger.log(
+      `[REJECT_CANCELLATION] id=${id}, employee=${employeeId}, reviewedBy=${reviewedBy}`,
+    );
     try {
       if (reviewerEmail && !reviewerEmail.includes('@')) {
-        const reviewerEmp = await this.employeeDetailsRepository.findOne({ where: { employeeId: reviewerEmail } });
+        const reviewerEmp = await this.employeeDetailsRepository.findOne({
+          where: { employeeId: reviewerEmail },
+        });
         if (reviewerEmp?.email) reviewerEmail = reviewerEmp.email;
       }
       if (!reviewerEmail || !reviewerEmail.includes('@')) {
         if (reviewedBy) {
-          const mgr = await this.employeeDetailsRepository.findOne({ where: { fullName: reviewedBy } });
+          const mgr = await this.employeeDetailsRepository.findOne({
+            where: { fullName: reviewedBy },
+          });
           if (mgr?.email) reviewerEmail = mgr.email;
         }
-        if ((!reviewerEmail || !reviewerEmail.includes('@')) && (reviewedBy === UserType.ADMIN)) {
+        if (
+          (!reviewerEmail || !reviewerEmail.includes('@')) &&
+          reviewedBy === UserType.ADMIN
+        ) {
           reviewerEmail = process.env.ADMIN_EMAIL || process.env.SMTP_USERNAME;
         }
       }
 
-      const request = await this.leaveRequestRepository.findOne({ where: { id } });
+      const request = await this.leaveRequestRepository.findOne({
+        where: { id },
+      });
       if (!request) {
         throw new NotFoundException(`Leave request with ID ${id} not found`);
       }
@@ -1467,19 +2381,19 @@ export class LeaveRequestsService {
       const checkStart = dayjs(request.fromDate).format('YYYY-MM-DD');
       const checkEnd = dayjs(request.toDate).format('YYYY-MM-DD');
 
-      const overlapCount = await this.leaveRequestRepository
-        .createQueryBuilder('lr')
-        .where('lr.employeeId = :employeeId', { employeeId: request.employeeId })
-        .andWhere('lr.id != :id', { id: request.id })
-        .andWhere('lr.status = :status', { status: LeaveRequestStatus.APPROVED })
-        .andWhere('DATE(lr.fromDate) <= DATE(:checkEnd)', { checkEnd })
-        .andWhere('DATE(lr.toDate) >= DATE(:checkStart)', { checkStart })
-        .getCount();
-
-      if (overlapCount > 0) {
+      if (request.requestModifiedFrom) {
+        // Partial cancellation rejection
         request.status = LeaveRequestStatus.CANCELLATION_REJECTED;
+        request.availableDates = JSON.stringify([]); // Ensure it doesn't block
+        this.logger.log(
+          `[REJECT_CANCELLATION] Partial cancellation ${id} rejected. availableDates wiped.`,
+        );
       } else {
+        // Full cancellation rejection - Revert parent to APPROVED
         request.status = LeaveRequestStatus.APPROVED;
+        this.logger.log(
+          `[REJECT_CANCELLATION] Full cancellation ${id} rejected. Reverted to APPROVED.`,
+        );
       }
 
       request.isReadEmployee = false;
@@ -1487,7 +2401,9 @@ export class LeaveRequestsService {
       await this.leaveRequestRepository.save(request);
 
       try {
-        const employee = await this.employeeDetailsRepository.findOne({ where: { employeeId: request.employeeId } });
+        const employee = await this.employeeDetailsRepository.findOne({
+          where: { employeeId: request.employeeId },
+        });
         if (employee) {
           await this.sendStatusUpdateEmails(request, employee, request.status);
         }
@@ -1495,23 +2411,36 @@ export class LeaveRequestsService {
         this.logger.error(`[REJECT_CANCELLATION] Email failed: ${e.message}`);
       }
 
-
-
-
-
-      this._recalcMonthStatus(request.employeeId, String(request.fromDate)).catch(() => { });
-      this.logger.log(`[REJECT_CANCELLATION] Successfully rejected cancellation for request ${id}`);
+      this._recalcMonthStatus(
+        request.employeeId,
+        String(request.fromDate),
+      ).catch(() => {});
+      this.logger.log(
+        `[REJECT_CANCELLATION] Successfully rejected cancellation for request ${id}`,
+      );
       return request;
     } catch (error) {
-      this.logger.error(`[REJECT_CANCELLATION] Failed for request ${id}: ${error.message}`, error.stack);
+      this.logger.error(
+        `[REJECT_CANCELLATION] Failed for request ${id}: ${error.message}`,
+        error.stack,
+      );
       if (error instanceof HttpException) throw error;
-      throw new HttpException('Failed to reject cancellation', HttpStatus.INTERNAL_SERVER_ERROR);
+      throw new HttpException(
+        'Failed to reject cancellation',
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
     }
   }
 
   // Helper to revert attendance for the given range (when cancellation is approved)
-  private async revertAttendance(employeeId: string, fromDate: string, toDate: string) {
-    this.logger.log(`[REVERT_ATTENDANCE] Reverting for ${employeeId} from ${fromDate} to ${toDate}`);
+  private async revertAttendance(
+    employeeId: string,
+    fromDate: string,
+    toDate: string,
+  ) {
+    this.logger.log(
+      `[REVERT_ATTENDANCE] Reverting for ${employeeId} from ${fromDate} to ${toDate}`,
+    );
     try {
       const startStr = dayjs(fromDate).format('YYYY-MM-DD');
       const endStr = dayjs(toDate).format('YYYY-MM-DD');
@@ -1530,33 +2459,56 @@ export class LeaveRequestsService {
         record.sourceRequestId = null;
         await this.employeeAttendanceRepository.save(record);
       }
-      this.logger.log(`[REVERT_ATTENDANCE] Reverted ${records.length} records for ${employeeId}`);
+      this.logger.log(
+        `[REVERT_ATTENDANCE] Reverted ${records.length} records for ${employeeId}`,
+      );
     } catch (error) {
-      this.logger.error(`[REVERT_ATTENDANCE] Failed for ${employeeId}: ${error.message}`, error.stack);
+      this.logger.error(
+        `[REVERT_ATTENDANCE] Failed for ${employeeId}: ${error.message}`,
+        error.stack,
+      );
     }
   }
 
-  async updateParentRequest(parentId: number, duration: number, fromDate: string, toDate: string) {
-    this.logger.log(`[UPDATE_PARENT] id=${parentId}, duration=${duration}, from=${fromDate}, to=${toDate}`);
+  async updateParentRequest(
+    parentId: number,
+    duration: number,
+    fromDate: string,
+    toDate: string,
+  ) {
+    this.logger.log(
+      `[UPDATE_PARENT] id=${parentId}, duration=${duration}, from=${fromDate}, to=${toDate}`,
+    );
     try {
       if (!parentId) throw new BadRequestException('Parent ID is required');
       if (!fromDate) throw new BadRequestException('From Date is required');
       if (!toDate) throw new BadRequestException('To Date is required');
 
-      const parentRequest = await this.leaveRequestRepository.findOne({ where: { id: parentId } });
-      if (!parentRequest) throw new NotFoundException('Parent Request not found');
+      const parentRequest = await this.leaveRequestRepository.findOne({
+        where: { id: parentId },
+      });
+      if (!parentRequest)
+        throw new NotFoundException('Parent Request not found');
 
       parentRequest.duration = duration;
       parentRequest.fromDate = dayjs(fromDate).format('YYYY-MM-DD');
       parentRequest.toDate = dayjs(toDate).format('YYYY-MM-DD');
 
       const saved = await this.leaveRequestRepository.save(parentRequest);
-      this.logger.log(`[UPDATE_PARENT] Successfully updated parent request ${parentId}`);
+      this.logger.log(
+        `[UPDATE_PARENT] Successfully updated parent request ${parentId}`,
+      );
       return saved;
     } catch (error) {
-      this.logger.error(`[UPDATE_PARENT] Failed for ${parentId}: ${error.message}`, error.stack);
+      this.logger.error(
+        `[UPDATE_PARENT] Failed for ${parentId}: ${error.message}`,
+        error.stack,
+      );
       if (error instanceof HttpException) throw error;
-      throw new HttpException(`Update Failed: ${error.message}`, HttpStatus.INTERNAL_SERVER_ERROR);
+      throw new HttpException(
+        `Update Failed: ${error.message}`,
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
     }
   }
 
@@ -1564,17 +2516,27 @@ export class LeaveRequestsService {
     id: number,
     employeeId: string,
     datesToCancel: string[],
-    user?: any
+    user?: any,
   ) {
-    this.logger.log(`[CANCEL] Selective dates: id=${id}, employee=${employeeId}, dates=${datesToCancel.join(',')}`);
+    this.logger.log(
+      `[CANCEL] Selective dates: id=${id}, employee=${employeeId}, dates=${datesToCancel.join(',')}`,
+    );
     try {
-      const request = await this.leaveRequestRepository.findOne({ where: { id, employeeId } });
+      const request = await this.leaveRequestRepository.findOne({
+        where: { id, employeeId },
+      });
       if (!request) throw new NotFoundException('Request not found');
 
       const isPendingRequest = request.status === LeaveRequestStatus.PENDING;
-      
+
       const roleUpper = (user?.role || '').toUpperCase();
-      const isPrivileged = user && (user.userType === UserType.ADMIN || user.userType === UserType.MANAGER || roleUpper.includes(UserType.ADMIN) || roleUpper.includes('MNG') || roleUpper.includes(UserType.MANAGER));
+      const isPrivileged =
+        user &&
+        (user.userType === UserType.ADMIN ||
+          user.userType === UserType.MANAGER ||
+          roleUpper.includes(UserType.ADMIN) ||
+          roleUpper.includes('MNG') ||
+          roleUpper.includes(UserType.MANAGER));
 
       const sortedDates = datesToCancel.sort();
       const ranges: { start: string; end: string; count: number }[] = [];
@@ -1622,34 +2584,61 @@ export class LeaveRequestsService {
 
       if (isPendingRequest) {
         // --- PENDING REQUEST CANCELLATION ---
-        const cancelledDateSet = new Set(datesToCancel.map(d => dayjs(d).format('YYYY-MM-DD')));
+        const cancelledDateSet = new Set(
+          datesToCancel.map((d) => dayjs(d).format('YYYY-MM-DD')),
+        );
 
-        // Also exclude dates already covered by previous child cancel records for this parent
+        // CRITICAL FIX: Only exclude dates from the SAME parent request chain
         const existingChildCancels = await this.leaveRequestRepository.find({
           where: {
             employeeId,
-            requestType: request.requestType,
+            // Catch ID or ID:TYPE
+            requestModifiedFrom: Like(`${request.id}%`),
             status: LeaveRequestStatus.CANCELLED,
           },
         });
         for (const child of existingChildCancels) {
-          if (child.id === request.id) continue; // skip self
-          let cIter = dayjs(child.fromDate);
-          const cEnd = dayjs(child.toDate);
-          while (cIter.isBefore(cEnd) || cIter.isSame(cEnd, 'day')) {
-            cancelledDateSet.add(cIter.format('YYYY-MM-DD'));
-            cIter = cIter.add(1, 'day');
+          if (child.id === request.id) continue;
+          let datesInChild: string[] = [];
+          if (child.availableDates) {
+            try {
+              const parsed = JSON.parse(child.availableDates);
+              if (Array.isArray(parsed)) datesInChild = parsed;
+            } catch (e) {}
+          }
+          if (datesInChild.length > 0) {
+            datesInChild.forEach((d) => cancelledDateSet.add(d));
+          } else {
+            let cIter = dayjs(child.fromDate);
+            const cEnd = dayjs(child.toDate);
+            while (cIter.isBefore(cEnd) || cIter.isSame(cEnd, 'day')) {
+              cancelledDateSet.add(cIter.format('YYYY-MM-DD'));
+              cIter = cIter.add(1, 'day');
+            }
           }
         }
 
-        const allDates: string[] = [];
-        let curIter = dayjs(request.fromDate);
-        const endIter = dayjs(request.toDate);
-        while (curIter.isBefore(endIter) || curIter.isSame(endIter, 'day')) {
-          allDates.push(curIter.format('YYYY-MM-DD'));
-          curIter = curIter.add(1, 'day');
+        let allDates: string[] = [];
+        if (request.availableDates) {
+          try {
+            const parsed = JSON.parse(request.availableDates);
+            if (Array.isArray(parsed)) allDates = parsed;
+          } catch (e) {}
         }
-        const remainingDates = allDates.filter(d => !cancelledDateSet.has(d));
+
+        if (allDates.length === 0) {
+          let curIter = dayjs(request.fromDate);
+          const endIter = dayjs(request.toDate);
+          while (curIter.isBefore(endIter) || curIter.isSame(endIter, 'day')) {
+            const isWknd = await this._isWeekend(curIter, employeeId);
+            const isHol = await this._isHoliday(curIter);
+            if (!isWknd && !isHol) {
+              allDates.push(curIter.format('YYYY-MM-DD'));
+            }
+            curIter = curIter.add(1, 'day');
+          }
+        }
+        const remainingDates = allDates.filter((d) => !cancelledDateSet.has(d));
 
         let remainingWorkingDays = 0;
         let firstRemainingWorkingDate: string | null = null;
@@ -1663,11 +2652,14 @@ export class LeaveRequestsService {
             lastRemainingWorkingDate = rd;
           }
         }
-        const updatedParentDuration = request.isHalfDay ? remainingWorkingDays * 0.5 : remainingWorkingDays;
+        const updatedParentDuration = request.isHalfDay
+          ? remainingWorkingDays * 0.5
+          : remainingWorkingDays;
 
         if (updatedParentDuration === 0 || !firstRemainingWorkingDate) {
           request.status = LeaveRequestStatus.CANCELLED;
           request.duration = 0;
+          request.availableDates = JSON.stringify([]);
           await this.leaveRequestRepository.save(request);
         } else {
           for (const range of ranges) {
@@ -1682,6 +2674,13 @@ export class LeaveRequestsService {
               createdAt: new Date(),
               updatedAt: new Date(),
               duration: request.isHalfDay ? range.count * 0.5 : range.count,
+              requestModifiedFrom: `${request.id}:${request.requestType}`,
+              availableDates: JSON.stringify(
+                datesToCancel.filter((d) => {
+                  const ds = dayjs(d).format('YYYY-MM-DD');
+                  return ds >= range.start && ds <= range.end;
+                }),
+              ),
             }) as unknown as LeaveRequest;
 
             const savedNew = await this.leaveRequestRepository.save(newRequest);
@@ -1694,32 +2693,40 @@ export class LeaveRequestsService {
           request.duration = updatedParentDuration;
           request.fromDate = firstRemainingWorkingDate;
           request.toDate = lastRemainingWorkingDate!;
+          request.availableDates = JSON.stringify(remainingDates);
           await this.leaveRequestRepository.save(request);
         }
 
         try {
-          const mapping = await this.managerMappingRepository.findOne({ where: { employeeId, status: ManagerMappingStatus.ACTIVE } });
+          const mapping = await this.managerMappingRepository.findOne({
+            where: { employeeId, status: ManagerMappingStatus.ACTIVE },
+          });
           if (mapping) {
-            const manager = await this.userRepository.findOne({ where: { aliasLoginName: mapping.managerName } });
+            const manager = await this.userRepository.findOne({
+              where: { aliasLoginName: mapping.managerName },
+            });
             if (manager && manager.loginId) {
               await this.notificationsService.createNotification({
                 employeeId: manager.loginId,
                 title: 'Pending Request Cancelled',
                 message: `${employeeId} cancelled ${updatedParentDuration === 0 ? 'all dates' : 'selected dates'} from a pending ${request.requestType} request.`,
-                type: 'alert'
+                type: 'alert',
               });
             }
           }
 
           // --- SEND EMAIL NOTIFICATION ---
-          const employee = await this.employeeDetailsRepository.findOne({ where: { employeeId: request.employeeId } });
+          const employee = await this.employeeDetailsRepository.findOne({
+            where: { employeeId: request.employeeId },
+          });
           if (employee) {
-             await this.sendCancellationEmails(request, employee, 'revert_back');
+            await this.sendCancellationEmails(request, employee, 'revert_back');
           }
         } catch (e) {
-          this.logger.error(`[CANCEL] App notification or email failed: ${e.message}`);
+          this.logger.error(
+            `[CANCEL] App notification or email failed: ${e.message}`,
+          );
         }
-
       } else {
         // --- APPROVED REQUEST CANCELLATION ---
 
@@ -1741,7 +2748,13 @@ export class LeaveRequestsService {
           await this.leaveRequestRepository.save(request);
           createdRequests.push(request);
 
-          await this.notifyAdminOfCancellationRequest(request, employeeId, cancellingWorkingDays).catch(e => this.logger.error(`[CANCEL] notifyAdmin failed: ${e.message}`));
+          await this.notifyAdminOfCancellationRequest(
+            request,
+            employeeId,
+            cancellingWorkingDays,
+          ).catch((e) =>
+            this.logger.error(`[CANCEL] notifyAdmin failed: ${e.message}`),
+          );
         } else {
           // PARTIAL cancellation — create child records as before
           for (const range of ranges) {
@@ -1751,48 +2764,76 @@ export class LeaveRequestsService {
               fromDate: range.start,
               toDate: range.end,
               status: LeaveRequestStatus.REQUESTING_FOR_CANCELLATION,
-              requestModifiedFrom: request.id,
-              isRead: false,
-              isReadEmployee: true,
-              createdAt: new Date(),
-              updatedAt: new Date(),
               duration: request.isHalfDay ? range.count * 0.5 : range.count,
+              requestModifiedFrom: `${request.id}:${request.requestType}`,
+              availableDates: JSON.stringify(
+                datesToCancel.filter((d) => {
+                  const ds = dayjs(d).format('YYYY-MM-DD');
+                  return ds >= range.start && ds <= range.end;
+                }),
+              ),
             }) as unknown as LeaveRequest;
 
             const savedNew = await this.leaveRequestRepository.save(newRequest);
             await this.copyRequestDocuments(request.id, savedNew.id);
             createdRequests.push(savedNew);
 
-            await this.notifyAdminOfCancellationRequest(savedNew, employeeId, range.count).catch(e => this.logger.error(`[CANCEL] notifyAdmin failed: ${e.message}`));
+            await this.notifyAdminOfCancellationRequest(
+              savedNew,
+              employeeId,
+              range.count,
+            ).catch((e) =>
+              this.logger.error(`[CANCEL] notifyAdmin failed: ${e.message}`),
+            );
           }
         }
       }
 
-      this._recalcMonthStatus(employeeId, request.fromDate.toString()).catch(() => { });
+      this._recalcMonthStatus(employeeId, request.fromDate.toString()).catch(
+        () => {},
+      );
       if (isPendingRequest && createdRequests.length === 0) return request;
-      return createdRequests.length === 1 ? createdRequests[0] : createdRequests;
+      return createdRequests.length === 1
+        ? createdRequests[0]
+        : createdRequests;
     } catch (error) {
       if (error instanceof HttpException) throw error;
-      throw new HttpException(`Failed: ${error.message}`, HttpStatus.INTERNAL_SERVER_ERROR);
+      throw new HttpException(
+        `Failed: ${error.message}`,
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
     }
   }
 
   async cancelApprovedRequest(id: number, employeeId: string) {
     this.logger.log(`[CANCEL_APPROVED] id=${id}, employee=${employeeId}`);
     try {
-      const request = await this.leaveRequestRepository.findOne({ where: { id, employeeId } });
+      const request = await this.leaveRequestRepository.findOne({
+        where: { id, employeeId },
+      });
       if (!request) throw new NotFoundException('Request not found');
 
       if (request.status !== LeaveRequestStatus.APPROVED) {
-        throw new ForbiddenException('Only approved requests can be cancelled via this action');
+        throw new ForbiddenException(
+          'Only approved requests can be cancelled via this action',
+        );
       }
 
       const dateParts = request.fromDate.toString().split('-');
-      const leaveStart = new Date(parseInt(dateParts[0]), parseInt(dateParts[1]) - 1, parseInt(dateParts[2]), 10, 0, 0);
+      const leaveStart = new Date(
+        parseInt(dateParts[0]),
+        parseInt(dateParts[1]) - 1,
+        parseInt(dateParts[2]),
+        10,
+        0,
+        0,
+      );
       const now = new Date();
 
       if (now > leaveStart) {
-        throw new ForbiddenException('Cannot cancel request after 10 AM on the start date.');
+        throw new ForbiddenException(
+          'Cannot cancel request after 10 AM on the start date.',
+        );
       }
 
       request.status = LeaveRequestStatus.REQUESTING_FOR_CANCELLATION;
@@ -1800,13 +2841,24 @@ export class LeaveRequestsService {
       request.isReadEmployee = true;
       await this.leaveRequestRepository.save(request);
 
-      await this.notifyAdminOfCancellationRequest(request, employeeId, request.duration).catch(e => this.logger.error(`[CANCEL_APPROVED] notifyAdmin failed: ${e.message}`));
+      await this.notifyAdminOfCancellationRequest(
+        request,
+        employeeId,
+        request.duration,
+      ).catch((e) =>
+        this.logger.error(`[CANCEL_APPROVED] notifyAdmin failed: ${e.message}`),
+      );
 
-      this._recalcMonthStatus(employeeId, request.fromDate.toString()).catch(() => { });
+      this._recalcMonthStatus(employeeId, request.fromDate.toString()).catch(
+        () => {},
+      );
       return request;
     } catch (error) {
       if (error instanceof HttpException) throw error;
-      throw new HttpException('Failed to request cancellation', HttpStatus.INTERNAL_SERVER_ERROR);
+      throw new HttpException(
+        'Failed to request cancellation',
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
     }
   }
 
@@ -1827,23 +2879,34 @@ export class LeaveRequestsService {
             LeaveRequestStatus.MODIFICATION_APPROVED,
             LeaveRequestStatus.MODIFICATION_REJECTED,
             LeaveRequestStatus.MODIFICATION_CANCELLED,
-          ])
+          ]),
         },
-        order: { createdAt: 'DESC' }
+        order: { createdAt: 'DESC' },
       });
     } catch (error) {
       this.logger.error(`[UPDATES] Failed for ${employeeId}: ${error.message}`);
-      throw new HttpException('Failed to fetch employee updates', HttpStatus.INTERNAL_SERVER_ERROR);
+      throw new HttpException(
+        'Failed to fetch employee updates',
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
     }
   }
 
   async markEmployeeUpdateRead(id: number) {
     this.logger.log(`[UPDATES] Mark read: id=${id}`);
     try {
-      return await this.leaveRequestRepository.update({ id }, { isReadEmployee: true });
+      return await this.leaveRequestRepository.update(
+        { id },
+        { isReadEmployee: true },
+      );
     } catch (error) {
-      this.logger.error(`[UPDATES] Failed to mark read for ${id}: ${error.message}`);
-      throw new HttpException('Failed to update status', HttpStatus.INTERNAL_SERVER_ERROR);
+      this.logger.error(
+        `[UPDATES] Failed to mark read for ${id}: ${error.message}`,
+      );
+      throw new HttpException(
+        'Failed to update status',
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
     }
   }
 
@@ -1854,7 +2917,9 @@ export class LeaveRequestsService {
     entityType: EntityType,
     entityId: number,
   ) {
-    this.logger.log(`[DOCS] Uploading ${documents.length} document(s) for leave request ${entityId}`);
+    this.logger.log(
+      `[DOCS] Uploading ${documents.length} document(s) for leave request ${entityId}`,
+    );
     try {
       const uploadPromises = documents.map(async (doc) => {
         const details = new DocumentMetaInfo();
@@ -1867,7 +2932,9 @@ export class LeaveRequestsService {
       });
 
       const results = await Promise.all(uploadPromises);
-      this.logger.log(`[DOCS] Successfully uploaded ${results.length} document(s)`);
+      this.logger.log(
+        `[DOCS] Successfully uploaded ${results.length} document(s)`,
+      );
 
       return {
         success: true,
@@ -1876,39 +2943,74 @@ export class LeaveRequestsService {
       };
     } catch (error) {
       this.logger.error(`[DOCS] Upload failed: ${error.message}`, error.stack);
-      throw new HttpException('Error uploading documents', HttpStatus.INTERNAL_SERVER_ERROR);
+      throw new HttpException(
+        'Error uploading documents',
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
     }
   }
 
-  async getAllFiles(entityType: EntityType, entityId: number, refId: number, referenceType: ReferenceType) {
-    this.logger.log(`[DOCS] Getting all files for entity ${entityType} ID ${entityId}`);
+  async getAllFiles(
+    entityType: EntityType,
+    entityId: number,
+    refId: number,
+    referenceType: ReferenceType,
+  ) {
+    this.logger.log(
+      `[DOCS] Getting all files for entity ${entityType} ID ${entityId}`,
+    );
     try {
-      return await this.documentUploaderService.getAllDocs(entityType, entityId, referenceType, refId);
+      return await this.documentUploaderService.getAllDocs(
+        entityType,
+        entityId,
+        referenceType,
+        refId,
+      );
     } catch (error) {
       this.logger.error(`[DOCS] Failed to get files: ${error.message}`);
-      throw new HttpException('Failed to fetch documents', HttpStatus.INTERNAL_SERVER_ERROR);
+      throw new HttpException(
+        'Failed to fetch documents',
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
     }
   }
 
   private async notifyManagerOfRequest(request: LeaveRequest) {
-    this.logger.log(`[NOTIFY] Manager/HR for request ${request.id} (${request.status})`);
+    this.logger.log(
+      `[NOTIFY] Manager/HR for request ${request.id} (${request.status})`,
+    );
     try {
-      const adminEmail = (process.env.ADMIN_EMAIL || process.env.SMTP_USERNAME)?.trim();
+      const adminEmail = (
+        process.env.ADMIN_EMAIL || process.env.SMTP_USERNAME
+      )?.trim();
       const hrEmail = this.getHrEmail();
       const parsedCc = this._parseCcEmails(request.ccEmails);
-      const allCc = [adminEmail, hrEmail, ...parsedCc].filter((e): e is string => !!e && e.includes('@'));
+      const allCc = [adminEmail, hrEmail, ...parsedCc].filter(
+        (e): e is string => !!e && e.includes('@'),
+      );
       const ccList = [...new Set(allCc)];
 
       const requester = await this.employeeDetailsRepository.findOne({
-        where: { employeeId: request.employeeId }
+        where: { employeeId: request.employeeId },
       });
       const requesterName = requester?.fullName || request.employeeId;
 
-      const actionText = request.status === LeaveRequestStatus.REQUESTING_FOR_CANCELLATION ? 'Cancellation' : request.status === LeaveRequestStatus.CANCELLED ? 'Reverted' : 'New';
-      const emailActionText = request.status === LeaveRequestStatus.REQUESTING_FOR_MODIFICATION ? 'Modification' : actionText;
+      const actionText =
+        request.status === LeaveRequestStatus.REQUESTING_FOR_CANCELLATION
+          ? 'Cancellation'
+          : request.status === LeaveRequestStatus.CANCELLED
+            ? 'Reverted'
+            : 'New';
+      const emailActionText =
+        request.status === LeaveRequestStatus.REQUESTING_FOR_MODIFICATION
+          ? 'Modification'
+          : actionText;
 
       const mapping = await this.managerMappingRepository.findOne({
-        where: { employeeId: request.employeeId, status: ManagerMappingStatus.ACTIVE }
+        where: {
+          employeeId: request.employeeId,
+          status: ManagerMappingStatus.ACTIVE,
+        },
       });
 
       let managerEmail = '';
@@ -1917,31 +3019,50 @@ export class LeaveRequestsService {
 
       if (mapping) {
         const manager = await this.userRepository.findOne({
-          where: { aliasLoginName: mapping.managerName }
+          where: { aliasLoginName: mapping.managerName },
         });
 
         if (manager) {
-          const managerDetails = await this.employeeDetailsRepository.findOne({
-            where: { email: manager.loginId }
-          }) || await this.employeeDetailsRepository.findOne({
-            where: { fullName: mapping.managerName }
-          });
+          const managerDetails =
+            (await this.employeeDetailsRepository.findOne({
+              where: { email: manager.loginId },
+            })) ||
+            (await this.employeeDetailsRepository.findOne({
+              where: { fullName: mapping.managerName },
+            }));
           managerEmail = managerDetails?.email || manager.loginId;
           managerName = mapping.managerName;
           managerLoginId = manager.loginId;
         }
       }
 
-      const targets: { email: string, name: string, isManager: boolean }[] = [];
-      if (adminEmail) targets.push({ email: adminEmail, name: 'Admin', isManager: false });
-      if (managerEmail) targets.push({ email: managerEmail, name: managerName, isManager: true });
-      if (hrEmail) targets.push({ email: hrEmail, name: 'HR', isManager: false });
-      parsedCc.forEach(cc => targets.push({ email: cc, name: '', isManager: false }));
+      const targets: { email: string; name: string; isManager: boolean }[] = [];
+      if (adminEmail)
+        targets.push({ email: adminEmail, name: 'Admin', isManager: false });
+      if (managerEmail)
+        targets.push({
+          email: managerEmail,
+          name: managerName,
+          isManager: true,
+        });
+      if (hrEmail)
+        targets.push({ email: hrEmail, name: 'HR', isManager: false });
+      parsedCc.forEach((cc) =>
+        targets.push({ email: cc, name: '', isManager: false }),
+      );
 
-      const uniqueTargets: { email: string, name: string, isManager: boolean }[] = [];
+      const uniqueTargets: {
+        email: string;
+        name: string;
+        isManager: boolean;
+      }[] = [];
       const seen = new Set();
       for (const t of targets) {
-        if (t.email && t.email.includes('@') && !seen.has(t.email.toLowerCase())) {
+        if (
+          t.email &&
+          t.email.includes('@') &&
+          !seen.has(t.email.toLowerCase())
+        ) {
           seen.add(t.email.toLowerCase());
           uniqueTargets.push(t);
         }
@@ -1959,29 +3080,39 @@ export class LeaveRequestsService {
           status: request.status,
           recipientName: target.name,
           firstHalf: request.firstHalf,
-          secondHalf: request.secondHalf
+          secondHalf: request.secondHalf,
         });
 
-        await this.emailService.sendEmail(
-          target.email,
-          `${emailActionText} Request: ${request.requestType} - ${requesterName}`,
-          `${emailActionText} request submitted by ${requesterName}`,
-          html
-        ).catch(e => this.logger.error(`Failed to notify ${target.email}: ${e.message}`));
+        await this.emailService
+          .sendEmail(
+            target.email,
+            `${emailActionText} Request: ${request.requestType} - ${requesterName}`,
+            `${emailActionText} request submitted by ${requesterName}`,
+            html,
+          )
+          .catch((e) =>
+            this.logger.error(`Failed to notify ${target.email}: ${e.message}`),
+          );
 
         if (target.isManager && managerLoginId) {
-          await this.notificationsService.createNotification({
-            employeeId: managerLoginId,
-            title: `${actionText} ${request.requestType} Request`,
-            message: `${requesterName} has submitted ${actionText === 'New' ? 'a new' : 'a'} ${request.requestType} titled "${request.title}".`,
-            type: 'alert'
-          }).catch(() => {});
+          await this.notificationsService
+            .createNotification({
+              employeeId: managerLoginId,
+              title: `${actionText} ${request.requestType} Request`,
+              message: `${requesterName} has submitted ${actionText === 'New' ? 'a new' : 'a'} ${request.requestType} titled "${request.title}".`,
+              type: 'alert',
+            })
+            .catch(() => {});
         }
       }
 
-      this.logger.log(`[NOTIFY] Sent ${emailActionText} notifications to ${uniqueTargets.map(u => u.email).join(', ')}`);
+      this.logger.log(
+        `[NOTIFY] Sent ${emailActionText} notifications to ${uniqueTargets.map((u) => u.email).join(', ')}`,
+      );
     } catch (error) {
-      this.logger.error(`[NOTIFY] notifyManagerOfRequest failed: ${error.message}`);
+      this.logger.error(
+        `[NOTIFY] notifyManagerOfRequest failed: ${error.message}`,
+      );
     }
   }
 
@@ -1989,50 +3120,79 @@ export class LeaveRequestsService {
     if (!ccEmails) return [];
     try {
       const parsed = JSON.parse(ccEmails);
-      return Array.isArray(parsed) ? parsed.filter((e: unknown) => typeof e === 'string' && e.includes('@')) : [];
+      return Array.isArray(parsed)
+        ? parsed.filter(
+            (e: unknown) => typeof e === 'string' && e.includes('@'),
+          )
+        : [];
     } catch {
       return [];
     }
   }
 
   /** Returns assigned manager email and HR email for leave request form (assigned manager = TO, HR = fixed CC). */
-  async getLeaveRequestEmailConfig(employeeId: string): Promise<{ assignedManagerEmail: string | null; hrEmail: string }> {
+  async getLeaveRequestEmailConfig(
+    employeeId: string,
+  ): Promise<{ assignedManagerEmail: string | null; hrEmail: string }> {
     const assignedManagerEmail = await this.getAssignedManagerEmail(employeeId);
     const hrEmail = this.getHrEmail();
     return { assignedManagerEmail, hrEmail };
   }
 
-  private async getAssignedManagerEmail(employeeId: string): Promise<string | null> {
+  private async getAssignedManagerEmail(
+    employeeId: string,
+  ): Promise<string | null> {
     const mapping = await this.managerMappingRepository.findOne({
-      where: { employeeId, status: ManagerMappingStatus.ACTIVE }
+      where: { employeeId, status: ManagerMappingStatus.ACTIVE },
     });
     if (!mapping) return null;
     const manager = await this.userRepository.findOne({
-      where: { aliasLoginName: mapping.managerName }
+      where: { aliasLoginName: mapping.managerName },
     });
     if (!manager) return null;
-    const managerDetails = await this.employeeDetailsRepository.findOne({
-      where: { email: manager.loginId }
-    }) || await this.employeeDetailsRepository.findOne({
-      where: { fullName: mapping.managerName }
-    });
-    return (managerDetails?.email || manager.loginId)?.includes('@') ? (managerDetails?.email || manager.loginId) : null;
+    const managerDetails =
+      (await this.employeeDetailsRepository.findOne({
+        where: { email: manager.loginId },
+      })) ||
+      (await this.employeeDetailsRepository.findOne({
+        where: { fullName: mapping.managerName },
+      }));
+    return (managerDetails?.email || manager.loginId)?.includes('@')
+      ? managerDetails?.email || manager.loginId
+      : null;
   }
 
-  private async sendCancellationEmails(request: LeaveRequest, employee: EmployeeDetails, actionType: 'request'|'revert'|'revert_back', totalDays?: number) {
+  private async sendCancellationEmails(
+    request: LeaveRequest,
+    employee: EmployeeDetails,
+    actionType: 'request' | 'revert' | 'revert_back',
+    totalDays?: number,
+  ) {
     try {
-      const adminEmail = (process.env.ADMIN_EMAIL || process.env.SMTP_USERNAME)?.trim();
-      const managerEmail = await this.getAssignedManagerEmail(request.employeeId);
+      const adminEmail = (
+        process.env.ADMIN_EMAIL || process.env.SMTP_USERNAME
+      )?.trim();
+      const managerEmail = await this.getAssignedManagerEmail(
+        request.employeeId,
+      );
       let managerName = 'Manager';
       if (managerEmail) {
-        const mapping = await this.managerMappingRepository.findOne({ where: { employeeId: request.employeeId, status: ManagerMappingStatus.ACTIVE } });
+        const mapping = await this.managerMappingRepository.findOne({
+          where: {
+            employeeId: request.employeeId,
+            status: ManagerMappingStatus.ACTIVE,
+          },
+        });
         if (mapping) managerName = mapping.managerName || 'Manager';
       }
       const hrEmail = this.getHrEmail();
       const parsedCc = this._parseCcEmails(request.ccEmails);
-      
-      const requestTypeLabel = request.requestType === LeaveRequestType.APPLY_LEAVE ? AttendanceStatus.LEAVE : request.requestType;
-      
+
+      const requestTypeLabel =
+        request.requestType === LeaveRequestType.APPLY_LEAVE
+          ? AttendanceStatus.LEAVE
+          : request.requestType;
+
       let subject = '';
       let text = '';
       if (actionType === 'revert_back') {
@@ -2046,16 +3206,33 @@ export class LeaveRequestsService {
         text = `Cancellation request submitted by ${employee.fullName}`;
       }
 
-      const recipients: { email: string, name: string, isSelf: boolean }[] = [];
-      if (adminEmail) recipients.push({ email: adminEmail, name: 'Admin', isSelf: false });
-      if (managerEmail) recipients.push({ email: managerEmail, name: managerName, isSelf: false });
-      if (hrEmail) recipients.push({ email: hrEmail, name: 'HR', isSelf: false });
-      if (employee.email) recipients.push({ email: employee.email, name: employee.fullName, isSelf: true });
-      parsedCc.forEach(cc => {
-        if (cc && cc.includes('@')) recipients.push({ email: cc, name: '', isSelf: false });
+      const recipients: { email: string; name: string; isSelf: boolean }[] = [];
+      if (adminEmail)
+        recipients.push({ email: adminEmail, name: 'Admin', isSelf: false });
+      if (managerEmail)
+        recipients.push({
+          email: managerEmail,
+          name: managerName,
+          isSelf: false,
+        });
+      if (hrEmail)
+        recipients.push({ email: hrEmail, name: 'HR', isSelf: false });
+      if (employee.email)
+        recipients.push({
+          email: employee.email,
+          name: employee.fullName,
+          isSelf: true,
+        });
+      parsedCc.forEach((cc) => {
+        if (cc && cc.includes('@'))
+          recipients.push({ email: cc, name: '', isSelf: false });
       });
 
-      const uniqueRecipients: { email: string, name: string, isSelf: boolean }[] = [];
+      const uniqueRecipients: {
+        email: string;
+        name: string;
+        isSelf: boolean;
+      }[] = [];
       const seen = new Set();
       for (const r of recipients) {
         if (r.email && !seen.has(r.email.toLowerCase())) {
@@ -2065,22 +3242,30 @@ export class LeaveRequestsService {
       }
 
       for (const recipient of uniqueRecipients) {
-         const html = getCancellationTemplate({
-           employeeName: employee.fullName,
-           employeeId: employee.employeeId,
-           requestType: requestTypeLabel as string,
-           title: request.title || 'No Title',
-           fromDate: request.fromDate.toString(),
-           toDate: request.toDate.toString(),
-           duration: totalDays ?? request.duration ?? 0,
-           reason: request.description,
-           actionType,
-           recipientName: recipient.name,
-           isSelf: recipient.isSelf,
-         });
-         await this.emailService.sendEmail(recipient.email, subject, text, html).catch(e => this.logger.error(`Failed to send email to ${recipient.email}: ${e.message}`));
+        const html = getCancellationTemplate({
+          employeeName: employee.fullName,
+          employeeId: employee.employeeId,
+          requestType: requestTypeLabel,
+          title: request.title || 'No Title',
+          fromDate: request.fromDate.toString(),
+          toDate: request.toDate.toString(),
+          duration: totalDays ?? request.duration ?? 0,
+          reason: request.description,
+          actionType,
+          recipientName: recipient.name,
+          isSelf: recipient.isSelf,
+        });
+        await this.emailService
+          .sendEmail(recipient.email, subject, text, html)
+          .catch((e) =>
+            this.logger.error(
+              `Failed to send email to ${recipient.email}: ${e.message}`,
+            ),
+          );
       }
-      this.logger.log(`[CANCEL_EMAILS] Sent ${actionType} emails to ${uniqueRecipients.map(r => r.email).join(', ')}`);
+      this.logger.log(
+        `[CANCEL_EMAILS] Sent ${actionType} emails to ${uniqueRecipients.map((r) => r.email).join(', ')}`,
+      );
     } catch (e) {
       this.logger.error(`[CANCEL_EMAILS] Failed: ${e.message}`);
     }
@@ -2090,7 +3275,7 @@ export class LeaveRequestsService {
     this.logger.log(`[NOTIFY] Employee receipt for request ${request.id}`);
     try {
       const employee = await this.employeeDetailsRepository.findOne({
-        where: { employeeId: request.employeeId }
+        where: { employeeId: request.employeeId },
       });
       if (employee && employee.email) {
         const htmlContent = getEmployeeReceiptTemplate({
@@ -2103,50 +3288,90 @@ export class LeaveRequestsService {
           status: request.status,
           description: request.description,
           firstHalf: request.firstHalf,
-          secondHalf: request.secondHalf
+          secondHalf: request.secondHalf,
         });
         await this.emailService.sendEmail(
           employee.email,
           `Submission Received: ${request.requestType} - ${request.title}`,
           `Your ${request.requestType} has been submitted.`,
-          htmlContent
+          htmlContent,
         );
         this.logger.log(`[NOTIFY] Receipt sent to ${employee.email}`);
       }
     } catch (error) {
-      this.logger.error(`[NOTIFY] notifyEmployeeOfSubmission failed: ${error.message}`);
+      this.logger.error(
+        `[NOTIFY] notifyEmployeeOfSubmission failed: ${error.message}`,
+      );
     }
   }
 
-  private async sendStatusUpdateEmails(request: LeaveRequest, employee: EmployeeDetails, status: string, previousStatus?: string) {
+  private async sendStatusUpdateEmails(
+    request: LeaveRequest,
+    employee: EmployeeDetails,
+    status: string,
+    previousStatus?: string,
+  ) {
     try {
-      const adminEmail = (process.env.ADMIN_EMAIL || process.env.SMTP_USERNAME)?.trim();
-      const managerEmail = await this.getAssignedManagerEmail(request.employeeId);
+      const adminEmail = (
+        process.env.ADMIN_EMAIL || process.env.SMTP_USERNAME
+      )?.trim();
+      const managerEmail = await this.getAssignedManagerEmail(
+        request.employeeId,
+      );
       let managerName = 'Manager';
       if (managerEmail) {
-        const mapping = await this.managerMappingRepository.findOne({ where: { employeeId: request.employeeId, status: ManagerMappingStatus.ACTIVE } });
+        const mapping = await this.managerMappingRepository.findOne({
+          where: {
+            employeeId: request.employeeId,
+            status: ManagerMappingStatus.ACTIVE,
+          },
+        });
         if (mapping) managerName = mapping.managerName || 'Manager';
       }
       const hrEmail = this.getHrEmail();
       const parsedCc = this._parseCcEmails(request.ccEmails);
 
-      const requestTypeLabel = request.requestType === LeaveRequestType.APPLY_LEAVE ? AttendanceStatus.LEAVE : request.requestType;
-      const isEmployeeSelfCancel = status === LeaveRequestStatus.CANCELLED && previousStatus === LeaveRequestStatus.PENDING;
-      const isCancellation = status === LeaveRequestStatus.CANCELLATION_APPROVED || status === LeaveRequestStatus.CANCELLATION_REJECTED;
+      const requestTypeLabel =
+        request.requestType === LeaveRequestType.APPLY_LEAVE
+          ? AttendanceStatus.LEAVE
+          : request.requestType;
+      const isEmployeeSelfCancel =
+        status === LeaveRequestStatus.CANCELLED &&
+        previousStatus === LeaveRequestStatus.PENDING;
+      const isCancellation =
+        status === LeaveRequestStatus.CANCELLATION_APPROVED ||
+        status === LeaveRequestStatus.CANCELLATION_REJECTED;
 
-      const recipients: { email: string, name: string, isSelf: boolean }[] = [];
-      
+      const recipients: { email: string; name: string; isSelf: boolean }[] = [];
+
       if (!isEmployeeSelfCancel) {
-        if (adminEmail) recipients.push({ email: adminEmail, name: 'Admin', isSelf: false });
-        if (managerEmail) recipients.push({ email: managerEmail, name: managerName, isSelf: false });
-        if (hrEmail) recipients.push({ email: hrEmail, name: 'HR', isSelf: false });
-        parsedCc.forEach(cc => {
-          if (cc && cc.includes('@')) recipients.push({ email: cc, name: '', isSelf: false });
+        if (adminEmail)
+          recipients.push({ email: adminEmail, name: 'Admin', isSelf: false });
+        if (managerEmail)
+          recipients.push({
+            email: managerEmail,
+            name: managerName,
+            isSelf: false,
+          });
+        if (hrEmail)
+          recipients.push({ email: hrEmail, name: 'HR', isSelf: false });
+        parsedCc.forEach((cc) => {
+          if (cc && cc.includes('@'))
+            recipients.push({ email: cc, name: '', isSelf: false });
         });
       }
-      if (employee.email) recipients.push({ email: employee.email, name: employee.fullName, isSelf: true });
+      if (employee.email)
+        recipients.push({
+          email: employee.email,
+          name: employee.fullName,
+          isSelf: true,
+        });
 
-      const uniqueRecipients: { email: string, name: string, isSelf: boolean }[] = [];
+      const uniqueRecipients: {
+        email: string;
+        name: string;
+        isSelf: boolean;
+      }[] = [];
       const seen = new Set();
       for (const r of recipients) {
         if (r.email && !seen.has(r.email.toLowerCase())) {
@@ -2159,7 +3384,7 @@ export class LeaveRequestsService {
         const html = getStatusUpdateTemplate({
           employeeName: employee.fullName,
           employeeId: employee.employeeId,
-          requestType: requestTypeLabel as string,
+          requestType: requestTypeLabel,
           title: request.title || 'No Title',
           fromDate: request.fromDate.toString(),
           toDate: request.toDate.toString(),
@@ -2183,16 +3408,27 @@ export class LeaveRequestsService {
           text = `Request status updated to ${status} by ${request.reviewedBy || 'Reviewer'}`;
         }
 
-        await this.emailService.sendEmail(recipient.email, subject, text, html).catch(e => this.logger.error(`Status email failed: ${e.message}`));
+        await this.emailService
+          .sendEmail(recipient.email, subject, text, html)
+          .catch((e) => this.logger.error(`Status email failed: ${e.message}`));
       }
-      this.logger.log(`[STATUS_EMAILS] Sent ${status} emails to ${uniqueRecipients.map(r => r.email).join(', ')}`);
+      this.logger.log(
+        `[STATUS_EMAILS] Sent ${status} emails to ${uniqueRecipients.map((r) => r.email).join(', ')}`,
+      );
     } catch (err) {
       this.logger.error(`[STATUS_EMAILS] Failed: ${err.message}`);
     }
   }
 
-  async deleteDocument(entityType: EntityType, entityId: number, refId: number, key: string) {
-    this.logger.log(`[DOCS] Deleting document with key ${key} for entity ${entityId}`);
+  async deleteDocument(
+    entityType: EntityType,
+    entityId: number,
+    refId: number,
+    key: string,
+  ) {
+    this.logger.log(
+      `[DOCS] Deleting document with key ${key} for entity ${entityId}`,
+    );
     try {
       await this.validateEntity(entityType, entityId, refId);
       await this.documentUploaderService.deleteDoc(key);
@@ -2204,24 +3440,38 @@ export class LeaveRequestsService {
     } catch (error) {
       this.logger.error(`[DOCS] Delete failed: ${error.message}`, error.stack);
       if (error instanceof HttpException) throw error;
-      throw new HttpException('Error deleting document', HttpStatus.INTERNAL_SERVER_ERROR);
+      throw new HttpException(
+        'Error deleting document',
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
     }
   }
 
-  async validateEntity(entityType: EntityType, entityId: number, refId: number) {
+  async validateEntity(
+    entityType: EntityType,
+    entityId: number,
+    refId: number,
+  ) {
     try {
       if (entityType === EntityType.LEAVE_REQUEST) {
         if (refId !== 0) {
-          const leaveRequest = await this.leaveRequestRepository.findOne({ where: { id: refId } });
+          const leaveRequest = await this.leaveRequestRepository.findOne({
+            where: { id: refId },
+          });
           if (!leaveRequest) {
-            throw new NotFoundException(`Leave request with ID ${refId} not found`);
+            throw new NotFoundException(
+              `Leave request with ID ${refId} not found`,
+            );
           }
         }
       }
     } catch (error) {
       this.logger.error(`[DOCS] Entity validation failed: ${error.message}`);
       if (error instanceof HttpException) throw error;
-      throw new HttpException('Validation error', HttpStatus.INTERNAL_SERVER_ERROR);
+      throw new HttpException(
+        'Validation error',
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
     }
   }
 
@@ -2230,75 +3480,147 @@ export class LeaveRequestsService {
     try {
       return await this.leaveRequestRepository.update(
         { employeeId, isReadEmployee: false },
-        { isReadEmployee: true }
+        { isReadEmployee: true },
       );
     } catch (error) {
       this.logger.error(`[UPDATES] Mark all read failed: ${error.message}`);
-      throw new HttpException('Failed to update status', HttpStatus.INTERNAL_SERVER_ERROR);
+      throw new HttpException(
+        'Failed to update status',
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
     }
   }
 
-  async findMonthlyRequests(month: string, year: string, employeeId?: string, status?: string, page: number = 1, limit: number = 10) {
-    return this.findUnifiedRequests({ month, year, employeeId, status, page, limit });
+  async findMonthlyRequests(
+    month: string,
+    year: string,
+    employeeId?: string,
+    status?: string,
+    page: number = 1,
+    limit: number = 10,
+  ) {
+    return this.findUnifiedRequests({
+      month,
+      year,
+      employeeId,
+      status,
+      page,
+      limit,
+    });
   }
 
-  async modifyRequest(id: number, employeeId: string, updateData: { title?: string; description?: string; firstHalf?: string; secondHalf?: string; datesToModify?: string[]; ccEmails?: string[] }) {
+  async modifyRequest(
+    id: number,
+    employeeId: string,
+    updateData: {
+      title?: string;
+      description?: string;
+      firstHalf?: string;
+      secondHalf?: string;
+      datesToModify?: string[];
+      ccEmails?: string[];
+      documentKeys?: string[];
+    },
+  ) {
     this.logger.log(`[MODIFY_REQUEST] id=${id}, employee=${employeeId}`);
     try {
-      const request = await this.leaveRequestRepository.findOne({ where: { id, employeeId } });
-      if (!request) throw new NotFoundException('Request not found or access denied');
-      if (![LeaveRequestStatus.PENDING, LeaveRequestStatus.APPROVED].includes(request.status)) throw new BadRequestException('Only Pending or Approved requests can be modified');
+      const request = await this.leaveRequestRepository.findOne({
+        where: { id, employeeId },
+      });
+      if (!request)
+        throw new NotFoundException('Request not found or access denied');
+      if (
+        ![LeaveRequestStatus.PENDING, LeaveRequestStatus.APPROVED].includes(
+          request.status,
+        )
+      )
+        throw new BadRequestException(
+          'Only Pending or Approved requests can be modified',
+        );
 
       if (updateData.datesToModify && updateData.datesToModify.length > 0) {
         if (request.status === LeaveRequestStatus.APPROVED) {
-          return await this.modifyApprovedDates(id, employeeId, updateData.datesToModify, updateData);
+          return await this.modifyApprovedDates(
+            id,
+            employeeId,
+            updateData.datesToModify,
+            updateData,
+          );
         } else if (request.status === LeaveRequestStatus.PENDING) {
           const startDate = dayjs(request.fromDate);
           const endDate = dayjs(request.toDate);
           const totalDays = endDate.diff(startDate, 'day') + 1;
           if (updateData.datesToModify.length !== totalDays) {
-            throw new BadRequestException('Partial modification is only allowed for Approved requests. For Pending requests, please edit the entire request.');
+            throw new BadRequestException(
+              'Partial modification is only allowed for Approved requests. For Pending requests, please edit the entire request.',
+            );
           }
         }
       }
 
-      const updatedData: Partial<LeaveRequest> = { isModified: true, modificationCount: (request.modificationCount || 0) + 1, lastModifiedDate: new Date() };
+      const updatedData: Partial<LeaveRequest> = {
+        isModified: true,
+        modificationCount: (request.modificationCount || 0) + 1,
+        lastModifiedDate: new Date(),
+      };
       if (updateData.title !== undefined) updatedData.title = updateData.title;
-      if (updateData.description !== undefined) updatedData.description = updateData.description;
+      if (updateData.description !== undefined)
+        updatedData.description = updateData.description;
 
       if (request.status === LeaveRequestStatus.APPROVED) {
         updatedData.status = LeaveRequestStatus.REQUESTING_FOR_MODIFICATION;
         updatedData.isRead = false;
       }
 
-      if (updateData.firstHalf !== undefined) updatedData.firstHalf = updateData.firstHalf as WorkLocation | AttendanceStatus;
-      if (updateData.secondHalf !== undefined) updatedData.secondHalf = updateData.secondHalf as WorkLocation | AttendanceStatus;
-      if (updateData.ccEmails !== undefined) updatedData.ccEmails = updateData.ccEmails?.length ? JSON.stringify(updateData.ccEmails) : null;
+      if (updateData.firstHalf !== undefined)
+        updatedData.firstHalf = updateData.firstHalf as
+          | WorkLocation
+          | AttendanceStatus;
+      if (updateData.secondHalf !== undefined)
+        updatedData.secondHalf = updateData.secondHalf as
+          | WorkLocation
+          | AttendanceStatus;
+      if (updateData.ccEmails !== undefined)
+        updatedData.ccEmails = updateData.ccEmails?.length
+          ? JSON.stringify(updateData.ccEmails)
+          : null;
 
       if (updateData.firstHalf || updateData.secondHalf) {
-        const newFirstHalf = updateData.firstHalf || request.firstHalf || request.requestType;
-        const newSecondHalf = updateData.secondHalf || request.secondHalf || request.requestType;
+        const newFirstHalf =
+          updateData.firstHalf || request.firstHalf || request.requestType;
+        const newSecondHalf =
+          updateData.secondHalf || request.secondHalf || request.requestType;
         if (newFirstHalf === newSecondHalf) {
           updatedData.requestType = newFirstHalf;
           updatedData.isHalfDay = false;
         } else {
-          const parts = [newFirstHalf, newSecondHalf].filter(h => h && h !== WorkLocation.OFFICE);
+          const parts = [newFirstHalf, newSecondHalf].filter(
+            (h) => h && h !== WorkLocation.OFFICE,
+          );
           updatedData.requestType = parts.join(' + ');
           updatedData.isHalfDay = true;
         }
       }
 
       await this.leaveRequestRepository.update({ id }, updatedData);
-      const modifiedRequest = await this.leaveRequestRepository.findOne({ where: { id } });
+      const modifiedRequest = await this.leaveRequestRepository.findOne({
+        where: { id },
+      });
 
-      if (updatedData.status === LeaveRequestStatus.REQUESTING_FOR_MODIFICATION) {
-        const fullReq = await this.leaveRequestRepository.findOne({ where: { id } });
+      if (
+        updatedData.status === LeaveRequestStatus.REQUESTING_FOR_MODIFICATION
+      ) {
+        const fullReq = await this.leaveRequestRepository.findOne({
+          where: { id },
+        });
         if (fullReq) {
           await this.notifyAdminOfCancellationRequest(fullReq, employeeId);
           await this.notifyManagerOfRequest(fullReq);
 
           try {
-            const employee = await this.employeeDetailsRepository.findOne({ where: { employeeId } });
+            const employee = await this.employeeDetailsRepository.findOne({
+              where: { employeeId },
+            });
             if (employee?.email) {
               const htmlContent = getEmployeeReceiptTemplate({
                 employeeName: employee.fullName,
@@ -2309,24 +3631,93 @@ export class LeaveRequestsService {
                 duration: fullReq.duration,
                 status: fullReq.status,
                 firstHalf: fullReq.firstHalf,
-                secondHalf: fullReq.secondHalf
+                secondHalf: fullReq.secondHalf,
               });
-              await this.emailService.sendEmail(employee.email, `Submission Received: Modification Request (${fullReq.requestType})`, 'Modification Request Notification', htmlContent);
+              await this.emailService.sendEmail(
+                employee.email,
+                `Submission Received: Modification Request (${fullReq.requestType})`,
+                'Modification Request Notification',
+                htmlContent,
+              );
             }
           } catch (e) {
-            this.logger.error(`[MODIFY_REQUEST] Employee notification failed: ${e.message}`);
+            this.logger.error(
+              `[MODIFY_REQUEST] Employee notification failed: ${e.message}`,
+            );
+          }
+        }
+      }
+
+      // -------------------------------------------------------------------------
+      // DOCUMENT LINKING STRATEGY (Strategy A & B)
+      // -------------------------------------------------------------------------
+      const employeeDetails = await this.employeeDetailsRepository.findOne({
+        where: { employeeId },
+      });
+      if (employeeDetails) {
+        if (updateData.documentKeys && updateData.documentKeys.length > 0) {
+          // Strategy A – precise linking by document ID
+          for (const docId of updateData.documentKeys) {
+            const docMeta = await this.documentRepo.findOne({
+              where: {
+                id: docId,
+                entityType: EntityType.LEAVE_REQUEST,
+                entityId: employeeDetails.id,
+              },
+            });
+            if (docMeta) {
+              if (docMeta.refId === 0) {
+                docMeta.refId = id;
+                await this.documentRepo.save(docMeta);
+              } else if (docMeta.refId !== id) {
+                // If already linked elsewhere, clone it
+                const clone = this.documentRepo.create({
+                  ...docMeta,
+                  id: undefined,
+                  refId: id,
+                });
+                await this.documentRepo.save(clone);
+              }
+            }
+          }
+        } else {
+          // Strategy B – fallback for orphaned docs uploaded recently
+          const oneHourAgo = new Date(Date.now() - 1 * 60 * 60 * 1000);
+          const orphanedDocs = await this.documentRepo.find({
+            where: {
+              entityType: EntityType.LEAVE_REQUEST,
+              entityId: employeeDetails.id,
+              refId: 0,
+              createdAt: MoreThan(oneHourAgo),
+            },
+          });
+          for (const doc of orphanedDocs) {
+            doc.refId = id;
+            await this.documentRepo.save(doc);
           }
         }
       }
 
       this.logger.log(`[MODIFY_REQUEST] Successfully modified request ${id}`);
-      this._recalcMonthStatus(employeeId, request.fromDate.toString()).catch(() => { });
+      this._recalcMonthStatus(employeeId, request.fromDate.toString()).catch(
+        () => {},
+      );
 
-      return { success: true, modifiedRequest, message: 'Request modified successfully' };
+      return {
+        success: true,
+        modifiedRequest,
+        message: 'Request modified successfully',
+      };
     } catch (error) {
-      this.logger.error(`[MODIFY_REQUEST] Failed for ${id}: ${error.message}`, error.stack);
+      this.logger.error(
+        `[MODIFY_REQUEST] Failed for ${id}: ${error.message}`,
+        error.stack,
+      );
       if (error instanceof HttpException) throw error;
-      throw new HttpException('Failed to modify request', HttpStatus.INTERNAL_SERVER_ERROR);
+      throw new HttpException(
+        'Failed to modify request',
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
     }
   }
 
@@ -2334,11 +3725,19 @@ export class LeaveRequestsService {
     id: number,
     employeeId: string,
     datesToModify: string[],
-    updateData: { title?: string; description?: string; firstHalf?: string; secondHalf?: string }
+    updateData: {
+      title?: string;
+      description?: string;
+      firstHalf?: string;
+      secondHalf?: string;
+      documentKeys?: string[];
+    },
   ) {
     this.logger.log(`[MODIFY_APPROVED] id=${id}, employee=${employeeId}`);
     try {
-      const request = await this.leaveRequestRepository.findOne({ where: { id, employeeId } });
+      const request = await this.leaveRequestRepository.findOne({
+        where: { id, employeeId },
+      });
       if (!request) throw new NotFoundException('Request not found');
 
       const sortedDates = datesToModify.sort();
@@ -2396,15 +3795,21 @@ export class LeaveRequestsService {
       const isFullModification = modifyingWorkingDays >= parentWorkingDays;
 
       // Derive new request type from half day choices
-      const fHalf = (updateData.firstHalf || request.firstHalf || WorkLocation.OFFICE) as WorkLocation;
-      const sHalf = (updateData.secondHalf || request.secondHalf || WorkLocation.OFFICE) as WorkLocation;
+      const fHalf = (updateData.firstHalf ||
+        request.firstHalf ||
+        WorkLocation.OFFICE) as WorkLocation;
+      const sHalf = (updateData.secondHalf ||
+        request.secondHalf ||
+        WorkLocation.OFFICE) as WorkLocation;
       let newRequestType = request.requestType;
       let isHalfDay = request.isHalfDay;
       if (fHalf === sHalf) {
         newRequestType = fHalf;
         isHalfDay = false;
       } else {
-        const parts = [fHalf, sHalf].filter(h => h && h !== WorkLocation.OFFICE);
+        const parts = [fHalf, sHalf].filter(
+          (h) => h && h !== WorkLocation.OFFICE,
+        );
         newRequestType = parts.join(' + ');
         isHalfDay = true;
       }
@@ -2418,6 +3823,7 @@ export class LeaveRequestsService {
         request.secondHalf = sHalf;
         request.requestType = newRequestType;
         request.isHalfDay = isHalfDay;
+        request.availableDates = JSON.stringify(datesToModify);
         request.isRead = false;
         request.isReadEmployee = true;
         request.isModified = true;
@@ -2426,9 +3832,54 @@ export class LeaveRequestsService {
         await this.leaveRequestRepository.save(request);
         createdRequests.push(request);
 
+        // Document Linking for Full Modification
+        const employeeDetails = await this.employeeDetailsRepository.findOne({
+          where: { employeeId },
+        });
+        if (employeeDetails) {
+          if (updateData.documentKeys && updateData.documentKeys.length > 0) {
+            for (const docId of updateData.documentKeys) {
+              const docMeta = await this.documentRepo.findOne({
+                where: {
+                  id: docId,
+                  entityType: EntityType.LEAVE_REQUEST,
+                  entityId: employeeDetails.id,
+                },
+              });
+              if (docMeta) {
+                if (docMeta.refId === 0) {
+                  docMeta.refId = id;
+                  await this.documentRepo.save(docMeta);
+                } else if (docMeta.refId !== id) {
+                  const clone = this.documentRepo.create({
+                    ...docMeta,
+                    id: undefined,
+                    refId: id,
+                  });
+                  await this.documentRepo.save(clone);
+                }
+              }
+            }
+          } else {
+            const oneHourAgo = new Date(Date.now() - 1 * 60 * 60 * 1000);
+            const orphanedDocs = await this.documentRepo.find({
+              where: {
+                entityType: EntityType.LEAVE_REQUEST,
+                entityId: employeeDetails.id,
+                refId: 0,
+                createdAt: MoreThan(oneHourAgo),
+              },
+            });
+            for (const doc of orphanedDocs) {
+              doc.refId = id;
+              await this.documentRepo.save(doc);
+            }
+          }
+        }
+
         // Notify only of submission — no approval triggered here
         await this.notifyManagerOfRequest(request);
-        await this.notifyEmployeeOfSubmission(request as LeaveRequest);
+        await this.notifyEmployeeOfSubmission(request);
       } else {
         // PARTIAL modification — create child records as before
         for (const range of ranges) {
@@ -2439,7 +3890,9 @@ export class LeaveRequestsService {
             rangeRequestType = fHalf;
             rangeIsHalfDay = false;
           } else {
-            const parts = [fHalf, sHalf].filter(h => h && h !== WorkLocation.OFFICE);
+            const parts = [fHalf, sHalf].filter(
+              (h) => h && h !== WorkLocation.OFFICE,
+            );
             rangeRequestType = parts.join(' + ');
             rangeIsHalfDay = true;
           }
@@ -2461,48 +3914,136 @@ export class LeaveRequestsService {
             createdAt: new Date(),
             updatedAt: new Date(),
             duration: range.count,
-            requestModifiedFrom: request.id.toString(),
+            requestModifiedFrom: `${request.id}:${request.requestType}`,
+            availableDates: JSON.stringify(
+              datesToModify.filter((d) => {
+                const ds = dayjs(d).format('YYYY-MM-DD');
+                return ds >= range.start && ds <= range.end;
+              }),
+            ),
             isModified: true,
             modificationCount: 1,
-            lastModifiedDate: new Date()
+            lastModifiedDate: new Date(),
           }) as unknown as LeaveRequest;
 
-          const savedNew = await this.leaveRequestRepository.save(newRequest) as unknown as LeaveRequest;
-          await this.copyRequestDocuments(request.id, savedNew.id);
+          const savedNew = (await this.leaveRequestRepository.save(
+            newRequest,
+          )) as unknown as LeaveRequest;
+          // Removed copyRequestDocuments so partial modification only contains new documents
+
+          // Document Linking for Partial Modification segments
+          const employeeDetails = await this.employeeDetailsRepository.findOne({
+            where: { employeeId },
+          });
+          if (employeeDetails) {
+            if (updateData.documentKeys && updateData.documentKeys.length > 0) {
+              for (const docId of updateData.documentKeys) {
+                const docMeta = await this.documentRepo.findOne({
+                  where: {
+                    id: docId,
+                    entityType: EntityType.LEAVE_REQUEST,
+                    entityId: employeeDetails.id,
+                  },
+                });
+                if (docMeta) {
+                  if (docMeta.refId === 0) {
+                    docMeta.refId = savedNew.id;
+                    await this.documentRepo.save(docMeta);
+                  } else {
+                    const clone = this.documentRepo.create({
+                      ...docMeta,
+                      id: undefined,
+                      refId: savedNew.id,
+                    });
+                    await this.documentRepo.save(clone);
+                  }
+                }
+              }
+            } else {
+              const oneHourAgo = new Date(Date.now() - 1 * 60 * 60 * 1000);
+              const orphanedDocs = await this.documentRepo.find({
+                where: {
+                  entityType: EntityType.LEAVE_REQUEST,
+                  entityId: employeeDetails.id,
+                  refId: 0,
+                  createdAt: MoreThan(oneHourAgo),
+                },
+              });
+              for (const doc of orphanedDocs) {
+                const clone = this.documentRepo.create({
+                  ...doc,
+                  id: undefined,
+                  refId: savedNew.id,
+                });
+                await this.documentRepo.save(clone);
+              }
+            }
+          }
+
           createdRequests.push(savedNew);
 
           // Notify only of submission - NO Approval triggered here
           await this.notifyManagerOfRequest(savedNew);
-          await this.notifyEmployeeOfSubmission(savedNew as LeaveRequest);
+          await this.notifyEmployeeOfSubmission(savedNew);
         }
       }
 
-      this._recalcMonthStatus(employeeId, datesToModify[0]).catch(() => { });
-      this.logger.log(`[MODIFY_APPROVED] Successfully created ${createdRequests.length} modification requests`);
-      return { success: true, modifiedRequests: createdRequests, message: 'Modification requests created successfully' };
+      this._recalcMonthStatus(employeeId, datesToModify[0]).catch(() => {});
+      this.logger.log(
+        `[MODIFY_APPROVED] Successfully created ${createdRequests.length} modification requests`,
+      );
+      return {
+        success: true,
+        modifiedRequests: createdRequests,
+        message: 'Modification requests created successfully',
+      };
     } catch (error) {
-      this.logger.error(`[MODIFY_APPROVED] Failed: ${error.message}`, error.stack);
+      this.logger.error(
+        `[MODIFY_APPROVED] Failed: ${error.message}`,
+        error.stack,
+      );
       if (error instanceof HttpException) throw error;
-      throw new HttpException('Failed to create modification requests', HttpStatus.INTERNAL_SERVER_ERROR);
+      throw new HttpException(
+        'Failed to create modification requests',
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
     }
   }
 
   async undoModificationRequest(id: number, employeeId: string) {
     this.logger.log(`[UNDO_MODIFY] id=${id}, employee=${employeeId}`);
     try {
-      const request = await this.leaveRequestRepository.findOne({ where: { id, employeeId } });
+      const request = await this.leaveRequestRepository.findOne({
+        where: { id, employeeId },
+      });
       if (!request) throw new NotFoundException('Request not found');
 
       if (request.status !== LeaveRequestStatus.REQUESTING_FOR_MODIFICATION) {
-        throw new BadRequestException('Only requests with status "Requesting for Modification" can be undone.');
+        throw new BadRequestException(
+          'Only requests with status "Requesting for Modification" can be undone.',
+        );
       }
 
-      request.status = LeaveRequestStatus.MODIFICATION_CANCELLED;
-      await this.leaveRequestRepository.save(request);
+      if (request.requestModifiedFrom) {
+        // PARTIAL modification (child record)
+        request.status = LeaveRequestStatus.MODIFICATION_CANCELLED;
+        request.availableDates = JSON.stringify([]); // No longer blocking/claiming dates
+        await this.leaveRequestRepository.save(request);
+      } else {
+        // FULL modification (parent record itself)
+        // Revert it back to APPROVED so the original leave remains active
+        request.status = LeaveRequestStatus.APPROVED;
+        await this.leaveRequestRepository.save(request);
+        this.logger.log(
+          `[UNDO_MODIFY] Reverted parent request ${id} to APPROVED status.`,
+        );
+      }
 
       // Notifications: everyone gets the MODIFICATION_CANCELLED update
       try {
-        const employee = await this.employeeDetailsRepository.findOne({ where: { employeeId: request.employeeId } });
+        const employee = await this.employeeDetailsRepository.findOne({
+          where: { employeeId: request.employeeId },
+        });
         if (employee) {
           await this.sendStatusUpdateEmails(request, employee, request.status);
         }
@@ -2510,36 +4051,73 @@ export class LeaveRequestsService {
         this.logger.error(`[UNDO_MODIFY] Notification failed: ${err.message}`);
       }
 
-      this._recalcMonthStatus(employeeId, String(request.fromDate)).catch(() => { });
-      this.logger.log(`[UNDO_MODIFY] Successfully cancelled modification request ${id}`);
+      this._recalcMonthStatus(employeeId, String(request.fromDate)).catch(
+        () => {},
+      );
+      this.logger.log(
+        `[UNDO_MODIFY] Successfully cancelled modification request ${id}`,
+      );
 
-      return { success: true, message: 'Modification request undone successfully' };
+      return {
+        success: true,
+        message: 'Modification request undone successfully',
+      };
     } catch (error) {
-      this.logger.error(`[UNDO_MODIFY] Failed for ${id}: ${error.message}`, error.stack);
+      this.logger.error(
+        `[UNDO_MODIFY] Failed for ${id}: ${error.message}`,
+        error.stack,
+      );
       if (error instanceof HttpException) throw error;
-      throw new HttpException('Failed to undo modification request', HttpStatus.INTERNAL_SERVER_ERROR);
+      throw new HttpException(
+        'Failed to undo modification request',
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
     }
   }
 
-  async getMonthlyLeaveBalance(employeeId: string, month: number, year: number) {
-    this.logger.log(`[BALANCE_MONTH] employeeId=${employeeId}, month=${month}, year=${year}`);
+  async getMonthlyLeaveBalance(
+    employeeId: string,
+    month: number,
+    year: number,
+  ) {
+    this.logger.log(
+      `[BALANCE_MONTH] employeeId=${employeeId}, month=${month}, year=${year}`,
+    );
     try {
       const employee = await this.employeeDetailsRepository.findOne({
         where: { employeeId },
-        select: ['id', 'employeeId', 'designation', 'employmentType', 'joiningDate', 'conversionDate'],
+        select: [
+          'id',
+          'employeeId',
+          'designation',
+          'employmentType',
+          'joiningDate',
+          'conversionDate',
+        ],
       });
 
-      if (!employee) throw new NotFoundException(`Employee ${employeeId} not found`);
+      if (!employee)
+        throw new NotFoundException(`Employee ${employeeId} not found`);
 
       const isIntern =
         employee.employmentType === EmploymentType.INTERN ||
-        (employee.designation || '').toLowerCase().includes(EmploymentType.INTERN.toLowerCase());
+        (employee.designation || '')
+          .toLowerCase()
+          .includes(EmploymentType.INTERN.toLowerCase());
 
       let runningBalance = 0;
       let ytdUsed = 0;
       let ytdLop = 0;
 
-      const targetMonthStats = { carryOver: 0, monthlyAccrual: 0, leavesTaken: 0, lop: 0, balance: 0, ytdUsed: 0, ytdLop: 0 };
+      const targetMonthStats = {
+        carryOver: 0,
+        monthlyAccrual: 0,
+        leavesTaken: 0,
+        lop: 0,
+        balance: 0,
+        ytdUsed: 0,
+        ytdLop: 0,
+      };
 
       const joinDate = dayjs(employee.joiningDate);
       const joinMonth = joinDate.isValid() ? joinDate.month() + 1 : 1;
@@ -2559,9 +4137,10 @@ export class LeaveRequestsService {
 
       const attendanceMap = new Map<string, EmployeeAttendance[]>();
       attendanceRecords.forEach((rec) => {
-        const dateStr = rec.workingDate instanceof Date
-          ? rec.workingDate.toISOString().split('T')[0]
-          : String(rec.workingDate).split('T')[0];
+        const dateStr =
+          rec.workingDate instanceof Date
+            ? rec.workingDate.toISOString().split('T')[0]
+            : String(rec.workingDate).split('T')[0];
         const [y, mStr] = dateStr.split('-');
         const key = `${y}-${parseInt(mStr)}`;
         let list = attendanceMap.get(key);
@@ -2581,25 +4160,38 @@ export class LeaveRequestsService {
 
         for (let m = startM; m <= endM; m++) {
           let isInternThisMonth = isIntern;
-          const convDate = (employee as any).conversionDate ? dayjs((employee as any).conversionDate) : null;
+          const convDate = (employee as any).conversionDate
+            ? dayjs((employee as any).conversionDate)
+            : null;
           if (convDate && convDate.isValid()) {
             const convMonth = convDate.month() + 1;
             const convYear = convDate.year();
-            if (curYear > convYear || (curYear === convYear && m >= convMonth)) {
+            if (
+              curYear > convYear ||
+              (curYear === convYear && m >= convMonth)
+            ) {
               isInternThisMonth = false;
-              if (curYear === convYear && m === convMonth && convDate.date() > 10) isInternThisMonth = true;
+              if (
+                curYear === convYear &&
+                m === convMonth &&
+                convDate.date() > 10
+              )
+                isInternThisMonth = true;
             } else {
               isInternThisMonth = true;
             }
           }
 
-          if (curYear === year && m === month) targetMonthStats.carryOver = runningBalance;
+          if (curYear === year && m === month)
+            targetMonthStats.carryOver = runningBalance;
 
           let effectiveAccrual = isInternThisMonth ? 1.0 : 1.5;
-          if (curYear === joinYear && m === joinMonth && joinDate.date() > 10) effectiveAccrual = 0;
+          if (curYear === joinYear && m === joinMonth && joinDate.date() > 10)
+            effectiveAccrual = 0;
 
           runningBalance += effectiveAccrual;
-          if (curYear === year && m === month) targetMonthStats.monthlyAccrual = effectiveAccrual;
+          if (curYear === year && m === month)
+            targetMonthStats.monthlyAccrual = effectiveAccrual;
 
           const attendance = attendanceMap.get(`${curYear}-${m}`) || [];
           const monthlyUsage = attendance.reduce((acc, rec) => {
@@ -2609,13 +4201,22 @@ export class LeaveRequestsService {
               const processHalf = (half: string | null) => {
                 if (!half) return 0;
                 const h = half.toLowerCase();
-                return (h.includes(AttendanceStatus.LEAVE.toLowerCase()) || h.includes(AttendanceStatus.ABSENT.toLowerCase())) ? 0.5 : 0;
+                return h.includes(AttendanceStatus.LEAVE.toLowerCase()) ||
+                  h.includes(AttendanceStatus.ABSENT.toLowerCase())
+                  ? 0.5
+                  : 0;
               };
-              dailyUsage = processHalf(rec.firstHalf) + processHalf(rec.secondHalf);
+              dailyUsage =
+                processHalf(rec.firstHalf) + processHalf(rec.secondHalf);
             } else {
-              if (status.includes(AttendanceStatus.LEAVE.toLowerCase()) || status.includes(AttendanceStatus.ABSENT.toLowerCase())) {
+              if (
+                status.includes(AttendanceStatus.LEAVE.toLowerCase()) ||
+                status.includes(AttendanceStatus.ABSENT.toLowerCase())
+              ) {
                 dailyUsage = 1;
-              } else if (status.includes(AttendanceStatus.HALF_DAY.toLowerCase())) {
+              } else if (
+                status.includes(AttendanceStatus.HALF_DAY.toLowerCase())
+              ) {
                 dailyUsage = 0.5;
               }
             }
@@ -2646,12 +4247,20 @@ export class LeaveRequestsService {
         }
       }
 
-      this.logger.log(`[BALANCE_MONTH] Calculated: current=${targetMonthStats.balance}, ytdUsed=${targetMonthStats.ytdUsed}`);
+      this.logger.log(
+        `[BALANCE_MONTH] Calculated: current=${targetMonthStats.balance}, ytdUsed=${targetMonthStats.ytdUsed}`,
+      );
       return targetMonthStats;
     } catch (error) {
-      this.logger.error(`[BALANCE_MONTH] Calculation failed for ${employeeId}: ${error.message}`, error.stack);
+      this.logger.error(
+        `[BALANCE_MONTH] Calculation failed for ${employeeId}: ${error.message}`,
+        error.stack,
+      );
       if (error instanceof HttpException) throw error;
-      throw new HttpException('Failed to calculate monthly leave balance', HttpStatus.INTERNAL_SERVER_ERROR);
+      throw new HttpException(
+        'Failed to calculate monthly leave balance',
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
     }
   }
 }
