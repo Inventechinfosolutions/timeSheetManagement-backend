@@ -69,6 +69,62 @@ export class LeaveRequestsService {
     return hrEmail;
   }
 
+  /**
+   * Determine the duration factor for a split day.
+   * If both halves are "Away" (WFH, Client Visit, Leave, etc.), the factor is 1.0.
+   * If one half is "At Work" (Office, Present), the factor is 0.5.
+   */
+  /**
+   * Determine the duration factor for a split day.
+   * If both halves are "Away" (WFH, Client Visit, Leave, etc.), the factor is 1.0.
+   * If one half is "At Work" (Office, Present), the factor is 0.5.
+   */
+  private getDurationFactor(
+    firstHalf: string | null,
+    secondHalf: string | null,
+  ): number {
+    const isAway = (h: string | null) => {
+      if (!h) return false;
+      const normalized = h.toLowerCase();
+      // "At Work" locations
+      if (
+        normalized === WorkLocation.OFFICE.toLowerCase() ||
+        normalized === WorkLocation.PRESENT.toLowerCase() ||
+        normalized === 'office' ||
+        normalized === 'present'
+      ) {
+        return false;
+      }
+      return true;
+    };
+
+    const h1Away = isAway(firstHalf);
+    const h2Away = isAway(secondHalf);
+
+    return h1Away && h2Away ? 1.0 : 0.5;
+  }
+
+  private async calculateWorkingDays(
+    fromDate: string | Date,
+    toDate: string | Date,
+    employeeId: string,
+  ): Promise<string[]> {
+    const start = dayjs(fromDate);
+    const end = dayjs(toDate);
+    const list: string[] = [];
+    const diff = end.diff(start, 'day');
+
+    for (let i = 0; i <= diff; i++) {
+      const current = start.add(i, 'day');
+      const isWeekend = await this._isWeekend(current, employeeId);
+      const isHoliday = await this._isHoliday(current);
+      if (!isWeekend && !isHoliday) {
+        list.push(current.format('YYYY-MM-DD'));
+      }
+    }
+    return list;
+  }
+
   // Helper to check if weekend based on department
   private async _isWeekend(
     date: dayjs.Dayjs,
@@ -264,23 +320,14 @@ export class LeaveRequestsService {
         }
 
         // Calculate working dates for the NEW request first
-        const start = dayjs(data.fromDate);
-        const end = dayjs(data.toDate);
-        const workingDateList: string[] = [];
-        let workingDays = 0;
-        const diff = end.diff(start, 'day');
+        const workingDateList = await this.calculateWorkingDays(
+          data.fromDate,
+          data.toDate,
+          data.employeeId,
+        );
+        const workingDays = workingDateList.length;
 
-        for (let i = 0; i <= diff; i++) {
-          const current = start.add(i, 'day');
-          const isWeekend = await this._isWeekend(current, data.employeeId);
-          const isHoliday = await this._isHoliday(current);
-          if (!isWeekend && !isHoliday) {
-            workingDays++;
-            workingDateList.push(current.format('YYYY-MM-DD'));
-          }
-        }
-
-        if (workingDateList.length === 0) {
+        if (workingDays === 0) {
           throw new BadRequestException(
             'The selected date range contains no working days.',
           );
@@ -372,13 +419,22 @@ export class LeaveRequestsService {
 
         // Set duration and list for the rest of the method
         if (data.isHalfDay) {
-          data.duration = workingDays * 0.5;
+          const mainType =
+            (data.requestType === LeaveRequestType.APPLY_LEAVE ||
+            data.requestType === LeaveRequestType.HALF_DAY
+              ? AttendanceStatus.LEAVE
+              : data.requestType) || WorkLocation.OFFICE;
+          const otherType = data.otherHalfType || WorkLocation.OFFICE;
+
+          // Determine factor based on both halves
+          const factor = this.getDurationFactor(mainType, otherType);
+          data.duration = workingDays * factor;
         } else {
           data.duration = workingDays;
         }
         (data as any).availableDates = JSON.stringify(workingDateList);
         this.logger.debug(
-          `[CREATE] Calculated duration: ${data.duration} days, dates: ${workingDateList.length}`,
+          `[CREATE] Calculated duration: ${data.duration} days, dates: ${workingDateList.length}, factor: ${data.isHalfDay ? data.duration / workingDays : 1.0}`,
         );
       }
 
@@ -2072,45 +2128,39 @@ export class LeaveRequestsService {
                   pCur = pCur.add(1, 'day');
                 }
               }
-
               const remainingDates = allParentDates.filter(
                 (d) => !removedDatesSet.has(d),
               );
 
               let remainingWorkingDays = 0;
               for (const rd of remainingDates) {
-                const isWknd = await this._isWeekend(
-                  dayjs(rd),
-                  request.employeeId,
-                );
-                const isHol = await this._isHoliday(dayjs(rd));
-                if (!isWknd && !isHol) remainingWorkingDays++;
+                const day = dayjs(rd);
+                const isWknd = await this._isWeekend(day, request.employeeId);
+                const isHol = await this._isHoliday(day);
+                if (!isWknd && !isHol) {
+                  remainingWorkingDays++;
+                }
               }
 
               if (remainingWorkingDays === 0 || remainingDates.length === 0) {
-                parent.status = status; // Reflect the final state
+                parent.status = status;
                 parent.duration = 0;
                 parent.availableDates = JSON.stringify([]);
               } else {
-                // Determine if parent was half day by checking original duration / original working dates
-                const originalWorkingDays = allParentDates.length;
-                const isParentHalfDay = parent.isHalfDay || (originalWorkingDays > 0 && parent.duration < originalWorkingDays);
-                
-                parent.duration = isParentHalfDay
-                  ? Number((remainingWorkingDays * 0.5).toFixed(2))
-                  : remainingWorkingDays;
+                const factor = parent.isHalfDay
+                  ? this.getDurationFactor(parent.firstHalf, parent.secondHalf)
+                  : 1.0;
+
+                parent.duration = Number(
+                  (remainingWorkingDays * factor).toFixed(2),
+                );
                 parent.fromDate = remainingDates[0];
                 parent.toDate = remainingDates[remainingDates.length - 1];
                 parent.availableDates = JSON.stringify(remainingDates);
-                parent.isModified = true;
-                parent.modificationCount = (parent.modificationCount || 0) + 1;
-                parent.lastModifiedDate = new Date();
-                
-                if (isParentHalfDay) parent.isHalfDay = true;
               }
               await this.leaveRequestRepository.save(parent);
               this.logger.log(
-                `[UPDATE_STATUS] Updated parent request ${parentId} (Modified: ${parent.isModified}) duration to ${parent.duration} due to ${status}`,
+                `[UPDATE_STATUS] Updated parent ${parentId} duration to ${parent.duration} based on ${remainingWorkingDays} working days.`,
               );
             }
           }
@@ -2277,24 +2327,18 @@ export class LeaveRequestsService {
       modification.submittedDate = new Date().toISOString().slice(0, 10);
       modification.isRead = true;
       modification.isReadEmployee = false;
-      modification.duration =
-        data.duration ||
-        (dayjs(data.toDate).diff(dayjs(data.fromDate), 'day') + 1) *
-          (parent.isHalfDay ? 0.5 : 1);
-      modification.requestModifiedFrom = `${parent.id}:${data.sourceRequestType || parent.requestType}`;
+      // Calculate working days and factor
+      const workingDateList = await this.calculateWorkingDays(
+        modification.fromDate,
+        modification.toDate,
+        modification.employeeId,
+      );
+      const factor = parent.isHalfDay
+        ? this.getDurationFactor(parent.firstHalf, parent.secondHalf)
+        : 1.0;
 
-      // NEW: Calculate availableDates for the modification
-      const mStart = dayjs(modification.fromDate);
-      const mEnd = dayjs(modification.toDate);
-      const mDiff = mEnd.diff(mStart, 'day');
-      const mList: string[] = [];
-      for (let i = 0; i <= mDiff; i++) {
-        const d = mStart.add(i, 'day');
-        const isWknd = await this._isWeekend(d, modification.employeeId);
-        const isHol = await this._isHoliday(d);
-        if (!isWknd && !isHol) mList.push(d.format('YYYY-MM-DD'));
-      }
-      modification.availableDates = JSON.stringify(mList);
+      modification.duration = data.duration || workingDateList.length * factor;
+      modification.availableDates = JSON.stringify(workingDateList);
 
       const savedModification =
         await this.leaveRequestRepository.save(modification);
@@ -2481,7 +2525,7 @@ export class LeaveRequestsService {
     toDate: string,
   ) {
     this.logger.log(
-      `[UPDATE_PARENT] id=${parentId}, duration=${duration}, from=${fromDate}, to=${toDate}`,
+      `[UPDATE_PARENT] id=${parentId}, duration=${duration} (from frontend), from=${fromDate}, to=${toDate}`,
     );
     try {
       if (!parentId) throw new BadRequestException('Parent ID is required');
@@ -2494,9 +2538,72 @@ export class LeaveRequestsService {
       if (!parentRequest)
         throw new NotFoundException('Parent Request not found');
 
-      parentRequest.duration = duration;
-      parentRequest.fromDate = dayjs(fromDate).format('YYYY-MM-DD');
-      parentRequest.toDate = dayjs(toDate).format('YYYY-MM-DD');
+      // 1. IMPROVED: Use existing availableDates as a base for filtering.
+      // This ensures that any manual splits/shrinks (like middle-of-range cancellations)
+      // are NOT overwritten by a simple range-based recalculation.
+      let workingDateList: string[] = [];
+      if (parentRequest.availableDates) {
+        try {
+          const currentDates = JSON.parse(parentRequest.availableDates);
+          if (Array.isArray(currentDates)) {
+            // Filter current dates to be within the NEW range requested by the frontend.
+            const start = dayjs(fromDate).startOf('day');
+            const end = dayjs(toDate).endOf('day');
+            workingDateList = currentDates.filter((d) => {
+              const date = dayjs(d);
+              return (
+                (date.isSame(start) || date.isAfter(start)) &&
+                (date.isSame(end) || date.isBefore(end))
+              );
+            });
+          }
+        } catch (e) {
+          this.logger.error(
+            `[UPDATE_PARENT] Error parsing availableDates for ${parentId}: ${e.message}`,
+          );
+        }
+      }
+
+      // 2. FALLBACK: Only if we have no base dates, recalculate from the full range.
+      // This also acts as the safety net for over-counting (the 7 vs 8 days bug).
+      if (workingDateList.length === 0) {
+        workingDateList = await this.calculateWorkingDays(
+          fromDate,
+          toDate,
+          parentRequest.employeeId,
+        );
+      }
+
+      const factor = parentRequest.isHalfDay
+        ? this.getDurationFactor(
+            parentRequest.firstHalf,
+            parentRequest.secondHalf,
+          )
+        : 1.0;
+
+      const correctedDuration = Number(
+        (workingDateList.length * factor).toFixed(2),
+      );
+
+      // Use actual first/last dates from the real working list, NOT the frontend's range params.
+      // This ensures the parent's range reflects reality (e.g., if 18-Mar was cancelled,
+      // toDate becomes 16-Mar, not 18-Mar).
+      const actualFromDate = workingDateList.length > 0
+        ? workingDateList[0]
+        : dayjs(fromDate).format('YYYY-MM-DD');
+
+      const actualToDate = workingDateList.length > 0
+        ? workingDateList[workingDateList.length - 1]
+        : dayjs(toDate).format('YYYY-MM-DD');
+
+      this.logger.log(
+        `[UPDATE_PARENT] Parent ${parentId}: duration=${correctedDuration}, fromDate=${actualFromDate}, toDate=${actualToDate} (${workingDateList.length} working days)`,
+      );
+
+      parentRequest.duration = correctedDuration;
+      parentRequest.fromDate = actualFromDate;
+      parentRequest.toDate = actualToDate;
+      parentRequest.availableDates = JSON.stringify(workingDateList);
 
       const saved = await this.leaveRequestRepository.save(parentRequest);
       this.logger.log(
@@ -2656,9 +2763,10 @@ export class LeaveRequestsService {
             lastRemainingWorkingDate = rd;
           }
         }
-        const updatedParentDuration = request.isHalfDay
-          ? remainingWorkingDays * 0.5
-          : remainingWorkingDays;
+        const factor = request.isHalfDay
+          ? this.getDurationFactor(request.firstHalf, request.secondHalf)
+          : 1.0;
+        const updatedParentDuration = remainingWorkingDays * factor;
 
         if (updatedParentDuration === 0 || !firstRemainingWorkingDate) {
           request.status = LeaveRequestStatus.CANCELLED;
@@ -2677,7 +2785,10 @@ export class LeaveRequestsService {
               isReadEmployee: true,
               createdAt: new Date(),
               updatedAt: new Date(),
-              duration: request.isHalfDay ? range.count * 0.5 : range.count,
+              duration: request.isHalfDay
+                ? range.count *
+                  this.getDurationFactor(request.firstHalf, request.secondHalf)
+                : range.count,
               requestModifiedFrom: `${request.id}:${request.requestType}`,
               availableDates: JSON.stringify(
                 datesToCancel.filter((d) => {
@@ -2768,7 +2879,10 @@ export class LeaveRequestsService {
               fromDate: range.start,
               toDate: range.end,
               status: LeaveRequestStatus.REQUESTING_FOR_CANCELLATION,
-              duration: request.isHalfDay ? range.count * 0.5 : range.count,
+              duration: request.isHalfDay
+                ? range.count *
+                  this.getDurationFactor(request.firstHalf, request.secondHalf)
+                : range.count,
               requestModifiedFrom: `${request.id}:${request.requestType}`,
               availableDates: JSON.stringify(
                 datesToCancel.filter((d) => {
@@ -3082,6 +3196,7 @@ export class LeaveRequestsService {
           toDate: request.toDate.toString(),
           duration: request.duration,
           status: request.status,
+          description: request.description,
           recipientName: target.name,
           firstHalf: request.firstHalf,
           secondHalf: request.secondHalf,
@@ -3395,6 +3510,7 @@ export class LeaveRequestsService {
           duration: request.duration || 0,
           status: status as any,
           isCancellation,
+          description: request.description,
           reviewedBy: isEmployeeSelfCancel ? '' : request.reviewedBy,
           firstHalf: request.firstHalf,
           secondHalf: request.secondHalf,
@@ -3833,6 +3949,10 @@ export class LeaveRequestsService {
         request.isModified = true;
         request.modificationCount = (request.modificationCount || 0) + 1;
         request.lastModifiedDate = new Date();
+        const factor = isHalfDay
+          ? this.getDurationFactor(fHalf, sHalf)
+          : 1.0;
+        request.duration = Number((modifyingWorkingDays * factor).toFixed(2));
         await this.leaveRequestRepository.save(request);
         createdRequests.push(request);
 
@@ -3917,7 +4037,9 @@ export class LeaveRequestsService {
             isReadEmployee: true,
             createdAt: new Date(),
             updatedAt: new Date(),
-            duration: range.count,
+            duration: rangeIsHalfDay
+              ? range.count * this.getDurationFactor(fHalf, sHalf)
+              : range.count,
             requestModifiedFrom: `${request.id}:${request.requestType}`,
             availableDates: JSON.stringify(
               datesToModify.filter((d) => {
@@ -4202,16 +4324,13 @@ export class LeaveRequestsService {
             let dailyUsage = 0;
             const status = (rec.status || '').toLowerCase();
             if (rec.firstHalf || rec.secondHalf) {
-              const processHalf = (half: string | null) => {
-                if (!half) return 0;
-                const h = half.toLowerCase();
-                return h.includes(AttendanceStatus.LEAVE.toLowerCase()) ||
-                  h.includes(AttendanceStatus.ABSENT.toLowerCase())
-                  ? 0.5
-                  : 0;
-              };
-              dailyUsage =
-                processHalf(rec.firstHalf) + processHalf(rec.secondHalf);
+              const h1 = (rec.firstHalf || '').toLowerCase();
+              const h2 = (rec.secondHalf || '').toLowerCase();
+              const h1Away = h1.includes('leave') || h1.includes('absent');
+              const h2Away = h2.includes('leave') || h2.includes('absent');
+              if (h1Away && h2Away) dailyUsage = 1.0;
+              else if (h1Away || h2Away) dailyUsage = 0.5;
+              else dailyUsage = 0.0;
             } else {
               if (
                 status.includes(AttendanceStatus.LEAVE.toLowerCase()) ||

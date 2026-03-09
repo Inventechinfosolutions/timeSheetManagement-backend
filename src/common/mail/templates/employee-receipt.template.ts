@@ -120,18 +120,33 @@ export const getEmployeeReceiptTemplate = (data: EmployeeReceiptData) => {
         <td style="padding: 20px;">
           <table width="100%" border="0" cellspacing="0" cellpadding="0">
             <tr>
-              <td width="140" style="padding-bottom: 12px; font-family: sans-serif; font-size: 14px; font-weight: 700; color: #1e40af;">${labelPrefix}From:</td>
+              <td width="140" style="padding-bottom: 12px; font-family: sans-serif; font-size: 14px; font-weight: 700; color: #1e40af;">Title:</td>
+              <td style="padding-bottom: 12px; font-family: sans-serif; font-size: 14px; color: #1f2937;">${data.title}</td>
+            </tr>
+            <tr>
+              <td width="140" style="padding-bottom: 12px; font-family: sans-serif; font-size: 14px; font-weight: 700; color: #1e40af;">From:</td>
               <td style="padding-bottom: 12px; font-family: sans-serif; font-size: 14px; color: #1f2937;">${data.fromDate}</td>
             </tr>
             <tr>
-              <td width="140" style="padding-bottom: 12px; font-family: sans-serif; font-size: 14px; font-weight: 700; color: #1e40af;">${labelPrefix}To:</td>
+              <td width="140" style="padding-bottom: 12px; font-family: sans-serif; font-size: 14px; font-weight: 700; color: #1e40af;">To:</td>
               <td style="padding-bottom: 12px; font-family: sans-serif; font-size: 14px; color: #1f2937;">${data.toDate}</td>
             </tr>
             <tr>
-              <td width="140" style="font-family: sans-serif; font-size: 14px; font-weight: 700; color: #1e40af;">${labelPrefix}Duration:</td>
+              <td width="140" style="font-family: sans-serif; font-size: 14px; font-weight: 700; color: #1e40af;">Duration:</td>
               <td style="font-family: sans-serif; font-size: 14px; color: #1f2937;">${data.duration} Day(s)</td>
             </tr>
           </table>
+
+          ${data.description ? `
+            <table width="100%" border="0" cellspacing="0" cellpadding="0" style="border-top: 1px dashed #e2e8f0; margin-top: 15px;">
+              <tr>
+                <td style="padding-top: 15px;">
+                  <p style="font-family: sans-serif; font-size: 13px; font-weight: 700; color: #1e40af; text-transform: uppercase; margin: 0 0 5px 0;">Description:</p>
+                  <p style="font-family: sans-serif; font-size: 14px; color: #4b5563; line-height: 1.6; margin: 0;">${data.description}</p>
+                </td>
+              </tr>
+            </table>
+          ` : ''}
         </td>
       </tr>
     </table>

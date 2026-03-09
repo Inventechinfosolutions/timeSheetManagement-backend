@@ -39,12 +39,12 @@ export const baseLayout = (
     padding: 0;
     width: 100% !important;
     height: 100% !important;
-    background-color: #ffffff;
+    background-color: #f0f4f8;
   }
 
   /* Main Card */
   .container {
-    max-width: 620px;
+    max-width: 750px;
     margin: 0 auto;
     background-color: #ffffff;
     border-radius: 18px;
@@ -127,34 +127,34 @@ export const baseLayout = (
   /* Footer */
   .footer {
     padding: 24px 40px;
-    background-color: #f1f5f9;
+    background-color: #2563eb;
     text-align: center;
     font-size: 12px;
-    color: #64748b;
+    color: #ffffff;
   }
 </style>
 </head>
 
-<body style="margin:0; padding:0; background-color:#ffffff;">
+<body style="margin:0; padding:0; background-color:#f0f4f8;">
   <!--[if gte mso 9]>
   <v:rect xmlns:v="urn:schemas-microsoft-com:vml" fill="true" stroke="false" style="mso-width-percent:1000;height:1000px;">
-    <v:fill type="solid" color="#ffffff" />
+    <v:fill type="solid" color="#f0f4f8" />
     <v:textbox inset="0,0,0,0">
   <![endif]-->
-  <table width="100%" border="0" cellspacing="0" cellpadding="0" style="background-color: #ffffff;">
+  <table width="100%" border="0" cellspacing="0" cellpadding="0" style="background-color: #f0f4f8;">
     <tr>
       <td align="center" style="padding: 40px 10px;">
         
         <!--[if mso]>
-        <table align="center" border="0" cellspacing="0" cellpadding="0" width="620">
+        <table align="center" border="0" cellspacing="0" cellpadding="0" width="750">
         <tr>
-        <td align="center" valign="top" width="620">
-        <v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w="urn:schemas-microsoft-com:office:word" arcsize="5%" stroke="false" fillcolor="#ffffff" style="width:620px;">
+        <td align="center" valign="top" width="750">
+        <v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w="urn:schemas-microsoft-com:office:word" arcsize="5%" stroke="false" fillcolor="#ffffff" style="width:750px;">
         <w:anchorlock/>
         <v:textbox inset="0,0,0,0">
         <![endif]-->
         
-        <div class="container" style="max-width: 620px; width: 100%; border-radius: 18px;">
+        <div class="container" style="max-width: 750px; width: 100%; border-radius: 18px;">
           
           <!-- Header -->
           <table width="100%" border="0" cellspacing="0" cellpadding="0" style="background: linear-gradient(90deg, #2563eb, #1e40af); background-color: #2563eb; border-radius: 18px 18px 0 0;">
@@ -195,11 +195,11 @@ export const baseLayout = (
           </table>
 
           <!-- Footer -->
-          <table width="100%" border="0" cellspacing="0" cellpadding="0" style="background-color: #f1f5f9; border-radius: 0 0 18px 18px;">
+          <table width="100%" border="0" cellspacing="0" cellpadding="0" style="background: linear-gradient(90deg, #2563eb, #1e40af); background-color: #2563eb; border-radius: 0 0 18px 18px;">
             <tr>
               <td class="footer" style="padding: 24px 40px; text-align: center;">
-                <p style="margin: 0 0 10px 0; font-size: 12px; color: #64748b;">This is an automated message. Please do not reply directly.</p>
-                <p style="margin: 0; font-size: 12px; color: #64748b;">© ${new Date().getFullYear()} InvenTech Info Solutions Pvt. Ltd.</p>
+                <p style="margin: 0 0 10px 0; font-size: 12px; color: #ffffff; opacity: 0.85;">This is an automated message. Please do not reply directly.</p>
+                <p style="margin: 0; font-size: 12px; color: #ffffff; opacity: 0.85;">© ${new Date().getFullYear()} InvenTech Info Solutions Pvt. Ltd.</p>
               </td>
             </tr>
           </table>
