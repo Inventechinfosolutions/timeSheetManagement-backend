@@ -2039,7 +2039,11 @@ export class LeaveRequestsService {
                 let cur = dayjs(request.fromDate);
                 const end = dayjs(request.toDate);
                 while (cur.isBefore(end) || cur.isSame(end, 'day')) {
-                  removedDates.push(cur.format('YYYY-MM-DD'));
+                  const isWknd = await this._isWeekend(cur, request.employeeId);
+                  const isHol = await this._isHoliday(cur);
+                  if (!isWknd && !isHol) {
+                    removedDates.push(cur.format('YYYY-MM-DD'));
+                  }
                   cur = cur.add(1, 'day');
                 }
               }
