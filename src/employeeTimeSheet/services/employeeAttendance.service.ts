@@ -151,7 +151,7 @@ export class EmployeeAttendanceService {
 
       if (!isPrivileged) {
         const detail = await this.employeeDetailsRepository.findOne({ where: { employeeId: createEmployeeAttendanceDto.employeeId } });
-        const isIT = detail?.department === Department.IT || detail?.department === Department.IT_SUPPORT;
+        const isIT = detail?.department === Department.IT;
         const isFullTimer = detail?.employmentType === EmploymentType.FULL_TIMER;
 
         if (holiday && !(isIT && isFullTimer)) {
@@ -249,7 +249,7 @@ export class EmployeeAttendanceService {
         const currentHolidayFromExisting = await this.masterHolidayService.findByDate(dateStrLocalFromExisting);
         
         const empDetailFromExisting = await this.employeeDetailsRepository.findOne({ where: { employeeId: existingRecord.employeeId } });
-        const isITDeptFromExisting = empDetailFromExisting?.department === Department.IT || empDetailFromExisting?.department === Department.IT_SUPPORT;
+        const isITDeptFromExisting = empDetailFromExisting?.department === Department.IT;
         const isFTFromExisting = empDetailFromExisting?.employmentType === EmploymentType.FULL_TIMER;
         const isWeekendOrHoliday = isSaturdayFromExisting || isSundayFromExisting || !!currentHolidayFromExisting;
         const isEligibleForCompOff = isWeekendOrHoliday && isITDeptFromExisting && isFTFromExisting;
@@ -369,7 +369,7 @@ export class EmployeeAttendanceService {
       const currentHolidayFromNew = await this.masterHolidayService.findByDate(dateStrLocalFromNew);
       
       const empDetailFromNew = await this.employeeDetailsRepository.findOne({ where: { employeeId: newAttendance.employeeId } });
-      const isITDeptFromNew = empDetailFromNew?.department === Department.IT || empDetailFromNew?.department === Department.IT_SUPPORT;
+      const isITDeptFromNew = empDetailFromNew?.department === Department.IT;
       const isFTFromNew = empDetailFromNew?.employmentType === EmploymentType.FULL_TIMER;
 
       const isWeekendOrHoliday = isSaturdayFromNew || isSundayFromNew || !!currentHolidayFromNew;
@@ -825,7 +825,7 @@ export class EmployeeAttendanceService {
 
       if (!isPrivileged) {
         const detail = await this.employeeDetailsRepository.findOne({ where: { employeeId: attendance.employeeId } });
-        let isIT = detail?.department === Department.IT || detail?.department === Department.IT_SUPPORT;
+        let isIT = detail?.department === Department.IT;
         let isFullTimer = detail?.employmentType === EmploymentType.FULL_TIMER;
 
         if (holiday && !(isIT && isFullTimer)) {
@@ -878,7 +878,7 @@ export class EmployeeAttendanceService {
       const isSat = dateObj.getDay() === 6;
       isSun = dateObj.getDay() === 0;
       const empDetail = await this.employeeDetailsRepository.findOne({ where: { employeeId: attendance.employeeId } });
-      const isITMetadata = empDetail?.department === Department.IT || empDetail?.department === Department.IT_SUPPORT;
+      const isITMetadata = empDetail?.department === Department.IT;
       const isFTMetadata = empDetail?.employmentType === EmploymentType.FULL_TIMER;
       const isWeekendOrHoliday = isSat || isSun || !!holiday;
       const isEligibleForCompOff = isWeekendOrHoliday && isITMetadata && isFTMetadata;

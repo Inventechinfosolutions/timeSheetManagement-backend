@@ -28,6 +28,7 @@ import { AttendanceStatus } from '../enums/attendance-status.enum';
 import { LeaveRequestStatus } from '../enums/leave-notification-status.enum';
 import { EmployeeDetails } from '../entities/employeeDetails.entity';
 import { EmploymentType } from '../enums/employment-type.enum';
+import { Department } from '../enums/department.enum';
 import { EmailService } from '../../email/email.service';
 import { DocumentUploaderService } from '../../common/document-uploader/services/document-uploader.service';
 import { LeaveRequestType } from '../enums/leave-request-type.enum';
@@ -226,8 +227,10 @@ export class LeaveRequestsService {
         where: { employeeId: data.employeeId },
       });
       
-      if (employee?.employmentType === EmploymentType.INTERN && data.requestType === LeaveRequestType.COMP_OFF) {
-        throw new ForbiddenException('Interns are not eligible for Comp Offs.');
+      if (data.requestType === LeaveRequestType.COMP_OFF) {
+        if (employee?.department !== Department.IT || employee?.employmentType !== EmploymentType.FULL_TIMER) {
+          throw new ForbiddenException('Comp Off benefits are only available for employees in the Information Technology department with Full Time status.');
+        }
       }
 
       // Check for overlapping dates based on request type
