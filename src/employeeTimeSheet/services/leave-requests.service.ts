@@ -2482,7 +2482,7 @@ export class LeaveRequestsService {
           ? 'Split Segment'
           : 'Request Modified';
       modification.description = `${descPrefix}: ${parent.description || ''} (Modification due to ${data.sourceRequestType} conflict)`;
-      modification.submittedDate = new Date().toISOString().slice(0, 10);
+      modification.submittedDate = dayjs().format('YYYY-MM-DD');
       modification.isRead = true;
       modification.isReadEmployee = false;
       // Calculate working days and factor
@@ -4417,10 +4417,7 @@ export class LeaveRequestsService {
 
       const attendanceMap = new Map<string, EmployeeAttendance[]>();
       attendanceRecords.forEach((rec) => {
-        const dateStr =
-          rec.workingDate instanceof Date
-            ? rec.workingDate.toISOString().split('T')[0]
-            : String(rec.workingDate).split('T')[0];
+        const dateStr = dayjs(rec.workingDate).format('YYYY-MM-DD');
         const [y, mStr] = dateStr.split('-');
         const key = `${y}-${parseInt(mStr)}`;
         let list = attendanceMap.get(key);
@@ -4545,6 +4542,68 @@ export class LeaveRequestsService {
       if (error instanceof HttpException) throw error;
       throw new HttpException(
         'Failed to calculate monthly leave balance',
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
+  }
+
+  async getBlockedDatesForEmployee(employeeId: string): Promise<string[]> {
+    this.logger.log(`[BLOCKED_DATES] Fetching blocked dates for employee: ${employeeId}`);
+    try {
+      // These statuses mean the leave is still active and occupies calendar dates
+      const activeStatuses = [
+        LeaveRequestStatus.PENDING,
+        LeaveRequestStatus.APPROVED,
+        LeaveRequestStatus.REQUESTING_FOR_CANCELLATION,
+        LeaveRequestStatus.REQUESTING_FOR_MODIFICATION,
+      ];
+
+      const activeRequests = await this.leaveRequestRepository.find({
+        where: activeStatuses.map((status) => ({ employeeId, status })),
+        select: ['id', 'fromDate', 'toDate', 'availableDates'],
+      });
+
+      const blockedSet = new Set<string>();
+
+      for (const req of activeRequests) {
+        // Use availableDates if available (already filtered for working days only)
+        if (req.availableDates) {
+          try {
+            const parsed: string[] = JSON.parse(req.availableDates);
+            if (Array.isArray(parsed)) {
+              parsed.forEach((d) => blockedSet.add(d));
+              continue;
+            }
+          } catch (e) {
+            // fall through to range expansion
+          }
+        }
+
+        // Fallback: expand fromDate → toDate, skipping weekends (simple day-of-week check)
+        if (req.fromDate && req.toDate) {
+          let cur = dayjs(req.fromDate);
+          const end = dayjs(req.toDate);
+          while (cur.isBefore(end) || cur.isSame(end, 'day')) {
+            const dayOfWeek = cur.day(); // 0 = Sunday, 6 = Saturday
+            if (dayOfWeek !== 0 && dayOfWeek !== 6) {
+              blockedSet.add(cur.format('YYYY-MM-DD'));
+            }
+            cur = cur.add(1, 'day');
+          }
+        }
+      }
+
+      const result = Array.from(blockedSet).sort();
+      this.logger.log(`[BLOCKED_DATES] Found ${result.length} blocked dates for ${employeeId}`);
+      return result;
+    } catch (error) {
+      this.logger.error(
+        `[BLOCKED_DATES] Failed for ${employeeId}: ${error.message}`,
+        error.stack,
+      );
+      if (error instanceof HttpException) throw error;
+      throw new HttpException(
+        'Failed to fetch blocked dates',
         HttpStatus.INTERNAL_SERVER_ERROR,
       );
     }

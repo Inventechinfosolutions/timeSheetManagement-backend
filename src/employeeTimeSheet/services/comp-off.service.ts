@@ -243,4 +243,28 @@ export class CompOffService {
 
     return compOffs.reduce((acc, curr) => acc + (curr.remainingDays || 0), 0);
   }
+
+  async deleteByAttendanceId(attendanceId: number): Promise<void> {
+    this.logger.log(`[COMP_OFF_DELETE] Attempting to delete/unlink comp-off for attendanceId: ${attendanceId}`);
+
+    const compOff = await this.compOffRepository.findOne({ where: { attendanceId } });
+    if (!compOff) {
+      this.logger.log(`[COMP_OFF_DELETE] No comp-off found for attendanceId: ${attendanceId}`);
+      return;
+    }
+
+    if (
+      compOff.status === CompOffStatus.NOT_TAKEN ||
+      compOff.status === CompOffStatus.PENDING
+    ) {
+      // Safe to hard-delete — either not used, or pending (leave request will become invalid)
+      await this.compOffRepository.delete(compOff.id);
+      this.logger.log(`[COMP_OFF_DELETE] Hard-deleted comp-off ID: ${compOff.id} (status: ${compOff.status})`);
+    } else {
+      // HALF_TAKEN or FULL_TAKEN — already consumed; keep for history, just unlink from attendance
+      compOff.attendanceId = null as any;
+      await this.compOffRepository.save(compOff);
+      this.logger.log(`[COMP_OFF_DELETE] Unlinked attendanceId from comp-off ID: ${compOff.id} (status: ${compOff.status})`);
+    }
+  }
 }

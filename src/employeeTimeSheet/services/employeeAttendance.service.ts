@@ -144,7 +144,7 @@ export class EmployeeAttendanceService {
       endOfDay.setHours(23, 59, 59, 999);
 
       // --- Holiday/Weekend Blocking Logic (Start) ---
-      const topDateStrLocal = startOfDay.toISOString().split('T')[0];
+      const topDateStrLocal = dayjs(startOfDay).format('YYYY-MM-DD');
       const holiday = await this.masterHolidayService.findByDate(topDateStrLocal);
       const isSun = startOfDay.getDay() === 0;
       const isSatLocal = startOfDay.getDay() === 6;
@@ -245,7 +245,7 @@ export class EmployeeAttendanceService {
         const dateObjFromExisting = new Date(existingRecord.workingDate);
         const isSaturdayFromExisting = dateObjFromExisting.getDay() === 6;
         const isSundayFromExisting = dateObjFromExisting.getDay() === 0;
-        const dateStrLocalFromExisting = dateObjFromExisting.toISOString().split('T')[0];
+        const dateStrLocalFromExisting = dayjs(dateObjFromExisting).format('YYYY-MM-DD');
         const currentHolidayFromExisting = await this.masterHolidayService.findByDate(dateStrLocalFromExisting);
         
         const empDetailFromExisting = await this.employeeDetailsRepository.findOne({ where: { employeeId: existingRecord.employeeId } });
@@ -324,6 +324,10 @@ export class EmployeeAttendanceService {
         const saved = await this.employeeAttendanceRepository.save(existingRecord);
         if (isEligibleForCompOff && hoursFromExisting > 3 && hoursFromExisting <= 9) {
           await this.compOffService.createOrUpdateCompOff(saved.employeeId, dateStrLocalFromExisting, saved.id, hoursFromExisting);
+        } else if (isEligibleForCompOff && (hoursFromExisting === 0 || hoursFromExisting === null)) {
+          // Attendance cleared on a comp-off eligible date → delete linked comp-off
+          await this.compOffService.deleteByAttendanceId(saved.id);
+          this.logger.log(`[COMP_OFF_DELETE] Cleared comp-off for attendanceId: ${saved.id} (hours zeroed on eligible date)`);
         }
         this.logger.log(`[ATTENDANCE_CREATE] Updated record ID: ${saved.id}, sourceRequestId after save: ${saved.sourceRequestId}`);
         return saved;
@@ -365,7 +369,7 @@ export class EmployeeAttendanceService {
       const dateObjFromNew = new Date(newAttendance.workingDate);
       const isSaturdayFromNew = dateObjFromNew.getDay() === 6;
       const isSundayFromNew = dateObjFromNew.getDay() === 0;
-      const dateStrLocalFromNew = dateObjFromNew.toISOString().split('T')[0];
+      const dateStrLocalFromNew = dayjs(dateObjFromNew).format('YYYY-MM-DD');
       const currentHolidayFromNew = await this.masterHolidayService.findByDate(dateStrLocalFromNew);
       
       const empDetailFromNew = await this.employeeDetailsRepository.findOne({ where: { employeeId: newAttendance.employeeId } });
@@ -443,6 +447,10 @@ export class EmployeeAttendanceService {
       const saved = await this.employeeAttendanceRepository.save(newAttendance);
       if (isEligibleForCompOff && hoursFromNew > 3 && hoursFromNew <= 9) {
         await this.compOffService.createOrUpdateCompOff(saved.employeeId, dateStrLocalFromNew, saved.id, hoursFromNew);
+      } else if (isEligibleForCompOff && (hoursFromNew === 0 || hoursFromNew === null)) {
+        // New record with 0/null hours on eligible date → delete any existing linked comp-off
+        await this.compOffService.deleteByAttendanceId(saved.id);
+        this.logger.log(`[COMP_OFF_DELETE] Cleared comp-off for attendanceId: ${saved.id} (new record with 0/null hours on eligible date)`);
       }
       this.logger.log(`[ATTENDANCE_CREATE] Created attendance ID: ${saved.id}, sourceRequestId after save: ${saved.sourceRequestId}`);
 
@@ -621,8 +629,8 @@ export class EmployeeAttendanceService {
         where: {
           employeeId,
           status: LeaveRequestStatus.APPROVED,
-          fromDate: LessThanOrEqual(endDate.toISOString().split('T')[0]),
-          toDate: MoreThanOrEqual(startDate.toISOString().split('T')[0])
+          fromDate: LessThanOrEqual(dayjs(endDate).format('YYYY-MM-DD')),
+          toDate: MoreThanOrEqual(dayjs(startDate).format('YYYY-MM-DD'))
         }
       });
 
@@ -818,7 +826,7 @@ export class EmployeeAttendanceService {
       }
 
       // --- Holiday/Weekend Blocking Logic (Start) ---
-      let dateStrLocal = workingDateObj.toISOString().split('T')[0];
+      let dateStrLocal = dayjs(workingDateObj).format('YYYY-MM-DD');
       let holiday = await this.masterHolidayService.findByDate(dateStrLocal);
       let isSun = workingDateObj.getDay() === 0;
       const isSatLocal = workingDateObj.getDay() === 6;
@@ -914,9 +922,7 @@ export class EmployeeAttendanceService {
               : AttendanceStatus.ABSENT); // Explicit 0 hours defaults to ABSENT, skipping Weekend/Holiday check
 
           if (isClear) {
-            const dateStr = attendance.workingDate instanceof Date
-              ? attendance.workingDate.toISOString().split('T')[0]
-              : (attendance.workingDate as string).split('T')[0];
+            const dateStr = dayjs(attendance.workingDate).format('YYYY-MM-DD');
 
             holiday = await this.masterHolidayService.findByDate(dateStr);
             if (holiday) {
@@ -1216,9 +1222,9 @@ export class EmployeeAttendanceService {
 
   private async applyStatusBusinessRules(attendance: EmployeeAttendance): Promise<EmployeeAttendance> {
     try {
-      const today = new Date().toISOString().split('T')[0];
+      const today = dayjs().format('YYYY-MM-DD');
       const workingDateObj = new Date(attendance.workingDate);
-      const workingDate = workingDateObj.toISOString().split('T')[0];
+      const workingDate = dayjs(workingDateObj).format('YYYY-MM-DD');
 
       if (workingDate <= today) {
         // User Request: Actual statuses should come through
@@ -1823,8 +1829,8 @@ export class EmployeeAttendanceService {
       const allApprovedLeaves = await this.leaveRequestRepository.find({
         where: {
           status: LeaveRequestStatus.APPROVED,
-          fromDate: LessThanOrEqual(monthEnd.toISOString().split('T')[0]),
-          toDate: MoreThanOrEqual(monthStart.toISOString().split('T')[0])
+          fromDate: LessThanOrEqual(dayjs(monthEnd).format('YYYY-MM-DD')),
+          toDate: MoreThanOrEqual(dayjs(monthStart).format('YYYY-MM-DD'))
         }
       });
 
@@ -1979,8 +1985,8 @@ export class EmployeeAttendanceService {
       });
 
       // 3. Fetch all attendance for the month for the selected employees
-      const startStr = startDate.toISOString().split('T')[0];
-      const endStr = endDate.toISOString().split('T')[0];
+      const startStr = dayjs(startDate).format('YYYY-MM-DD');
+      const endStr = dayjs(endDate).format('YYYY-MM-DD');
 
       const employeeIds = employees.map(e => e.employeeId);
 
@@ -2293,7 +2299,7 @@ export class EmployeeAttendanceService {
           }
 
           // PRIORITY 4: Future / Past Logic - for weekdays with no record
-          const today = new Date().toISOString().split('T')[0];
+          const today = dayjs().format('YYYY-MM-DD');
 
           if (dateKey > today) {
             // Future -> "Upcoming"
@@ -2349,7 +2355,7 @@ export class EmployeeAttendanceService {
       holidays.forEach(h => {
         const d = h.holidayDate || (h as any).date;
         if (d) {
-          const dateKey = new Date(d).toISOString().split('T')[0];
+          const dateKey = dayjs(d).format('YYYY-MM-DD');
           holidayMap.set(dateKey, (h as any).name || (h as any).holidayName || AttendanceStatus.HOLIDAY);
         }
       });
@@ -2437,8 +2443,8 @@ export class EmployeeAttendanceService {
               months.push(monthObj);
             }
 
-            const dateKey = tempDate.toISOString().split('T')[0];
-            const record = attendanceRecords.find(r => new Date(r.workingDate).toISOString().split('T')[0] === dateKey);
+            const dateKey = dayjs(tempDate).format('YYYY-MM-DD');
+            const record = attendanceRecords.find(r => dayjs(r.workingDate).format('YYYY-MM-DD') === dateKey);
             const dayName = tempDate.toLocaleDateString('en-US', { weekday: 'long' });
             const holiday = holidayMap.get(dateKey);
 

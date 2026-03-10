@@ -472,6 +472,17 @@ export class LeaveRequestsController {
     }
   }
 
+  @Get('employee/:employeeId/blocked-dates')
+  getBlockedDates(@Param('employeeId') employeeId: string) {
+    try {
+      this.logger.log(`Fetching blocked dates for employee: ${employeeId}`);
+      return this.leaveRequestsService.getBlockedDatesForEmployee(employeeId);
+    } catch (error) {
+      this.logger.error(`Error fetching blocked dates for ${employeeId}: ${error.message}`, error.stack);
+      throw error;
+    }
+  }
+
   @Get(':id')
   findOne(@Param('id') id: string) {
     try {
