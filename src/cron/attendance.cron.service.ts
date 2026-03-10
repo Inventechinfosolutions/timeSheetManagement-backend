@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import dayjs from 'dayjs';
 import { Cron } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, Between } from 'typeorm';
@@ -41,7 +42,7 @@ export class AttendanceCronService {
     
     // 1. If today itself is a weekend or holiday, it cannot be a working day.
     const todayIsWeekend = today.getDay() === 0 || today.getDay() === 6;
-    const todayDateStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+    const todayDateStr = dayjs(today).format('YYYY-MM-DD');
     const todayIsHoliday = !!(await this.masterHolidayService.findByDate(todayDateStr));
     
     if (todayIsWeekend || todayIsHoliday) {
@@ -54,7 +55,7 @@ export class AttendanceCronService {
     // 3. Walk backward from the last calendar day to find the true last working day
     while (true) {
       const isWeekend = check.getDay() === 0 || check.getDay() === 6;
-      const dateStr = `${check.getFullYear()}-${String(check.getMonth() + 1).padStart(2, '0')}-${String(check.getDate()).padStart(2, '0')}`;
+      const dateStr = dayjs(check).format('YYYY-MM-DD');
       const isHoliday = !!(await this.masterHolidayService.findByDate(dateStr));
       
       if (!isWeekend && !isHoliday) {
@@ -162,7 +163,7 @@ export class AttendanceCronService {
 
     // 1. Get Today's Date
     const today = new Date();
-    const dateStr = today.toISOString().split('T')[0]; // "YYYY-MM-DD"
+    const dateStr = dayjs(today).format('YYYY-MM-DD'); // "YYYY-MM-DD"
 
     // 2. Check if it is a Weekend using Master Service
     const isWeekend = this.masterHolidayService.isWeekend(today);
@@ -240,7 +241,7 @@ export class AttendanceCronService {
     // 1. Get "Yesterday" Date
     const yesterday = new Date();
     yesterday.setDate(yesterday.getDate() - 1);
-    const dateStr = yesterday.toISOString().split('T')[0]; // "YYYY-MM-DD"
+    const dateStr = dayjs(yesterday).format('YYYY-MM-DD'); // "YYYY-MM-DD"
 
     // 2. Identify Weekends (Skip Saturday=6, Sunday=0) for "Not Updated" logic
     const dayOfWeek = yesterday.getDay();

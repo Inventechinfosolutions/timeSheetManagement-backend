@@ -112,7 +112,7 @@ export const getEmployeeReceiptTemplate = (data: EmployeeReceiptData) => {
   const content = `
     <p style="font-family: sans-serif; font-size: 16px; color: #1f2937;">Dear ${data.employeeName},</p>
     <p style="font-family: sans-serif; font-size: 14px; color: #4b5563; line-height: 1.6;">
-      Your ${isModification ? '<strong>modification request</strong>' : 'request'} for <strong>${requestDisplayName}</strong> titled "<strong>${data.title}</strong>" has been successfully submitted. It is now awaiting review.
+      Your ${isModification ? '<strong>modification request</strong>' : 'request'} for <strong>${requestDisplayName}</strong> with subject "<strong>${data.title}</strong>" has been successfully submitted. It is now awaiting review.
     </p>
 
     <table width="100%" border="0" cellspacing="0" cellpadding="0" style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; margin: 25px 0;">
@@ -120,7 +120,7 @@ export const getEmployeeReceiptTemplate = (data: EmployeeReceiptData) => {
         <td style="padding: 20px;">
           <table width="100%" border="0" cellspacing="0" cellpadding="0">
             <tr>
-              <td width="140" style="padding-bottom: 12px; font-family: sans-serif; font-size: 14px; font-weight: 700; color: #1e40af;">Title:</td>
+              <td width="140" style="padding-bottom: 12px; font-family: sans-serif; font-size: 14px; font-weight: 700; color: #1e40af;">Subject:</td>
               <td style="padding-bottom: 12px; font-family: sans-serif; font-size: 14px; color: #1f2937;">${data.title}</td>
             </tr>
             <tr>

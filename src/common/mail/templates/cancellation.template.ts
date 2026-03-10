@@ -37,8 +37,8 @@ export const getCancellationTemplate = (data: CancellationData) => {
     : (data.recipientName ? `Hello ${data.recipientName},` : `Hello,`);
 
   const introText = data.isSelf
-    ? `You ${actionText} <strong>${data.requestType}</strong> titled "<strong>${data.title}</strong>".`
-    : `<strong>${data.employeeName}</strong> ${data.employeeId ? `(EMP-${data.employeeId})` : ''} ${actionText} <strong>${data.requestType}</strong> titled "<strong>${data.title}</strong>".`;
+    ? `You ${actionText} <strong>${data.requestType}</strong> with subject "<strong>${data.title}</strong>".`
+    : `<strong>${data.employeeName}</strong> ${data.employeeId ? `(EMP-${data.employeeId})` : ''} ${actionText} <strong>${data.requestType}</strong> with subject "<strong>${data.title}</strong>".`;
 
   const content = `
     <p style="font-family: sans-serif; font-size: 16px; color: #1f2937;">${greeting}</p>
@@ -51,7 +51,7 @@ export const getCancellationTemplate = (data: CancellationData) => {
         <td style="padding: 20px;">
           <table width="100%" border="0" cellspacing="0" cellpadding="0">
             <tr>
-              <td width="140" style="padding-bottom: 12px; font-family: sans-serif; font-size: 14px; font-weight: 700; color: #1e40af;">Title:</td>
+              <td width="140" style="padding-bottom: 12px; font-family: sans-serif; font-size: 14px; font-weight: 700; color: #1e40af;">Subject:</td>
               <td style="padding-bottom: 12px; font-family: sans-serif; font-size: 14px; color: #1f2937;">${data.title}</td>
             </tr>
             <tr>

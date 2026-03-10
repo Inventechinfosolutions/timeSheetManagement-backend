@@ -11,7 +11,7 @@ export const getReturnTemplate = (data: ReturnData) => {
   const content = `
     <p style="font-size: 16px; color: #1f2937;">Dear ${data.employeeName},</p>
     <p style="font-size: 14px; color: #4b5563; line-height: 1.6;">
-      Your request for <strong>${data.requestType}</strong> titled "<strong>${data.title}</strong>" has been <strong>Returned</strong> for corrections.
+      Your request for <strong>${data.requestType}</strong> with subject "<strong>${data.title}</strong>" has been <strong>Returned</strong> for corrections.
     </p>
 
     <table width="100%" border="0" cellspacing="0" cellpadding="0" style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; margin: 25px 0; border-left: 4px solid #f97316;">
