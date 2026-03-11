@@ -2324,7 +2324,7 @@ export class LeaveRequestsService {
           ? 'Split Segment'
           : 'Request Modified';
       modification.description = `${descPrefix}: ${parent.description || ''} (Modification due to ${data.sourceRequestType} conflict)`;
-      modification.submittedDate = new Date().toISOString().slice(0, 10);
+      modification.submittedDate = dayjs().format('YYYY-MM-DD');
       modification.isRead = true;
       modification.isReadEmployee = false;
       // Calculate working days and factor
@@ -4263,10 +4263,7 @@ export class LeaveRequestsService {
 
       const attendanceMap = new Map<string, EmployeeAttendance[]>();
       attendanceRecords.forEach((rec) => {
-        const dateStr =
-          rec.workingDate instanceof Date
-            ? rec.workingDate.toISOString().split('T')[0]
-            : String(rec.workingDate).split('T')[0];
+        const dateStr = dayjs(rec.workingDate).format('YYYY-MM-DD');
         const [y, mStr] = dateStr.split('-');
         const key = `${y}-${parseInt(mStr)}`;
         let list = attendanceMap.get(key);
@@ -4276,6 +4273,11 @@ export class LeaveRequestsService {
         }
         list.push(rec);
       });
+
+      const holidays = await this.masterHolidayRepository.find();
+      const holidayDates = new Set(
+        holidays.map((h) => dayjs(h.date).format('YYYY-MM-DD')),
+      );
 
       for (let curYear = calculationStartYear; curYear <= year; curYear++) {
         ytdUsed = 0;
@@ -4323,6 +4325,14 @@ export class LeaveRequestsService {
           const monthlyUsage = attendance.reduce((acc, rec) => {
             let dailyUsage = 0;
             const status = (rec.status || '').toLowerCase();
+
+            // EXCLUSION: Do not count leave usage for weekends or holidays
+            const recDate = dayjs(rec.workingDate);
+            const isWknd = recDate.day() === 0 || recDate.day() === 6;
+            const isHol = holidayDates.has(recDate.format('YYYY-MM-DD'));
+
+            if (isWknd || isHol) return acc;
+
             if (rec.firstHalf || rec.secondHalf) {
               const h1 = (rec.firstHalf || '').toLowerCase();
               const h2 = (rec.secondHalf || '').toLowerCase();
