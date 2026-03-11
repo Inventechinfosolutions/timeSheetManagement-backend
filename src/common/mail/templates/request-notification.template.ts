@@ -139,7 +139,7 @@ export const getRequestNotificationTemplate = (data: RequestNotificationData) =>
         <td style="padding: 20px;">
           <table width="100%" border="0" cellspacing="0" cellpadding="0">
             <tr>
-              <td width="140" style="padding-bottom: 12px; font-family: sans-serif; font-size: 14px; font-weight: 700; color: #1e40af;">Title:</td>
+              <td width="140" style="padding-bottom: 12px; font-family: sans-serif; font-size: 14px; font-weight: 700; color: #1e40af;">Subject:</td>
               <td style="padding-bottom: 12px; font-family: sans-serif; font-size: 14px; color: #1f2937;">${data.title}</td>
             </tr>
             <tr>
