@@ -442,13 +442,13 @@ export class EmployeeDetailsService {
       // Filter by Manager if provided
       if (managerName || managerId) {
         if (hasMonthYear) {
+          const tsMonthStart = new Date(Number(year), Number(month) - 1, 1);
           query.andWhere(
-            '(employee.userStatus = :activeStatus OR (employee.userStatus = :inactiveStatus AND employee.inactiveDate IS NOT NULL AND MONTH(employee.inactiveDate) = :tsMonth AND YEAR(employee.inactiveDate) = :tsYear))',
+            '(employee.userStatus = :activeStatus OR (employee.userStatus = :inactiveStatus AND employee.inactiveDate IS NOT NULL AND employee.inactiveDate >= :tsMonthStart))',
             {
               activeStatus: UserStatus.ACTIVE,
               inactiveStatus: UserStatus.INACTIVE,
-              tsMonth: Number(month),
-              tsYear: Number(year),
+              tsMonthStart: tsMonthStart,
             },
           );
         } else {
@@ -493,13 +493,13 @@ export class EmployeeDetailsService {
         }
       } else if (hasMonthYear) {
         // Admin view with specific month: same rule – hide inactive from next month onwards
+        const tsMonthStart = new Date(Number(year), Number(month) - 1, 1);
         query.andWhere(
-          '(employee.userStatus = :activeStatus OR (employee.userStatus = :inactiveStatus AND employee.inactiveDate IS NOT NULL AND MONTH(employee.inactiveDate) = :tsMonth AND YEAR(employee.inactiveDate) = :tsYear))',
+          '(employee.userStatus = :activeStatus OR (employee.userStatus = :inactiveStatus AND employee.inactiveDate IS NOT NULL AND employee.inactiveDate >= :tsMonthStart))',
           {
             activeStatus: UserStatus.ACTIVE,
             inactiveStatus: UserStatus.INACTIVE,
-            tsMonth: Number(month),
-            tsYear: Number(year),
+            tsMonthStart: tsMonthStart,
           },
         );
       }

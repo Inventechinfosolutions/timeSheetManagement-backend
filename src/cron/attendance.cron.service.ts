@@ -171,8 +171,10 @@ export class AttendanceCronService {
     if (!isWeekend) {
       return;
     }
-    // 3. Get all employees
-    const allEmployees = await this.employeeRepo.find();
+    // 3. Get all Active employees
+    const allEmployees = await this.employeeRepo.find({
+      where: { userStatus: UserStatus.ACTIVE },
+    });
     // 4. Get all attendance records for Today
     const startOfDay = new Date(`${dateStr}T00:00:00`);
     const endOfDay = new Date(`${dateStr}T23:59:59`);
@@ -185,9 +187,24 @@ export class AttendanceCronService {
     const presentRecordIds = new Set(records.filter(r => r.status !== null && r.status !== undefined).map(r => r.employeeId));
 
     // Employees needing a new record
-    const employeesNeedingRecord = allEmployees.filter(
-      (emp) => !records.some(r => r.employeeId === emp.employeeId)
-    );
+    const employeesNeedingRecord = allEmployees.filter((emp) => {
+      // 1. Must not already have a record
+      const hasRecord = records.some((r) => r.employeeId === emp.employeeId);
+      if (hasRecord) return false;
+
+      // 2. Must not be inactive on this specific date
+      if (emp.inactiveDate) {
+        const inactiveDate = dayjs(emp.inactiveDate).startOf('day');
+        const processingDate = dayjs(today).startOf('day');
+        if (
+          processingDate.isSame(inactiveDate) ||
+          processingDate.isAfter(inactiveDate)
+        ) {
+          return false;
+        }
+      }
+      return true;
+    });
 
     // Existing records with NULL status that need updating
     const nullStatusRecords = records.filter(
@@ -252,8 +269,10 @@ export class AttendanceCronService {
       return;
     }
 
-    // 3. Get all employees
-    const allEmployees = await this.employeeRepo.find();
+    // 3. Get all Active employees
+    const allEmployees = await this.employeeRepo.find({
+      where: { userStatus: UserStatus.ACTIVE },
+    });
 
     // 4. Get all attendance records for Yesterday
     const startOfDay = new Date(`${dateStr}T00:00:00`);
@@ -264,9 +283,24 @@ export class AttendanceCronService {
     });
 
     // 5. Find Missing Employees OR Records with NULL status
-    const employeesNeedingRecord = allEmployees.filter(
-      (emp) => !records.some(r => r.employeeId === emp.employeeId)
-    );
+    const employeesNeedingRecord = allEmployees.filter((emp) => {
+      // 1. Must not already have a record
+      const hasRecord = records.some((r) => r.employeeId === emp.employeeId);
+      if (hasRecord) return false;
+
+      // 2. Must not be inactive on this specific date (Yesterday)
+      if (emp.inactiveDate) {
+        const inactiveDate = dayjs(emp.inactiveDate).startOf('day');
+        const processingDate = dayjs(yesterday).startOf('day');
+        if (
+          processingDate.isSame(inactiveDate) ||
+          processingDate.isAfter(inactiveDate)
+        ) {
+          return false;
+        }
+      }
+      return true;
+    });
 
     const nullStatusRecords = records.filter(
       (r) => r.status === null || r.status === undefined
