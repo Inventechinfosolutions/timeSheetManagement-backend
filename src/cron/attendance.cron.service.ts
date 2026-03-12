@@ -206,7 +206,7 @@ export class AttendanceCronService {
         status: AttendanceStatus.WEEKEND,
         firstHalf: AttendanceStatus.WEEKEND,
         secondHalf: AttendanceStatus.WEEKEND,
-        totalHours: 0,
+        totalHours: null,
       });
     });
 
@@ -215,7 +215,7 @@ export class AttendanceCronService {
       record.status = AttendanceStatus.WEEKEND;
       record.firstHalf = AttendanceStatus.WEEKEND;
       record.secondHalf = AttendanceStatus.WEEKEND;
-      record.totalHours = 0;
+      record.totalHours = null;
     }
 
     if (newWeekendRecords.length > 0) {
@@ -290,7 +290,7 @@ export class AttendanceCronService {
         status: targetStatus,
         firstHalf: targetStatus,
         secondHalf: targetStatus,
-        totalHours: 0,
+        totalHours: null,
       });
     });
 
@@ -298,7 +298,7 @@ export class AttendanceCronService {
       record.status = targetStatus;
       record.firstHalf = targetStatus;
       record.secondHalf = targetStatus;
-      record.totalHours = 0;
+      record.totalHours = null;
     }
 
     if (newRecords.length > 0) {
@@ -335,7 +335,7 @@ export class AttendanceCronService {
       `Running Monthly Leave Update for past month ${month + 1}-${year}...`,
     );
 
-    // Find all records with status 'Not Updated' or 'Pending' for the past month
+    // Find all records with status 'Not Updated', 'Pending', or NULL for the past month
     const recordsToUpdate = await this.attendanceRepo.find({
       where: [
         {
@@ -354,23 +354,36 @@ export class AttendanceCronService {
     });
 
     this.logger.log(
-      `Found ${recordsToUpdate.length} records to mark as ABSENT for past month ${month + 1}-${year}`,
+      `Found ${recordsToUpdate.length} candidate records for past month ${month + 1}-${year}.`,
     );
 
     if (recordsToUpdate.length === 0) return;
 
-    // Update status and split fields to ABSENT
+    const absentRecords: EmployeeAttendance[] = [];
+
     for (const record of recordsToUpdate) {
-      record.status = AttendanceStatus.ABSENT;
-      record.firstHalf = AttendanceStatus.ABSENT;
-      record.secondHalf = AttendanceStatus.ABSENT;
-      record.totalHours = 0;
+      const dateObj = new Date(record.workingDate);
+      const dayOfWeek = dateObj.getDay(); // 0 = Sunday, 6 = Saturday
+      const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+      const dateStr = dayjs(dateObj).format('YYYY-MM-DD');
+      const holiday = await this.masterHolidayService.findByDate(dateStr);
+
+      // Only mark ABSENT if it is a standard working day (NOT weekend and NOT holiday)
+      if (!isWeekend && !holiday) {
+        record.status = AttendanceStatus.ABSENT;
+        record.firstHalf = AttendanceStatus.ABSENT;
+        record.secondHalf = AttendanceStatus.ABSENT;
+        record.totalHours = 0;
+        absentRecords.push(record);
+      }
     }
 
-    await this.attendanceRepo.save(recordsToUpdate);
-    this.logger.log(
-      `Successfully updated ${recordsToUpdate.length} records to ABSENT with split field resets.`,
-    );
+    if (absentRecords.length > 0) {
+      await this.attendanceRepo.save(absentRecords);
+      this.logger.log(
+        `Successfully marked ${absentRecords.length} past workday records as ABSENT for ${month + 1}-${year}. Weekends and holidays were skipped.`,
+      );
+    }
   }
 
   // Run at 6:00 PM every Friday (Weekend Reminder)
