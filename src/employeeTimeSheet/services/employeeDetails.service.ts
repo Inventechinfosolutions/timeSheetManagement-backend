@@ -436,10 +436,25 @@ export class EmployeeDetailsService {
         query.andWhere('employee.department = :department', { department });
       }
 
+      // When viewing a specific month: show ACTIVE or INACTIVE only if inactiveDate is in that month (from next month onwards they disappear from list)
+      const hasMonthYear = month != null && year != null && !Number.isNaN(Number(month)) && !Number.isNaN(Number(year));
+
       // Filter by Manager if provided
       if (managerName || managerId) {
-        // For managers, only show ACTIVE employees
-        query.andWhere('user_filter.status = :activeStatus', { activeStatus: UserStatus.ACTIVE });
+        if (hasMonthYear) {
+          query.andWhere(
+            '(employee.userStatus = :activeStatus OR (employee.userStatus = :inactiveStatus AND employee.inactiveDate IS NOT NULL AND MONTH(employee.inactiveDate) = :tsMonth AND YEAR(employee.inactiveDate) = :tsYear))',
+            {
+              activeStatus: UserStatus.ACTIVE,
+              inactiveStatus: UserStatus.INACTIVE,
+              tsMonth: Number(month),
+              tsYear: Number(year),
+            },
+          );
+        } else {
+          // No month/year: only show ACTIVE employees (e.g. "All" or default list)
+          query.andWhere('user_filter.status = :activeStatus', { activeStatus: UserStatus.ACTIVE });
+        }
 
         if (includeSelf && managerId) {
           // Include the manager themselves OR those mapped to them
@@ -472,6 +487,17 @@ export class EmployeeDetailsService {
           // Ensure only active mappings are considered
           query.andWhere('mm.status = :status', { status: ManagerMappingStatus.ACTIVE });
         }
+      } else if (hasMonthYear) {
+        // Admin view with specific month: same rule – hide inactive from next month onwards
+        query.andWhere(
+          '(employee.userStatus = :activeStatus OR (employee.userStatus = :inactiveStatus AND employee.inactiveDate IS NOT NULL AND MONTH(employee.inactiveDate) = :tsMonth AND YEAR(employee.inactiveDate) = :tsYear))',
+          {
+            activeStatus: UserStatus.ACTIVE,
+            inactiveStatus: UserStatus.INACTIVE,
+            tsMonth: Number(month),
+            tsYear: Number(year),
+          },
+        );
       }
 
       if (status && status !== 'All') {
@@ -838,8 +864,13 @@ export class EmployeeDetailsService {
       this.logger.log(`Updating status for employee ${employeeId} to ${status}`);
       const employee = await this.findByEmployeeId(employeeId);
 
-      // Update EmployeeDetails
+      // Update EmployeeDetails: set inactiveDate when marking INACTIVE, clear when ACTIVE
       employee.userStatus = status as UserStatus;
+      if (status === UserStatus.INACTIVE) {
+        employee.inactiveDate = new Date();
+      } else if (status === UserStatus.ACTIVE) {
+        employee.inactiveDate = null;
+      }
       await this.employeeDetailsRepository.save(employee);
 
       // Update User entity
