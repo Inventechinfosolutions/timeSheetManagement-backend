@@ -5,10 +5,11 @@ import { AttendanceNotificationController } from './Controllers/attendance-notif
 import { EmployeeDetails } from '../employeeTimeSheet/entities/employeeDetails.entity';
 import { Notification } from './entities/notification.entity';
 import { MailModule } from '../common/mail/mail.module';
+import { ManagerMapping } from '../managerMapping/entities/managerMapping.entity';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([EmployeeDetails, Notification]),
+    TypeOrmModule.forFeature([EmployeeDetails, Notification, ManagerMapping]),
     MailModule,
   ],
   controllers: [AttendanceNotificationController],

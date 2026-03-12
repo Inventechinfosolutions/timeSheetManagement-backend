@@ -27,14 +27,16 @@ import { CreateHolidayDto } from '../dto/create-holiday.dto';
 import { UpdateHolidayDto } from '../dto/update-holiday.dto';
 import { HolidayDateRangeDto } from '../dto/holiday-date-range.dto';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
+import { ReceptionistReadOnlyGuard } from '../../auth/guards/receptionist-readonly.guard';
 import { EntityType, ReferenceType } from '../../common/document-uploader/models/documentmetainfo.model';
 import { FileService } from '../../common/core/utils/fileType.utils';
 import { DocumentUploaderService } from '../../common/document-uploader/services/document-uploader.service';
 import { Readable } from 'stream';
+import { NO_CACHE_HEADERS } from '../../common/utils/no-cache-headers';
 
 @ApiTags('Master Holidays')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, ReceptionistReadOnlyGuard)
 @Controller('master-holidays')
 export class MasterHolidayController {
   private readonly logger = new Logger(MasterHolidayController.name);
@@ -51,8 +53,13 @@ export class MasterHolidayController {
   @ApiBody({ type: CreateHolidayDto })
   @ApiResponse({ status: 201, description: 'The holiday has been successfully created.' })
   async create(@Body() createHolidayDto: CreateHolidayDto) {
-    this.logger.log('POST /master-holidays');
-    return await this.masterHolidayService.create(createHolidayDto);
+    try {
+      this.logger.log(`Creating holiday: ${createHolidayDto.name}`);
+      return await this.masterHolidayService.create(createHolidayDto);
+    } catch (error) {
+      this.logger.error(`Error creating holiday: ${error.message}`, error.stack);
+      throw error;
+    }
   }
 
   @Post('holidays')
@@ -61,7 +68,13 @@ export class MasterHolidayController {
   @ApiResponse({ status: 201, description: 'Holidays have been successfully created.' })
   @HttpCode(HttpStatus.CREATED)
   async createBulk(@Body() dtos: CreateHolidayDto[]) {
-    return await this.masterHolidayService.createBulk(dtos);
+    try {
+      this.logger.log(`Creating ${dtos.length} holidays in bulk`);
+      return await this.masterHolidayService.createBulk(dtos);
+    } catch (error) {
+      this.logger.error(`Error bulk creating holidays: ${error.message}`, error.stack);
+      throw error;
+    }
   }
 
   @Post('upload-file/entityId/:entityId/refId/:refId')
@@ -80,31 +93,36 @@ export class MasterHolidayController {
     @Query('entityType') entityType: EntityType,
     @Req() req: any,
   ) {
-    const userContext = req.user;
-    const loginId = userContext?.userId || 'system';
-    this.logger.log(`User ${loginId} uploading documents for holiday ${entityId}`);
+    try {
+      const userContext = req.user;
+      const loginId = userContext?.userId || 'system';
+      this.logger.log(`User ${loginId} uploading documents for holiday ${entityId}`);
 
-    const documents = docs.file || [];
+      const documents = docs.file || [];
 
-    if (!refType) {
-      throw new HttpException('Reference type is required', HttpStatus.BAD_REQUEST);
+      if (!refType) {
+        throw new HttpException('Reference type is required', HttpStatus.BAD_REQUEST);
+      }
+
+      if (documents.length === 0) {
+        throw new HttpException('No files uploaded', HttpStatus.BAD_REQUEST);
+      }
+
+      if (refType === ReferenceType.MASTER_HOLIDAY_DOCUMENT && documents.length > 1) {
+        throw new HttpException('Only one document allowed for holiday', HttpStatus.BAD_REQUEST);
+      }
+
+      for (const file of documents) {
+        await this.fileService.validateFileType(file);
+      }
+
+      const result = await this.masterHolidayService.uploadDocument(documents, refType, refId, entityType, entityId);
+      this.logger.log(`User ${loginId} successfully uploaded documents for holiday ${entityId}`);
+      return result;
+    } catch (error) {
+      this.logger.error(`Error uploading documents for holiday ${entityId}: ${error.message}`, error.stack);
+      throw error;
     }
-
-    if (documents.length === 0) {
-      throw new HttpException('No files uploaded', HttpStatus.BAD_REQUEST);
-    }
-
-    if (refType === ReferenceType.MASTER_HOLIDAY_DOCUMENT && documents.length > 1) {
-      throw new HttpException('Only one document allowed for holiday', HttpStatus.BAD_REQUEST);
-    }
-
-    for (const file of documents) {
-      await this.fileService.validateFileType(file);
-    }
-
-    const result = await this.masterHolidayService.uploadDocument(documents, refType, refId, entityType, entityId);
-    this.logger.log(`User ${loginId} successfully uploaded documents for holiday ${entityId}`);
-    return result;
   }
 
   @Get('entityId/:entityId/refId/:refId/get-files')
@@ -121,10 +139,14 @@ export class MasterHolidayController {
     @Query('entityType') entityType: EntityType,
     @Req() req: any,
   ) {
-    const loginId = req.user?.userId || 'system';
-    this.logger.log(`User ${loginId} fetching files for holiday ${entityId}`);
-    const files = await this.masterHolidayService.getAllFiles(entityType, entityId, refId, referenceType);
-    return files;
+    try {
+      const loginId = req.user?.userId || 'system';
+      this.logger.log(`User ${loginId} fetching files for holiday ${entityId}`);
+      return await this.masterHolidayService.getAllFiles(entityType, entityId, refId, referenceType);
+    } catch (error) {
+      this.logger.error(`Error fetching files for holiday ${entityId}: ${error.message}`, error.stack);
+      throw error;
+    }
   }
 
   @Get('entityId/:entityId/refId/:refId/download-file')
@@ -142,27 +164,33 @@ export class MasterHolidayController {
     @Res() res: any,
     @Req() req: any,
   ) {
-    const loginId = req.user?.userId || 'system';
-    this.logger.log(`User ${loginId} downloading file for holiday ${entityId}`);
+    try {
+      const loginId = req.user?.userId || 'system';
+      this.logger.log(`User ${loginId} downloading file for holiday ${entityId} - Key: ${key}`);
 
-    await this.masterHolidayService.validateEntity(entityType, entityId, refId);
+      await this.masterHolidayService.validateEntity(entityType, entityId, refId);
 
-    const metaData = await this.documentUploaderService.getMetaData(key);
-    const dataStream = await this.documentUploaderService.downloadFile(key);
+      const metaData = await this.documentUploaderService.getMetaData(key);
+      const dataStream = await this.documentUploaderService.downloadFile(key);
 
-    res.set({
-      'Content-Type': metaData.mimetype,
-      'Content-Disposition': `attachment; filename="${metaData.filename}"`,
-      'Content-Length': dataStream.ContentLength || undefined,
-    });
+      res.set({
+        ...NO_CACHE_HEADERS,
+        'Content-Type': metaData.mimetype,
+        'Content-Disposition': `attachment; filename="${metaData.filename}"`,
+        'Content-Length': dataStream.ContentLength || undefined,
+      });
 
-    if (dataStream.Body instanceof Readable) {
-      dataStream.Body.pipe(res);
-    } else if (dataStream.Body) {
-      const buffer = await dataStream.Body.transformToByteArray();
-      res.send(Buffer.from(buffer));
-    } else {
-      throw new HttpException('File content not found', HttpStatus.NOT_FOUND);
+      if (dataStream.Body instanceof Readable) {
+        dataStream.Body.pipe(res);
+      } else if (dataStream.Body) {
+        const buffer = await dataStream.Body.transformToByteArray();
+        res.send(Buffer.from(buffer));
+      } else {
+        throw new HttpException('File content not found', HttpStatus.NOT_FOUND);
+      }
+    } catch (error) {
+      this.logger.error(`Error downloading file for holiday ${entityId}: ${error.message}`, error.stack);
+      throw error;
     }
   }
 
@@ -180,10 +208,14 @@ export class MasterHolidayController {
     @Query('entityType') entityType: EntityType,
     @Req() req: any,
   ) {
-    const loginId = req.user?.userId || 'system';
-    this.logger.log(`User ${loginId} deleting file for holiday ${entityId}`);
-    const result = await this.masterHolidayService.deleteDocument(entityType, entityId, refId, key);
-    return result;
+    try {
+      const loginId = req.user?.userId || 'system';
+      this.logger.log(`User ${loginId} deleting file for holiday ${entityId} - Key: ${key}`);
+      return await this.masterHolidayService.deleteDocument(entityType, entityId, refId, key);
+    } catch (error) {
+      this.logger.error(`Error deleting file for holiday ${entityId}: ${error.message}`, error.stack);
+      throw error;
+    }
   }
 
   @Get('date-range/from/:fromDate/to/:toDate')
@@ -193,8 +225,13 @@ export class MasterHolidayController {
     @Param('fromDate') fromDate: string,
     @Param('toDate') toDate: string,
   ) {
-    this.logger.log(`GET /master-holidays/date-range/from/${fromDate}/to/${toDate}`);
-    return await this.masterHolidayService.findByDateRange(fromDate, toDate);
+    try {
+      this.logger.log(`Fetching holidays from ${fromDate} to ${toDate}`);
+      return await this.masterHolidayService.findByDateRange(fromDate, toDate);
+    } catch (error) {
+      this.logger.error(`Error fetching holidays by date range: ${error.message}`, error.stack);
+      throw error;
+    }
   }
 
   @Post('date-range')
@@ -203,23 +240,39 @@ export class MasterHolidayController {
   @ApiBody({ type: HolidayDateRangeDto })
   @ApiResponse({ status: 200, description: 'Return holidays within the specified date range.' })
   async findByDateRange(@Body() dateRangeDto: HolidayDateRangeDto) {
-    this.logger.log(`POST /master-holidays/date-range from ${dateRangeDto.fromDate} to ${dateRangeDto.toDate}`);
-    return await this.masterHolidayService.findByDateRange(dateRangeDto.fromDate, dateRangeDto.toDate);
+    try {
+      this.logger.log(`Fetching holidays (POST) from ${dateRangeDto.fromDate} to ${dateRangeDto.toDate}`);
+      return await this.masterHolidayService.findByDateRange(dateRangeDto.fromDate, dateRangeDto.toDate);
+    } catch (error) {
+      this.logger.error(`Error fetching holidays by date range (POST): ${error.message}`, error.stack);
+      throw error;
+    }
   }
 
   @Get()
   @ApiOperation({ summary: 'Get all holidays' })
   @ApiResponse({ status: 200, description: 'Return all holidays.' })
   async findAll() {
-    this.logger.log('GET /master-holidays');
-    return await this.masterHolidayService.findAll();
+    try {
+      this.logger.log('Fetching all holidays');
+      return await this.masterHolidayService.findAll();
+    } catch (error) {
+      this.logger.error(`Error fetching all holidays: ${error.message}`, error.stack);
+      throw error;
+    }
   }
 
   @Get('month/:month')
   @ApiOperation({ summary: 'Get holidays for a specific month' })
   @ApiResponse({ status: 200, description: 'Returns holidays for the specified month' })
   async findByMonth(@Param('month', ParseIntPipe) month: number) {
-    return await this.masterHolidayService.findByMonth(month);
+    try {
+      this.logger.log(`Fetching holidays for month: ${month}`);
+      return await this.masterHolidayService.findByMonth(month);
+    } catch (error) {
+      this.logger.error(`Error fetching holidays for month ${month}: ${error.message}`, error.stack);
+      throw error;
+    }
   }
 
   @Get('month/:month/year/:year')
@@ -229,22 +282,39 @@ export class MasterHolidayController {
     @Param('month', ParseIntPipe) month: number,
     @Param('year', ParseIntPipe) year: number,
   ) {
-    return await this.masterHolidayService.findByMonthAndYear(month, year);
+    try {
+      this.logger.log(`Fetching holidays for ${month}/${year}`);
+      return await this.masterHolidayService.findByMonthAndYear(month, year);
+    } catch (error) {
+      this.logger.error(`Error fetching holidays for ${month}/${year}: ${error.message}`, error.stack);
+      throw error;
+    }
   }
 
   @Get('weekends/:year')
   @ApiOperation({ summary: 'Get all 2nd and 4th Saturdays for a specific year' })
   @ApiResponse({ status: 200, description: 'Returns all 2nd and 4th Saturdays for the year' })
   async getYearWeekends(@Param('year', ParseIntPipe) year: number) {
-    return await this.masterHolidayService.getYearWeekends(year);
+    try {
+      this.logger.log(`Fetching weekends for year: ${year}`);
+      return await this.masterHolidayService.getYearWeekends(year);
+    } catch (error) {
+      this.logger.error(`Error fetching weekends for year ${year}: ${error.message}`, error.stack);
+      throw error;
+    }
   }
 
   @Get(':id')
   @ApiOperation({ summary: 'Get a holiday by id' })
   @ApiResponse({ status: 200, description: 'Return a single holiday.' })
   async findOne(@Param('id') id: string) {
-    this.logger.log(`GET /master-holidays/${id}`);
-    return await this.masterHolidayService.findOne(+id);
+    try {
+      this.logger.log(`Fetching holiday ID: ${id}`);
+      return await this.masterHolidayService.findOne(+id);
+    } catch (error) {
+      this.logger.error(`Error fetching holiday ${id}: ${error.message}`, error.stack);
+      throw error;
+    }
   }
 
   @Put(':id')
@@ -252,8 +322,13 @@ export class MasterHolidayController {
   @ApiBody({ type: UpdateHolidayDto })
   @ApiResponse({ status: 200, description: 'The holiday has been successfully updated.' })
   async update(@Param('id') id: string, @Body() updateHolidayDto: UpdateHolidayDto) {
-    this.logger.log(`PUT /master-holidays/${id}`);
-    return await this.masterHolidayService.update(+id, updateHolidayDto);
+    try {
+      this.logger.log(`Updating holiday ID: ${id}`);
+      return await this.masterHolidayService.update(+id, updateHolidayDto);
+    } catch (error) {
+      this.logger.error(`Error updating holiday ${id}: ${error.message}`, error.stack);
+      throw error;
+    }
   }
 
   @Patch(':id')
@@ -261,15 +336,25 @@ export class MasterHolidayController {
   @ApiBody({ type: UpdateHolidayDto })
   @ApiResponse({ status: 200, description: 'The holiday has been successfully updated.' })
   async patch(@Param('id') id: string, @Body() updateHolidayDto: UpdateHolidayDto) {
-    this.logger.log(`PATCH /master-holidays/${id}`);
-    return await this.masterHolidayService.update(+id, updateHolidayDto);
+    try {
+      this.logger.log(`Patching holiday ID: ${id}`);
+      return await this.masterHolidayService.update(+id, updateHolidayDto);
+    } catch (error) {
+      this.logger.error(`Error patching holiday ${id}: ${error.message}`, error.stack);
+      throw error;
+    }
   }
 
   @Delete(':id')
   @ApiOperation({ summary: 'Delete a holiday' })
   @ApiResponse({ status: 200, description: 'The holiday has been successfully deleted.' })
   async remove(@Param('id') id: string) {
-    this.logger.log(`DELETE /master-holidays/${id}`);
-    return await this.masterHolidayService.remove(+id);
+    try {
+      this.logger.log(`Deleting holiday ID: ${id}`);
+      return await this.masterHolidayService.remove(+id);
+    } catch (error) {
+      this.logger.error(`Error deleting holiday ${id}: ${error.message}`, error.stack);
+      throw error;
+    }
   }
 }

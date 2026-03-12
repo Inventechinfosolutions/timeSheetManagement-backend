@@ -11,6 +11,7 @@ import {
 import { Transform } from 'class-transformer';
 import { Department } from '../enums/department.enum';
 import { EmploymentType } from '../enums/employment-type.enum';
+import { Gender } from '../enums/gender.enum';
 import { UserType } from '../../users/enums/user-type.enum';
 
 export class EmployeeDetailsDto {
@@ -66,7 +67,15 @@ export class EmployeeDetailsDto {
   @IsOptional()
   confirmPassword?: string;
 
+  @IsEnum(Gender)
+  @IsOptional()
+  gender?: Gender;
+
   @IsEnum(UserType)
   @IsOptional()
   role?: UserType;
+
+  @IsString()
+  @IsOptional()
+  monthStatus?: string;
 }

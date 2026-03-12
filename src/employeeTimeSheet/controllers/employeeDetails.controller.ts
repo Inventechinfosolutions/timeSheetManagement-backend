@@ -18,6 +18,8 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
+import { ReceptionistReadOnlyGuard } from '../../auth/guards/receptionist-readonly.guard';
+import { UserType } from '../../users/enums/user-type.enum';
 import { Response } from 'express';
 import { Readable } from 'stream';
 import { FileInterceptor } from '@nestjs/platform-express';
@@ -25,6 +27,7 @@ import { EmployeeDetailsDto } from '../dto/employeeDetails.dto';
 import { ResetPasswordDto } from '../dto/resetPassword.dto';
 import { BulkUploadResultDto } from '../dto/bulk-upload-result.dto';
 import { EmployeeDetailsService } from '../services/employeeDetails.service';
+import { NO_CACHE_HEADERS } from '../../common/utils/no-cache-headers';
 import {
   ApiBadRequestResponse,
   ApiBody,
@@ -46,31 +49,64 @@ export class EmployeeDetailsController {
   logger = new Logger('EmployeeDetails');
   constructor(
     private readonly employeeDetailsService: EmployeeDetailsService,
-  ) {}
+  ) { }
 
   @Get('departments')
   @ApiOperation({ summary: 'Get all departments from enum' })
   @ApiOkResponse({ type: [String] })
   async getDepartments() {
-    return this.employeeDetailsService.getDepartments();
+    try {
+      this.logger.log('Fetching all departments');
+      return await this.employeeDetailsService.getDepartments();
+    } catch (error) {
+      this.logger.error(`Error fetching departments: ${error.message}`, error.stack);
+      throw error;
+    }
   }
 
   @Get('roles')
   @ApiOperation({ summary: 'Get all roles from enum' })
   @ApiOkResponse({ type: [String] })
   async getRoles() {
-    return this.employeeDetailsService.getRoles();
+    try {
+      this.logger.log('Fetching all roles');
+      return await this.employeeDetailsService.getRoles();
+    } catch (error) {
+      this.logger.error(`Error fetching roles: ${error.message}`, error.stack);
+      throw error;
+    }
+  }
+
+  @Get('statuses')
+  @ApiOperation({ summary: 'Get all monthly statuses from enum' })
+  @ApiOkResponse({ type: [String] })
+  async getStatuses() {
+    try {
+      this.logger.log('Fetching all month statuses');
+      return await this.employeeDetailsService.getStatuses();
+    } catch (error) {
+      this.logger.error(`Error fetching statuses: ${error.message}`, error.stack);
+      throw error;
+    }
   }
 
   @Get('list-select')
   @ApiOperation({ summary: 'Get lightweight employee list for selection' })
   @ApiQuery({ name: 'department', required: false, type: String })
   @ApiQuery({ name: 'role', required: false, type: String, description: 'Filter by role (comma separated)' })
+  @ApiQuery({ name: 'search', required: false, type: String, description: 'Search by name or employee ID' })
   async getListSelect(
     @Query('department') department: string,
     @Query('role') role: string,
+    @Query('search') search: string,
   ) {
-    return this.employeeDetailsService.getListSelect(department, role);
+    try {
+      this.logger.log(`Fetching employee selection list - Dept: ${department}, Role: ${role}, Search: ${search}`);
+      return await this.employeeDetailsService.getListSelect(department, role, search);
+    } catch (error) {
+      this.logger.error(`Error fetching employee selection list: ${error.message}`, error.stack);
+      throw error;
+    }
   }
 
   @Post()
@@ -79,12 +115,17 @@ export class EmployeeDetailsController {
   @ApiCreatedResponse({ type: EmployeeDetailsDto })
   @ApiBadRequestResponse({ description: 'Invalid request body' })
   async createEmployee(@Body() employeeData: EmployeeDetailsDto) {
-    this.logger.log(`Creating new employee with data: ${JSON.stringify(employeeData)}`);
-    return this.employeeDetailsService.createEmployee(employeeData);
+    try {
+      this.logger.log(`Creating new employee with data: ${JSON.stringify(employeeData)}`);
+      return await this.employeeDetailsService.createEmployee(employeeData);
+    } catch (error) {
+      this.logger.error(`Error creating employee: ${error.message}`, error.stack);
+      throw error;
+    }
   }
 
   @Post('bulk-upload')
-  @ApiOperation({ 
+  @ApiOperation({
     summary: 'Bulk upload employees from Excel file',
     description: 'Upload an Excel file (.xlsx or .xls) with employee data. Required columns: fullName, employeeId, department, designation, email. Optional: password'
   })
@@ -101,15 +142,20 @@ export class EmployeeDetailsController {
       }
     }
   })
-  @ApiOkResponse({ 
+  @ApiOkResponse({
     type: BulkUploadResultDto,
     description: 'Returns upload results with success/failure counts and details'
   })
   @ApiBadRequestResponse({ description: 'Invalid file format or validation errors' })
   @UseInterceptors(FileInterceptor('file'))
   async bulkUploadEmployees(@UploadedFile() file: Express.Multer.File) {
-    this.logger.log(`Bulk upload request received with file: ${file?.originalname}`);
-    return this.employeeDetailsService.bulkCreateEmployees(file);
+    try {
+      this.logger.log(`Bulk upload request received with file: ${file?.originalname}`);
+      return await this.employeeDetailsService.bulkCreateEmployees(file);
+    } catch (error) {
+      this.logger.error(`Error in bulk upload: ${error.message}`, error.stack);
+      throw error;
+    }
   }
 
   @Post(':employeeId/resend-activation')
@@ -117,8 +163,13 @@ export class EmployeeDetailsController {
   @ApiParam({ name: 'employeeId', type: String, description: 'Employee String ID' })
   @ApiOkResponse({ description: 'Activation link sent successfully' })
   async resendActivationLink(@Param('employeeId') employeeId: string) {
-    this.logger.log(`Resending activation link for employee: ${employeeId}`);
-    return this.employeeDetailsService.resendActivationLink(employeeId);
+    try {
+      this.logger.log(`Resending activation link for employee: ${employeeId}`);
+      return await this.employeeDetailsService.resendActivationLink(employeeId);
+    } catch (error) {
+      this.logger.error(`Error resending activation link for ${employeeId}: ${error.message}`, error.stack);
+      throw error;
+    }
   }
 
 
@@ -128,7 +179,7 @@ export class EmployeeDetailsController {
   @ApiQuery({ name: 'sort', required: false, type: String })
   @ApiQuery({ name: 'order', required: false, enum: ['ASC', 'DESC'] })
   @Get('timesheet-list')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, ReceptionistReadOnlyGuard)
   @ApiOperation({ summary: 'Get employees for timesheet list' })
   @ApiQuery({ name: 'search', required: false, type: String })
   @ApiQuery({ name: 'sort', required: false, type: String })
@@ -149,32 +200,40 @@ export class EmployeeDetailsController {
     @Query('year') year: number,
     @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
     @Query('limit', new DefaultValuePipe(10), ParseIntPipe) limit: number,
+    @Query('includeSelf') includeSelf: string,
     @Req() req: any,
   ) {
-    const user = req.user;
-    let managerName: string | undefined;
-    let managerId: string | undefined;
+    try {
+      this.logger.log(`Fetching timesheet list - Status: ${status}, Month: ${month}, Year: ${year}`);
+      const user = req.user;
+      let managerName: string | undefined;
+      let managerId: string | undefined;
 
-    // Filter for Managers (consistent with getAllEmployees)
-    const roleUpper = (user?.role || '').toUpperCase();
-    if (user && (user.userType === 'MANAGER' || roleUpper.includes('MNG') || roleUpper.includes('MANAGER'))) {
+      // Filter for Managers (consistent with getAllEmployees)
+      const roleUpper = (user?.role || '').toUpperCase();
+      if (user && (user.userType === UserType.MANAGER || roleUpper.includes('MNG') || roleUpper.includes(UserType.MANAGER))) {
         managerName = user.aliasLoginName;
         managerId = user.loginId;
-    }
+      }
 
-    return this.employeeDetailsService.getTimesheetList(
-      search,
-      sort,
-      order,
-      department,
-      page,
-      limit,
-      status,
-      month,
-      year,
-      managerName,
-      managerId
-    );
+      return await this.employeeDetailsService.getTimesheetList(
+        search,
+        sort,
+        order,
+        department,
+        page,
+        limit,
+        status,
+        month,
+        year,
+        managerName,
+        managerId,
+        includeSelf === 'true'
+      );
+    } catch (error) {
+      this.logger.error(`Error fetching timesheet list: ${error.message}`, error.stack);
+      throw error;
+    }
   }
 
   @Get(':employeeId')
@@ -184,12 +243,17 @@ export class EmployeeDetailsController {
   @ApiNotFoundResponse({ description: 'Employee not found' })
   @ApiInternalServerErrorResponse({ description: 'Internal server error' })
   async getEmployeeByEmployeeId(@Param('employeeId') employeeId: string) {
-    this.logger.log(`Fetching employee with Employee ID: ${employeeId}`);
-    return this.employeeDetailsService.findByEmployeeId(employeeId);
+    try {
+      this.logger.log(`Fetching employee with Employee ID: ${employeeId}`);
+      return await this.employeeDetailsService.findByEmployeeId(employeeId);
+    } catch (error) {
+      this.logger.error(`Error fetching employee ${employeeId}: ${error.message}`, error.stack);
+      throw error;
+    }
   }
 
   @Get()
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, ReceptionistReadOnlyGuard)
   @ApiOperation({ summary: 'Get all employees with optional search' })
   @ApiQuery({
     name: 'search',
@@ -214,35 +278,42 @@ export class EmployeeDetailsController {
     @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
     @Query('limit', new DefaultValuePipe(10), ParseIntPipe) limit: number,
     @Query('includeSelf') includeSelf: string,
+    @Query('userStatus') userStatus: string,
     @Req() req: any,
   ) {
-    const user = req.user;
-    this.logger.log(`User in getAllEmployees: ${JSON.stringify(user)}`);
-    
-    let managerName: string | undefined;
-    let managerId: string | undefined;
+    try {
+      const user = req.user;
+      this.logger.log(`Fetching all employees - User in session: ${user?.loginId || 'system'}`);
 
-    // Filter for Managers (check both userType and role for robustness)
-    const roleUpper = (user?.role || '').toUpperCase();
-    if (user && (user.userType === 'MANAGER' || roleUpper.includes('MNG') || roleUpper.includes('MANAGER'))) {
+      let managerName: string | undefined;
+      let managerId: string | undefined;
+
+      // Filter for Managers (check both userType and role for robustness)
+      const roleUpper = (user?.role || '').toUpperCase();
+      if (user && (user.userType === UserType.MANAGER || roleUpper.includes('MNG') || roleUpper.includes(UserType.MANAGER))) {
         managerName = user.aliasLoginName;
         managerId = user.loginId; // Fallback or alternative match
         this.logger.log(`Manager filter applied: Name=${managerName}, ID=${managerId}`);
-    } else {
+      } else {
         this.logger.log('Manager filter NOT applied');
-    }
+      }
 
-    return this.employeeDetailsService.getAllEmployees(
-      search,
-      sort,
-      order,
-      department,
-      page,
-      limit,
-      managerName,
-      managerId,
-      includeSelf === 'true'
-    );
+      return await this.employeeDetailsService.getAllEmployees(
+        search,
+        sort,
+        order,
+        department,
+        page,
+        limit,
+        managerName,
+        managerId,
+        includeSelf === 'true',
+        userStatus
+      );
+    } catch (error) {
+      this.logger.error(`Error fetching employees: ${error.message}`, error.stack);
+      throw error;
+    }
   }
 
 
@@ -256,9 +327,14 @@ export class EmployeeDetailsController {
     @Param('employeeId') employeeId: string,
     @Body() updateData: Partial<EmployeeDetailsDto>,
   ) {
-    this.logger.log(`Updating employee ${employeeId} with data: ${JSON.stringify(updateData)}`);
-    const employee = await this.employeeDetailsService.findByEmployeeId(employeeId);
-    return this.employeeDetailsService.updateEmployee(employee.id, updateData);
+    try {
+      this.logger.log(`Updating employee ${employeeId} with data: ${JSON.stringify(updateData)}`);
+      const employee = await this.employeeDetailsService.findByEmployeeId(employeeId);
+      return await this.employeeDetailsService.updateEmployee(employee.id, updateData);
+    } catch (error) {
+      this.logger.error(`Error updating employee ${employeeId}: ${error.message}`, error.stack);
+      throw error;
+    }
   }
 
   @Delete(':employeeId')
@@ -267,9 +343,14 @@ export class EmployeeDetailsController {
   @ApiOkResponse({ description: 'Employee deleted successfully' })
   @ApiInternalServerErrorResponse({ description: 'Internal server error' })
   async deleteEmployee(@Param('employeeId') employeeId: string) {
-    this.logger.log(`Deleting employee with ID: ${employeeId}`);
-    const employee = await this.employeeDetailsService.findByEmployeeId(employeeId);
-    return await this.employeeDetailsService.deleteEmployee(employee.id);
+    try {
+      this.logger.log(`Deleting employee with ID: ${employeeId}`);
+      const employee = await this.employeeDetailsService.findByEmployeeId(employeeId);
+      return await this.employeeDetailsService.deleteEmployee(employee.id);
+    } catch (error) {
+      this.logger.error(`Error deleting employee ${employeeId}: ${error.message}`, error.stack);
+      throw error;
+    }
   }
 
   @Patch(':employeeId')
@@ -284,10 +365,15 @@ export class EmployeeDetailsController {
     @Body() updateData: Partial<EmployeeDetailsDto>,
     @Req() req: any,
   ) {
-    const loginId = req.user?.userId ?? 'system';
-    this.logger.log(`Partially updating employee ${employeeId} with data: ${JSON.stringify(updateData)}`);
-    const employee = await this.employeeDetailsService.findByEmployeeId(employeeId);
-    return this.employeeDetailsService.partialUpdateEmployee(employee.id, updateData, loginId);
+    try {
+      const loginId = req.user?.userId ?? 'system';
+      this.logger.log(`Partially updating employee ${employeeId} with data: ${JSON.stringify(updateData)}`);
+      const employee = await this.employeeDetailsService.findByEmployeeId(employeeId);
+      return await this.employeeDetailsService.partialUpdateEmployee(employee.id, updateData, loginId);
+    } catch (error) {
+      this.logger.error(`Error in partial update for ${employeeId}: ${error.message}`, error.stack);
+      throw error;
+    }
   }
 
   @Patch(':employeeId/status')
@@ -299,19 +385,31 @@ export class EmployeeDetailsController {
     @Param('employeeId') employeeId: string,
     @Body('status') status: string,
   ) {
+    try {
+      this.logger.log(`Updating status for employee ${employeeId} to ${status}`);
       if (!status) {
-          throw new Error('Status is required');
+        throw new Error('Status is required');
       }
-      return this.employeeDetailsService.updateStatus(employeeId, status);
+      return await this.employeeDetailsService.updateStatus(employeeId, status);
+    } catch (error) {
+      this.logger.error(`Error updating status for ${employeeId}: ${error.message}`, error.stack);
+      throw error;
+    }
   }
 
   @Post('reset-password')
   @ApiOperation({ summary: 'Reset password for employee' })
   async resetPassword(@Body() resetPasswordDto: ResetPasswordDto, @Req() req: any) {
-    if (!resetPasswordDto.loginId && req.user?.employeeId) {
-      resetPasswordDto.loginId = req.user.employeeId;
+    try {
+      this.logger.log(`Resetting password for employee ID: ${resetPasswordDto.loginId || req.user?.employeeId}`);
+      if (!resetPasswordDto.loginId && req.user?.employeeId) {
+        resetPasswordDto.loginId = req.user.employeeId;
+      }
+      return await this.employeeDetailsService.resetPassword(resetPasswordDto);
+    } catch (error) {
+      this.logger.error(`Error resetting password: ${error.message}`, error.stack);
+      throw error;
     }
-    return await this.employeeDetailsService.resetPassword(resetPasswordDto);
   }
 
   @Post('upload-profile-image/:employeeId')
@@ -319,10 +417,16 @@ export class EmployeeDetailsController {
   @UseInterceptors(FileInterceptor('file'))
   async uploadProfileImage(
     @Param('employeeId') employeeId: string,
-    @UploadedFile() file: any, 
+    @UploadedFile() file: any,
   ) {
-    const employee = await this.employeeDetailsService.findByEmployeeId(employeeId);
-    return this.employeeDetailsService.uploadProfileImage(file, employee.id);
+    try {
+      this.logger.log(`Uploading profile image for employee: ${employeeId}`);
+      const employee = await this.employeeDetailsService.findByEmployeeId(employeeId);
+      return await this.employeeDetailsService.uploadProfileImage(file, employee.id);
+    } catch (error) {
+      this.logger.error(`Error uploading profile image for ${employeeId}: ${error.message}`, error.stack);
+      throw error;
+    }
   }
 
   @Get('profile-image/:employeeId/view')
@@ -330,29 +434,58 @@ export class EmployeeDetailsController {
   async viewProfileImage(@Param('employeeId') employeeIdStr: string, @Res() res: Response) {
     let employee;
     try {
+      try {
         employee = await this.employeeDetailsService.findByEmployeeId(employeeIdStr);
-    } catch (e) {
+      } catch (e) {
         // If not found by string ID, try finding by numeric ID if it's a number
         if (!isNaN(Number(employeeIdStr))) {
-            employee = await this.employeeDetailsService.getEmployeeById(Number(employeeIdStr));
+          employee = await this.employeeDetailsService.getEmployeeById(Number(employeeIdStr));
         } else {
-            throw e;
+          throw e;
         }
-    }
-    const { stream, meta } = await this.employeeDetailsService.getProfileImageStream(employee.id);
-    
-    res.set({
-      'Content-Type': meta.mimetype || 'image/jpeg',
-      'Content-Disposition': `inline; filename="${meta.filename || 'profile.jpg'}"`,
-    });
+      }
+      const { stream, meta } = await this.employeeDetailsService.getProfileImageStream(employee.id);
 
-    if (stream.Body instanceof Readable) {
-      stream.Body.pipe(res);
-    } else if (stream.Body) {
-      const buffer = await stream.Body.transformToByteArray();
-      res.send(Buffer.from(buffer));
-    } else {
+      res.set({
+        ...NO_CACHE_HEADERS,
+        'Content-Type': meta.mimetype || 'image/jpeg',
+        'Content-Disposition': `inline; filename="${meta.filename || 'profile.jpg'}"`,
+      });
+
+      if (stream.Body instanceof Readable) {
+        stream.Body.pipe(res);
+      } else if (stream.Body) {
+        const buffer = await stream.Body.transformToByteArray();
+        res.send(Buffer.from(buffer));
+      } else {
         throw new Error('Image stream not found');
+      }
+    } catch (error) {
+      // Return 204 No Content so frontend doesn't show 404 error
+      // This is expected for users without a profile picture
+      return res.sendStatus(204);
+    }
+  }
+
+  @Delete('profile-image/:employeeId')
+  @ApiOperation({ summary: 'Delete profile image' })
+  async deleteProfileImage(@Param('employeeId') employeeIdStr: string) {
+    try {
+      this.logger.log(`Deleting profile image for employee: ${employeeIdStr}`);
+      let employee;
+      try {
+        employee = await this.employeeDetailsService.findByEmployeeId(employeeIdStr);
+      } catch (e) {
+        if (!isNaN(Number(employeeIdStr))) {
+          employee = await this.employeeDetailsService.getEmployeeById(Number(employeeIdStr));
+        } else {
+          throw e;
+        }
+      }
+      return await this.employeeDetailsService.removeProfileImage(employee.id);
+    } catch (error) {
+      this.logger.error(`Error deleting profile image for ${employeeIdStr}: ${error.message}`, error.stack);
+      throw error;
     }
   }
 }

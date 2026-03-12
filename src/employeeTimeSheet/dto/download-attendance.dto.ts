@@ -1,4 +1,4 @@
-import { IsNotEmpty, IsNumber, Min, Max } from 'class-validator';
+import { IsNotEmpty, IsNumber, Min, Max, IsOptional, IsString } from 'class-validator';
 import { Type } from 'class-transformer';
 
 export class DownloadAttendanceDto {
@@ -15,4 +15,16 @@ export class DownloadAttendanceDto {
   @Min(2000)
   @Max(2100)
   year: number;
+
+  @IsOptional()
+  @IsString()
+  employeeId?: string;
+
+  @IsOptional()
+  @IsString()
+  startDate?: string;
+
+  @IsOptional()
+  @IsString()
+  endDate?: string;
 }

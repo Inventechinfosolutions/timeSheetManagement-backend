@@ -60,7 +60,7 @@ export class ForgotPasswordService {
       expiresAt,
     });
 
-    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+    const frontendUrl = process.env.FRONTEND_URL;
     const resetLink = `${frontendUrl}/reset-password?token=${resetToken}&loginId=${user.loginId}`;
 
     const htmlContent = `

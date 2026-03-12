@@ -1,12 +1,16 @@
 import { Injectable, Logger } from '@nestjs/common';
+import dayjs from 'dayjs';
 import { Cron } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, Between } from 'typeorm';
 import { EmployeeAttendance } from '../employeeTimeSheet/entities/employeeAttendance.entity';
 import { AttendanceStatus } from '../employeeTimeSheet/enums/attendance-status.enum';
 import { EmployeeDetails } from '../employeeTimeSheet/entities/employeeDetails.entity';
+import { ManagerMapping, ManagerMappingStatus } from '../managerMapping/entities/managerMapping.entity';
 import { MasterHolidayService } from '../master/service/master-holiday.service';
 import { NotificationsService } from '../notifications/Services/notifications.service';
+import { UserStatus } from '../users/enums/user-status.enum';
+import { MonthStatus } from '../employeeTimeSheet/enums/month-status.enum';
 
 @Injectable()
 export class AttendanceCronService {
@@ -15,13 +19,135 @@ export class AttendanceCronService {
   constructor(
     @InjectRepository(EmployeeAttendance)
     private attendanceRepo: Repository<EmployeeAttendance>,
-    
+
     @InjectRepository(EmployeeDetails)
     private employeeRepo: Repository<EmployeeDetails>,
 
+    @InjectRepository(ManagerMapping)
+    private managerMappingRepo: Repository<ManagerMapping>,
+
     private readonly masterHolidayService: MasterHolidayService,
     private readonly notificationsService: NotificationsService,
-  ) {}
+  ) { }
+
+  // ─── Helpers ────────────────────────────────────────────────────────────────
+
+  /**
+   * Returns true if today is the last working day of the month.
+   * If the true last calendar day falls on a weekend or public holiday,
+   * the previous working day becomes the "last working day".
+   */
+  private async isLastWorkingDayOfMonth(): Promise<boolean> {
+    const today = new Date();
+    
+    // 1. If today itself is a weekend or holiday, it cannot be a working day.
+    const todayIsWeekend = today.getDay() === 0 || today.getDay() === 6;
+    const todayDateStr = dayjs(today).format('YYYY-MM-DD');
+    const todayIsHoliday = !!(await this.masterHolidayService.findByDate(todayDateStr));
+    
+    if (todayIsWeekend || todayIsHoliday) {
+      return false;
+    }
+
+    // 2. Start from the strict calendar last day of the current month
+    let check = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+
+    // 3. Walk backward from the last calendar day to find the true last working day
+    while (true) {
+      const isWeekend = check.getDay() === 0 || check.getDay() === 6;
+      const dateStr = dayjs(check).format('YYYY-MM-DD');
+      const isHoliday = !!(await this.masterHolidayService.findByDate(dateStr));
+      
+      if (!isWeekend && !isHoliday) {
+        // We found the very last true working day of the month!
+        break;
+      }
+      
+      // Keep stepping backward
+      check.setDate(check.getDate() - 1);
+    }
+
+    // 4. Return true only if today exactly matches that found last working day
+    return check.getDate() === today.getDate();
+  }
+
+  // ─── Month-End Last-Working-Day Cron Jobs ───────────────────────────────────
+
+  /**
+   * 10 AM — Last working day of month
+   * Sends a general month-end reminder to ALL active employees.
+   */
+  @Cron('0 10 * * *')
+  async monthEndGeneralReminder() {
+    if (!(await this.isLastWorkingDayOfMonth())) return;
+    this.logger.debug('Month-End 10AM: Sending general reminder to all employees...');
+    const count = await this.notificationsService.sendMonthEndGeneralReminder();
+    this.logger.log(`Month-End 10AM: General reminder sent to ${count} employees.`);
+  }
+
+  /**
+   * 12 PM — Last working day of month
+   * Sends a "last call" reminder ONLY to employees whose monthStatus = 'Pending'.
+   */
+  @Cron('0 12 * * *')
+  async monthEndLastCallReminder() {
+    if (!(await this.isLastWorkingDayOfMonth())) return;
+    this.logger.debug('Month-End 12PM: Sending last-call reminder to pending employees...');
+
+    const pendingEmployees = await this.employeeRepo.find({
+      where: { monthStatus: MonthStatus.PENDING, userStatus: UserStatus.ACTIVE } as any,
+    });
+
+    this.logger.log(`Month-End 12PM: Found ${pendingEmployees.length} employees with pending status.`);
+    const count = await this.notificationsService.sendMonthEndLastCallReminder(pendingEmployees);
+    this.logger.log(`Month-End 12PM: Last-call reminder sent to ${count} employees.`);
+  }
+
+  /**
+   * 1 PM — Last working day of month
+   * Sends each manager an email listing their mapped employees who still have monthStatus = 'Pending'.
+   */
+  @Cron('0 13 * * *')
+  async monthEndManagerReport() {
+    if (!(await this.isLastWorkingDayOfMonth())) return;
+    this.logger.debug('Month-End 1PM: Sending pending-employee reports to managers...');
+
+    // Fetch all active manager mappings
+    const mappings = await this.managerMappingRepo.find({
+      where: { status: ManagerMappingStatus.ACTIVE },
+    });
+
+    // Group pending employee names by manager name
+    const managerPendingMap = new Map<string, string[]>();
+    for (const mapping of mappings) {
+      const emp = await this.employeeRepo.findOne({
+        where: { employeeId: mapping.employeeId, monthStatus: MonthStatus.PENDING, userStatus: UserStatus.ACTIVE } as any,
+      });
+      if (emp) {
+        const list = managerPendingMap.get(mapping.managerName) || [];
+        list.push(emp.fullName);
+        managerPendingMap.set(mapping.managerName, list);
+      }
+    }
+
+    this.logger.log(`Month-End 1PM: Found ${managerPendingMap.size} managers with pending employees.`);
+
+    // Send one email per manager
+    for (const [managerName, pendingList] of managerPendingMap.entries()) {
+      const manager = await this.employeeRepo.findOne({
+        where: { fullName: managerName, userStatus: UserStatus.ACTIVE } as any,
+      });
+      if (manager?.email) {
+        await this.notificationsService.sendManagerPendingReport(manager, pendingList);
+      } else {
+        this.logger.warn(`Month-End 1PM: Could not find email for manager "${managerName}"`);
+      }
+    }
+
+    this.logger.log('Month-End 1PM: Manager reports dispatched.');
+  }
+
+  // ─── Existing Cron Jobs ─────────────────────────────────────────────────────
 
   // Run at 10:00 AM every Saturday
   @Cron('0 10 * * 6')
@@ -30,69 +156,83 @@ export class AttendanceCronService {
     await this.notificationsService.sendWeeklyReminder();
   }
 
-  // Run at 10:00 AM every day, checks if it is the last day of the month
-  @Cron('0 10 * * *')
-  async monthEndReminder() {
-    const today = new Date();
-    const tomorrow = new Date(today);
-    tomorrow.setDate(today.getDate() + 1);
-
-    // If tomorrow is next month, today is the last day
-    if (tomorrow.getMonth() !== today.getMonth()) {
-      this.logger.debug('Running Month-End Reminder...');
-      await this.notificationsService.sendMonthEndReminder();
-    }
-  }
-
   // Run at 11:30 PM every day to check for Weekend logic
-  @Cron('30 23 * * *') 
+  @Cron('30 23 * * *')
   async handleWeekendStatus() {
     this.logger.debug('Running Weekend Check...');
-    
+
     // 1. Get Today's Date
     const today = new Date();
-    const dateStr = today.toISOString().split('T')[0]; // "YYYY-MM-DD"
+    const dateStr = dayjs(today).format('YYYY-MM-DD'); // "YYYY-MM-DD"
 
     // 2. Check if it is a Weekend using Master Service
     const isWeekend = this.masterHolidayService.isWeekend(today);
 
     if (!isWeekend) {
-        return; 
+      return;
     }
-    
-    // ... remaining logic to mark absent users as WEEKEND ...
     // 3. Get all employees
     const allEmployees = await this.employeeRepo.find();
-    
     // 4. Get all attendance records for Today
     const startOfDay = new Date(`${dateStr}T00:00:00`);
     const endOfDay = new Date(`${dateStr}T23:59:59`);
 
     const records = await this.attendanceRepo.find({
-        where: { workingDate: Between(startOfDay, endOfDay) } 
+      where: { workingDate: Between(startOfDay, endOfDay) },
     });
 
-    const presentEmployeeIds = records.map(a => a.employeeId);
+    // 5. Find Employees with NO record today OR a record with NULL status
+    const presentRecordIds = new Set(records.filter(r => r.status !== null && r.status !== undefined).map(r => r.employeeId));
 
-    // 5. Find Employees with NO record today
-    const missingEmployees = allEmployees.filter(emp => !presentEmployeeIds.includes(emp.employeeId));
-    this.logger.log(`Found ${missingEmployees.length} missing entries on weekend ${dateStr}`);
+    // Employees needing a new record
+    const employeesNeedingRecord = allEmployees.filter(
+      (emp) => !records.some(r => r.employeeId === emp.employeeId)
+    );
 
-    // 6. Bulk Insert "WEEKEND" Records
-    const weekendRecords = missingEmployees.map(emp => {
-        return this.attendanceRepo.create({
-            employeeId: emp.employeeId,
-            workingDate: new Date(dateStr),
-            status: AttendanceStatus.WEEKEND, 
-            totalHours: 0, 
-        });
+    // Existing records with NULL status that need updating
+    const nullStatusRecords = records.filter(
+      (r) => r.status === null || r.status === undefined
+    );
+
+    this.logger.log(
+      `Weekend Check: ${employeesNeedingRecord.length} needing new records, ${nullStatusRecords.length} needing status updates on ${dateStr}`,
+    );
+
+    // 6. Bulk Insert/Update WEEKEND Records
+    const newWeekendRecords = employeesNeedingRecord.map((emp) => {
+      return this.attendanceRepo.create({
+        employeeId: emp.employeeId,
+        workingDate: new Date(dateStr),
+        status: AttendanceStatus.WEEKEND,
+        firstHalf: AttendanceStatus.WEEKEND,
+        secondHalf: AttendanceStatus.WEEKEND,
+        totalHours: null,
+      });
     });
 
-    if (weekendRecords.length > 0) {
-        await this.attendanceRepo.save(weekendRecords);
-        this.logger.log(`Successfully marked ${weekendRecords.length} records as WEEKEND.`);
+    // Update NULL status records
+    for (const record of nullStatusRecords) {
+      record.status = AttendanceStatus.WEEKEND;
+      record.firstHalf = AttendanceStatus.WEEKEND;
+      record.secondHalf = AttendanceStatus.WEEKEND;
+      record.totalHours = null;
+    }
+
+    if (newWeekendRecords.length > 0) {
+      await this.attendanceRepo.save(newWeekendRecords);
+    }
+
+    if (nullStatusRecords.length > 0) {
+      await this.attendanceRepo.save(nullStatusRecords);
+    }
+
+    if (newWeekendRecords.length > 0 || nullStatusRecords.length > 0) {
+      this.logger.log(
+        `Successfully processed ${newWeekendRecords.length + nullStatusRecords.length} weekend records.`,
+      );
     }
   }
+
   // Run at 01:00 AM every day
   @Cron('0 1 * * *')
   async handleDailyNotUpdated() {
@@ -101,14 +241,15 @@ export class AttendanceCronService {
     // 1. Get "Yesterday" Date
     const yesterday = new Date();
     yesterday.setDate(yesterday.getDate() - 1);
-    const dateStr = yesterday.toISOString().split('T')[0]; // "YYYY-MM-DD"
+    const dateStr = dayjs(yesterday).format('YYYY-MM-DD'); // "YYYY-MM-DD"
 
     // 2. Identify Weekends (Skip Saturday=6, Sunday=0) for "Not Updated" logic
-    // We only want to mark "Not Updated" for missing WEEKDAYS.
     const dayOfWeek = yesterday.getDay();
     if (dayOfWeek === 0 || dayOfWeek === 6) {
-        this.logger.debug(`Skipping Weekend check for Not Updated: ${dateStr}`);
-        return; 
+      this.logger.debug(
+        `Skipping Weekend check for Not Updated: ${dateStr}`,
+      );
+      return;
     }
 
     // 3. Get all employees
@@ -119,80 +260,136 @@ export class AttendanceCronService {
     const endOfDay = new Date(`${dateStr}T23:59:59`);
 
     const records = await this.attendanceRepo.find({
-        where: { workingDate: Between(startOfDay, endOfDay) } 
+      where: { workingDate: Between(startOfDay, endOfDay) },
     });
 
-    const presentEmployeeIds = records.map(a => a.employeeId);
+    // 5. Find Missing Employees OR Records with NULL status
+    const employeesNeedingRecord = allEmployees.filter(
+      (emp) => !records.some(r => r.employeeId === emp.employeeId)
+    );
 
-    // 5. Find Missing Employees
-    const missingEmployees = allEmployees.filter(emp => !presentEmployeeIds.includes(emp.employeeId));
-    
+    const nullStatusRecords = records.filter(
+      (r) => r.status === null || r.status === undefined
+    );
+
     // Check if Yesterday was a Holiday
     const holiday = await this.masterHolidayService.findByDate(dateStr);
-    const targetStatus = holiday ? AttendanceStatus.HOLIDAY : AttendanceStatus.NOT_UPDATED;
+    const targetStatus = holiday
+      ? AttendanceStatus.HOLIDAY
+      : AttendanceStatus.NOT_UPDATED;
 
-    this.logger.log(`Found ${missingEmployees.length} missing entries on ${dateStr}. Marking as ${targetStatus}`);
+    this.logger.log(
+      `Found ${employeesNeedingRecord.length} missing and ${nullStatusRecords.length} NULL status entries on ${dateStr}. Marking as ${targetStatus}`,
+    );
 
-    // 6. Bulk Insert Records
-    const newRecords = missingEmployees.map(emp => {
-        return this.attendanceRepo.create({
-            employeeId: emp.employeeId,
-            workingDate: new Date(dateStr),
-            status: targetStatus,
-            totalHours: 0, 
-        });
+    // 6. Bulk Insert/Update Records
+    const newRecords = employeesNeedingRecord.map((emp) => {
+      return this.attendanceRepo.create({
+        employeeId: emp.employeeId,
+        workingDate: new Date(dateStr),
+        status: targetStatus,
+        firstHalf: targetStatus,
+        secondHalf: targetStatus,
+        totalHours: null,
+      });
     });
 
+    for (const record of nullStatusRecords) {
+      record.status = targetStatus;
+      record.firstHalf = targetStatus;
+      record.secondHalf = targetStatus;
+      record.totalHours = null;
+    }
+
     if (newRecords.length > 0) {
-        await this.attendanceRepo.save(newRecords);
-        this.logger.log(`Successfully marked ${newRecords.length} records as NOT_UPDATED.`);
+      await this.attendanceRepo.save(newRecords);
+    }
+
+    if (nullStatusRecords.length > 0) {
+      await this.attendanceRepo.save(nullStatusRecords);
+    }
+
+    if (newRecords.length > 0 || nullStatusRecords.length > 0) {
+      this.logger.log(
+        `Successfully marked ${newRecords.length + nullStatusRecords.length} records as ${targetStatus}.`,
+      );
     }
   }
-  // Run at 11:00 PM on the last day of the month
-  @Cron('0 23 28-31 * *')
+
+  // Run at 11:00 AM on the 1st day of every month to process the previous month's cleanup.
+  @Cron('0 11 1 * *')
   async handleMonthlyLeaveUpdate() {
-      const today = new Date();
-      
-      // Check if today is the last day of the month
-      const tomorrow = new Date(today);
-      tomorrow.setDate(today.getDate() + 1);
-      
-      if (tomorrow.getMonth() === today.getMonth()) {
-          return; // Not the last day yet
+    const today = new Date();
+    // Calculate start and end of the PREVIOUS month
+    const prevMonthDate = new Date(
+      today.getFullYear(),
+      today.getMonth() - 1,
+      1,
+    );
+    const year = prevMonthDate.getFullYear();
+    const month = prevMonthDate.getMonth();
+    const startOfMonth = new Date(year, month, 1, 0, 0, 0);
+    const endOfMonth = new Date(year, month + 1, 0, 23, 59, 59);
+
+    this.logger.debug(
+      `Running Monthly Leave Update for past month ${month + 1}-${year}...`,
+    );
+
+    // Find all records with status 'Not Updated', 'Pending', or NULL for the past month
+    const recordsToUpdate = await this.attendanceRepo.find({
+      where: [
+        {
+          workingDate: Between(startOfMonth, endOfMonth),
+          status: AttendanceStatus.NOT_UPDATED,
+        },
+        {
+          workingDate: Between(startOfMonth, endOfMonth),
+          status: AttendanceStatus.PENDING,
+        },
+        {
+          workingDate: Between(startOfMonth, endOfMonth),
+          status: null as any, // Include records with NULL status (cleared leaves)
+        },
+      ],
+    });
+
+    this.logger.log(
+      `Found ${recordsToUpdate.length} candidate records for past month ${month + 1}-${year}.`,
+    );
+
+    if (recordsToUpdate.length === 0) return;
+
+    const absentRecords: EmployeeAttendance[] = [];
+
+    for (const record of recordsToUpdate) {
+      const dateObj = new Date(record.workingDate);
+      const dayOfWeek = dateObj.getDay(); // 0 = Sunday, 6 = Saturday
+      const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+      const dateStr = dayjs(dateObj).format('YYYY-MM-DD');
+      const holiday = await this.masterHolidayService.findByDate(dateStr);
+
+      // Only mark ABSENT if it is a standard working day (NOT weekend and NOT holiday)
+      if (!isWeekend && !holiday) {
+        record.status = AttendanceStatus.ABSENT;
+        record.firstHalf = AttendanceStatus.ABSENT;
+        record.secondHalf = AttendanceStatus.ABSENT;
+        record.totalHours = 0;
+        absentRecords.push(record);
       }
+    }
 
-      this.logger.debug('Running Monthly Leave Update...');
+    if (absentRecords.length > 0) {
+      await this.attendanceRepo.save(absentRecords);
+      this.logger.log(
+        `Successfully marked ${absentRecords.length} past workday records as ABSENT for ${month + 1}-${year}. Weekends and holidays were skipped.`,
+      );
+    }
+  }
 
-      // Get start and end of the current month
-      const year = today.getFullYear();
-      const month = today.getMonth();
-      const startOfMonth = new Date(year, month, 1, 0, 0, 0);
-      const endOfMonth = new Date(year, month + 1, 0, 23, 59, 59);
-
-      // Find all records with status 'Not Updated' or 'Pending' for this month
-      const recordsToUpdate = await this.attendanceRepo.find({
-          where: [
-              { 
-                  workingDate: Between(startOfMonth, endOfMonth),
-                  status: AttendanceStatus.NOT_UPDATED 
-              },
-              { 
-                  workingDate: Between(startOfMonth, endOfMonth),
-                  status: AttendanceStatus.PENDING 
-              }
-          ]
-      });
-
-      this.logger.log(`Found ${recordsToUpdate.length} records to mark as LEAVE for month ${month + 1}-${year}`);
-
-      if (recordsToUpdate.length === 0) return;
-
-      // Update status to LEAVE
-      for (const record of recordsToUpdate) {
-          record.status = AttendanceStatus.LEAVE;
-      }
-
-      await this.attendanceRepo.save(recordsToUpdate);
-      this.logger.log(`Successfully updated ${recordsToUpdate.length} records to LEAVE.`);
+  // Run at 6:00 PM every Friday (Weekend Reminder)
+  @Cron('0 18 * * 5')
+  async weekendReminder() {
+    this.logger.debug('Running Weekend Reminder...');
+    await this.notificationsService.sendWeekendReminder();
   }
 }
