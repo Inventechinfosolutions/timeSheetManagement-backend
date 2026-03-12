@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import dayjs from 'dayjs';
 import { Cron } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, Between } from 'typeorm';
@@ -42,7 +43,7 @@ export class AttendanceCronService {
     
     // 1. If today itself is a weekend or holiday, it cannot be a working day.
     const todayIsWeekend = today.getDay() === 0 || today.getDay() === 6;
-    const todayDateStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+    const todayDateStr = dayjs(today).format('YYYY-MM-DD');
     const todayIsHoliday = !!(await this.masterHolidayService.findByDate(todayDateStr));
     
     if (todayIsWeekend || todayIsHoliday) {
@@ -55,7 +56,7 @@ export class AttendanceCronService {
     // 3. Walk backward from the last calendar day to find the true last working day
     while (true) {
       const isWeekend = check.getDay() === 0 || check.getDay() === 6;
-      const dateStr = `${check.getFullYear()}-${String(check.getMonth() + 1).padStart(2, '0')}-${String(check.getDate()).padStart(2, '0')}`;
+      const dateStr = dayjs(check).format('YYYY-MM-DD');
       const isHoliday = !!(await this.masterHolidayService.findByDate(dateStr));
       
       if (!isWeekend && !isHoliday) {
@@ -163,7 +164,7 @@ export class AttendanceCronService {
 
     // 1. Get Today's Date
     const today = new Date();
-    const dateStr = today.toISOString().split('T')[0]; // "YYYY-MM-DD"
+    const dateStr = dayjs(today).format('YYYY-MM-DD'); // "YYYY-MM-DD"
 
     // 2. Check if it is a Weekend using Master Service
     const isWeekend = this.masterHolidayService.isWeekend(today);
@@ -171,8 +172,10 @@ export class AttendanceCronService {
     if (!isWeekend) {
       return;
     }
-    // 3. Get all employees
-    const allEmployees = await this.employeeRepo.find();
+    // 3. Get all Active employees
+    const allEmployees = await this.employeeRepo.find({
+      where: { userStatus: UserStatus.ACTIVE },
+    });
     // 4. Get all attendance records for Today
     const startOfDay = new Date(`${dateStr}T00:00:00`);
     const endOfDay = new Date(`${dateStr}T23:59:59`);
@@ -185,9 +188,24 @@ export class AttendanceCronService {
     const presentRecordIds = new Set(records.filter(r => r.status !== null && r.status !== undefined).map(r => r.employeeId));
 
     // Employees needing a new record
-    const employeesNeedingRecord = allEmployees.filter(
-      (emp) => !records.some(r => r.employeeId === emp.employeeId)
-    );
+    const employeesNeedingRecord = allEmployees.filter((emp) => {
+      // 1. Must not already have a record
+      const hasRecord = records.some((r) => r.employeeId === emp.employeeId);
+      if (hasRecord) return false;
+
+      // 2. Must not be inactive on this specific date
+      if (emp.inactiveDate) {
+        const inactiveDate = dayjs(emp.inactiveDate).startOf('day');
+        const processingDate = dayjs(today).startOf('day');
+        if (
+          processingDate.isSame(inactiveDate) ||
+          processingDate.isAfter(inactiveDate)
+        ) {
+          return false;
+        }
+      }
+      return true;
+    });
 
     // Existing records with NULL status that need updating
     const nullStatusRecords = records.filter(
@@ -198,22 +216,24 @@ export class AttendanceCronService {
       `Weekend Check: ${employeesNeedingRecord.length} needing new records, ${nullStatusRecords.length} needing status updates on ${dateStr}`,
     );
 
-    // 6. Bulk Create WEEKEND Records
-    const newWeekendRecords = this.attendanceRepo.create(employeesNeedingRecord.map((emp) => ({
-      employeeId: emp.employeeId,
-      workingDate: new Date(dateStr),
-      status: AttendanceStatus.WEEKEND,
-      firstHalf: WorkLocation.WEEKEND,
-      secondHalf: WorkLocation.WEEKEND,
-      totalHours: 0,
-    })));
+    // 6. Bulk Insert/Update WEEKEND Records
+    const newWeekendRecords = employeesNeedingRecord.map((emp) => {
+      return this.attendanceRepo.create({
+        employeeId: emp.employeeId,
+        workingDate: new Date(dateStr),
+        status: AttendanceStatus.WEEKEND,
+        firstHalf: AttendanceStatus.WEEKEND,
+        secondHalf: AttendanceStatus.WEEKEND,
+        totalHours: null,
+      });
+    });
 
     // Update NULL status records
     for (const record of nullStatusRecords) {
       record.status = AttendanceStatus.WEEKEND;
-      record.firstHalf = WorkLocation.WEEKEND;
-      record.secondHalf = WorkLocation.WEEKEND;
-      record.totalHours = 0;
+      record.firstHalf = AttendanceStatus.WEEKEND;
+      record.secondHalf = AttendanceStatus.WEEKEND;
+      record.totalHours = null;
     }
 
     if (newWeekendRecords.length > 0) {
@@ -239,7 +259,7 @@ export class AttendanceCronService {
     // 1. Get "Yesterday" Date
     const yesterday = new Date();
     yesterday.setDate(yesterday.getDate() - 1);
-    const dateStr = yesterday.toISOString().split('T')[0]; // "YYYY-MM-DD"
+    const dateStr = dayjs(yesterday).format('YYYY-MM-DD'); // "YYYY-MM-DD"
 
     // 2. Identify Weekends (Skip Saturday=6, Sunday=0) for "Not Updated" logic
     const dayOfWeek = yesterday.getDay();
@@ -250,8 +270,10 @@ export class AttendanceCronService {
       return;
     }
 
-    // 3. Get all employees
-    const allEmployees = await this.employeeRepo.find();
+    // 3. Get all Active employees
+    const allEmployees = await this.employeeRepo.find({
+      where: { userStatus: UserStatus.ACTIVE },
+    });
 
     // 4. Get all attendance records for Yesterday
     const startOfDay = new Date(`${dateStr}T00:00:00`);
@@ -262,9 +284,24 @@ export class AttendanceCronService {
     });
 
     // 5. Find Missing Employees OR Records with NULL status
-    const employeesNeedingRecord = allEmployees.filter(
-      (emp) => !records.some(r => r.employeeId === emp.employeeId)
-    );
+    const employeesNeedingRecord = allEmployees.filter((emp) => {
+      // 1. Must not already have a record
+      const hasRecord = records.some((r) => r.employeeId === emp.employeeId);
+      if (hasRecord) return false;
+
+      // 2. Must not be inactive on this specific date (Yesterday)
+      if (emp.inactiveDate) {
+        const inactiveDate = dayjs(emp.inactiveDate).startOf('day');
+        const processingDate = dayjs(yesterday).startOf('day');
+        if (
+          processingDate.isSame(inactiveDate) ||
+          processingDate.isAfter(inactiveDate)
+        ) {
+          return false;
+        }
+      }
+      return true;
+    });
 
     const nullStatusRecords = records.filter(
       (r) => r.status === null || r.status === undefined
@@ -284,21 +321,23 @@ export class AttendanceCronService {
       `Found ${employeesNeedingRecord.length} missing and ${nullStatusRecords.length} NULL status entries on ${dateStr}. Marking as ${targetStatus}`,
     );
 
-    // 6. Bulk Create Records
-    const newRecords = this.attendanceRepo.create(employeesNeedingRecord.map((emp) => ({
-      employeeId: emp.employeeId,
-      workingDate: new Date(dateStr),
-      status: targetStatus,
-      firstHalf: targetLocation,
-      secondHalf: targetLocation,
-      totalHours: 0,
-    })));
+    // 6. Bulk Insert/Update Records
+    const newRecords = employeesNeedingRecord.map((emp) => {
+      return this.attendanceRepo.create({
+        employeeId: emp.employeeId,
+        workingDate: new Date(dateStr),
+        status: targetStatus,
+        firstHalf: targetStatus,
+        secondHalf: targetStatus,
+        totalHours: null,
+      });
+    });
 
     for (const record of nullStatusRecords) {
       record.status = targetStatus;
-      record.firstHalf = targetLocation;
-      record.secondHalf = targetLocation;
-      record.totalHours = 0;
+      record.firstHalf = targetStatus;
+      record.secondHalf = targetStatus;
+      record.totalHours = null;
     }
 
     if (newRecords.length > 0) {
@@ -335,7 +374,7 @@ export class AttendanceCronService {
       `Running Monthly Leave Update for past month ${month + 1}-${year}...`,
     );
 
-    // Find all records with status 'Not Updated' or 'Pending' for the past month
+    // Find all records with status 'Not Updated', 'Pending', or NULL for the past month
     const recordsToUpdate = await this.attendanceRepo.find({
       where: [
         {
@@ -354,23 +393,36 @@ export class AttendanceCronService {
     });
 
     this.logger.log(
-      `Found ${recordsToUpdate.length} records to mark as ABSENT for past month ${month + 1}-${year}`,
+      `Found ${recordsToUpdate.length} candidate records for past month ${month + 1}-${year}.`,
     );
 
     if (recordsToUpdate.length === 0) return;
 
-    // Update status and split fields to ABSENT
+    const absentRecords: EmployeeAttendance[] = [];
+
     for (const record of recordsToUpdate) {
-      record.status = AttendanceStatus.ABSENT;
-      record.firstHalf = WorkLocation.ABSENT;
-      record.secondHalf = WorkLocation.ABSENT;
-      record.totalHours = 0;
+      const dateObj = new Date(record.workingDate);
+      const dayOfWeek = dateObj.getDay(); // 0 = Sunday, 6 = Saturday
+      const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+      const dateStr = dayjs(dateObj).format('YYYY-MM-DD');
+      const holiday = await this.masterHolidayService.findByDate(dateStr);
+
+      // Only mark ABSENT if it is a standard working day (NOT weekend and NOT holiday)
+      if (!isWeekend && !holiday) {
+        record.status = AttendanceStatus.ABSENT;
+        record.firstHalf = AttendanceStatus.ABSENT;
+        record.secondHalf = AttendanceStatus.ABSENT;
+        record.totalHours = 0;
+        absentRecords.push(record);
+      }
     }
 
-    await this.attendanceRepo.save(recordsToUpdate);
-    this.logger.log(
-      `Successfully updated ${recordsToUpdate.length} records to ABSENT with split field resets.`,
-    );
+    if (absentRecords.length > 0) {
+      await this.attendanceRepo.save(absentRecords);
+      this.logger.log(
+        `Successfully marked ${absentRecords.length} past workday records as ABSENT for ${month + 1}-${year}. Weekends and holidays were skipped.`,
+      );
+    }
   }
 
   // Run at 6:00 PM every Friday (Weekend Reminder)

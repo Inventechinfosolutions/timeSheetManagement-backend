@@ -144,32 +144,27 @@ export class EmployeeAttendanceService {
       endOfDay.setHours(23, 59, 59, 999);
 
       // --- Holiday/Weekend Blocking Logic (Start) ---
-      const topDateStrLocal = dayjs(startOfDay).format('YYYY-MM-DD');
-      const holiday = await this.masterHolidayService.findByDate(topDateStrLocal);
+      const dateStrLocal = dayjs(startOfDay).format('YYYY-MM-DD');
+      const holiday = await this.masterHolidayService.findByDate(dateStrLocal);
       const isSun = startOfDay.getDay() === 0;
       const isSatLocal = startOfDay.getDay() === 6;
 
       if (!isPrivileged) {
-        const detail = await this.employeeDetailsRepository.findOne({ where: { employeeId: createEmployeeAttendanceDto.employeeId } });
-        const isIT = detail?.department === Department.IT;
-        const isFullTimer = detail?.employmentType === EmploymentType.FULL_TIMER;
-
-        if (holiday && !(isIT && isFullTimer)) {
-          throw new BadRequestException('Attendance is blocked for Holidays.');
-        }
-        if (isSun && !(isIT && isFullTimer)) {
-          throw new BadRequestException('Attendance is blocked for Sundays.');
-        }
-        
-        // Weekend/Holiday Rule: 4-9 hours validation
         const incomingHours = createEmployeeAttendanceDto.totalHours !== undefined && createEmployeeAttendanceDto.totalHours !== null 
           ? Number(createEmployeeAttendanceDto.totalHours) 
           : null;
 
-        if ((isSatLocal || ((isSun || holiday) && (isIT && isFullTimer))) && incomingHours !== null && incomingHours > 0) {
-          if (incomingHours < 4 || incomingHours > 9) {
-            const msg = isSatLocal ? 'Saturday' : (isSun ? 'Sunday' : 'Holiday');
-            throw new BadRequestException(`${msg} hours must be between 4 and 9.`);
+        // Weekends (Sat/Sun) and Holidays: Apply validation rules, block 0 hours
+        if (holiday || isSun || isSatLocal) {
+          if (incomingHours === 0) {
+            throw new BadRequestException('Cannot mark absent (0 hours) on Weekends or Holidays.');
+          }
+          if (incomingHours !== null && incomingHours > 0) {
+            const minHours = isSatLocal ? 4 : 1;
+            if (incomingHours < minHours || incomingHours > 9) {
+              const dayType = isSatLocal ? 'Saturday' : isSun ? 'Sunday' : 'Holiday';
+              throw new BadRequestException(`${dayType} hours must be between ${minHours} and 9.`);
+            }
           }
         }
       }
@@ -240,21 +235,21 @@ export class EmployeeAttendanceService {
           );
         }
 
-        // CRITICAL: Synchronize splits and status for UPDATED existing records in create branch
-        const hoursFromExisting = Number(existingRecord.totalHours || 0);
-        const dateObjFromExisting = new Date(existingRecord.workingDate);
-        const isSaturdayFromExisting = dateObjFromExisting.getDay() === 6;
-        const isSundayFromExisting = dateObjFromExisting.getDay() === 0;
-        const dateStrLocalFromExisting = dayjs(dateObjFromExisting).format('YYYY-MM-DD');
-        const currentHolidayFromExisting = await this.masterHolidayService.findByDate(dateStrLocalFromExisting);
-        
-        const empDetailFromExisting = await this.employeeDetailsRepository.findOne({ where: { employeeId: existingRecord.employeeId } });
-        const isITDeptFromExisting = empDetailFromExisting?.department === Department.IT;
-        const isFTFromExisting = empDetailFromExisting?.employmentType === EmploymentType.FULL_TIMER;
-        const isWeekendOrHoliday = isSaturdayFromExisting || isSundayFromExisting || !!currentHolidayFromExisting;
-        const isEligibleForCompOff = isWeekendOrHoliday && isITDeptFromExisting && isFTFromExisting;
+        // CRITICAL: Strictly enforce synchronization rules for BOTH branches (Create/Update)
+        const hours = Number(existingRecord.totalHours || 0);
+        const recDate = new Date(existingRecord.workingDate);
+        const isSat = recDate.getDay() === 6;
+        const isSun2 = recDate.getDay() === 0;
+        const recDateStr = dayjs(recDate).format('YYYY-MM-DD');
+        const recHoliday = await this.masterHolidayService.findByDate(recDateStr);
+        const isNonWorkingDay = isSat || isSun2 || !!recHoliday;
 
-        if (isEligibleForCompOff && hoursFromExisting > 3 && hoursFromExisting <= 9) {
+        if (isNonWorkingDay && hours >= 1 && hours <= 9) {
+          existingRecord.status = AttendanceStatus.FULL_DAY;
+          existingRecord.firstHalf = WorkLocation.OFFICE;
+          existingRecord.secondHalf = WorkLocation.OFFICE;
+          this.logger.log(`[ATTENDANCE_CREATE] Enforced Full Day for non-working day (${hours}h)`);
+        } else if (isSat && hours > 3) {
           existingRecord.status = AttendanceStatus.FULL_DAY;
           existingRecord.firstHalf = WorkLocation.OFFICE;
           existingRecord.secondHalf = WorkLocation.OFFICE;
@@ -279,27 +274,28 @@ export class EmployeeAttendanceService {
           const isClear = existingRecord.totalHours === null;
 
 
-          let newStatus = isClear
-            ? (workingDateObj > today ? null : AttendanceStatus.NOT_UPDATED)
-            : (existingRecord.status &&
-              Object.values(AttendanceStatus).includes(existingRecord.status as any) &&
-              existingRecord.status !== AttendanceStatus.WEEKEND &&
-              existingRecord.status !== AttendanceStatus.HOLIDAY
-              ? (existingRecord.status as AttendanceStatus)
-              : AttendanceStatus.ABSENT); // Explicit 0 hours defaults to ABSENT, overriding Weekend/Holiday
-
+          // Logic for 0 or NULL hours
+          let newStatus: AttendanceStatus | null = null;
+          
           if (isClear) {
-            const dateStr = existingRecord.workingDate instanceof Date
-              ? existingRecord.workingDate.toISOString().split('T')[0]
-              : (existingRecord.workingDate as string).split('T')[0];
-
-            const holiday = await this.masterHolidayService.findByDate(dateStr);
-            if (holiday) {
-              newStatus = AttendanceStatus.HOLIDAY;
-            } else if (this.masterHolidayService.isWeekend(new Date(existingRecord.workingDate))) {
-              newStatus = AttendanceStatus.WEEKEND;
-            }
+            newStatus = workingDateObj > today ? null : AttendanceStatus.NOT_UPDATED;
+          } else {
+            // Explicit 0 hours
+            newStatus = AttendanceStatus.ABSENT;
           }
+
+          // Check if it's a non-working day regardless of 0/NULL (Safety Override)
+          const dateStr = dayjs(existingRecord.workingDate).format('YYYY-MM-DD');
+          const holiday = await this.masterHolidayService.findByDate(dateStr);
+          const isWeekend = this.masterHolidayService.isWeekend(new Date(existingRecord.workingDate));
+
+          if (holiday) {
+            newStatus = AttendanceStatus.HOLIDAY;
+          } else if (isWeekend) {
+            newStatus = AttendanceStatus.WEEKEND;
+          }
+
+          // Handled above
 
           existingRecord.status = newStatus;
 
@@ -365,21 +361,20 @@ export class EmployeeAttendanceService {
       }
 
       // CRITICAL: Strictly enforce synchronization rules for BOTH branches (Create/Update)
-      const hoursFromNew = Number(newAttendance.totalHours || 0);
-      const dateObjFromNew = new Date(newAttendance.workingDate);
-      const isSaturdayFromNew = dateObjFromNew.getDay() === 6;
-      const isSundayFromNew = dateObjFromNew.getDay() === 0;
-      const dateStrLocalFromNew = dayjs(dateObjFromNew).format('YYYY-MM-DD');
-      const currentHolidayFromNew = await this.masterHolidayService.findByDate(dateStrLocalFromNew);
-      
-      const empDetailFromNew = await this.employeeDetailsRepository.findOne({ where: { employeeId: newAttendance.employeeId } });
-      const isITDeptFromNew = empDetailFromNew?.department === Department.IT;
-      const isFTFromNew = empDetailFromNew?.employmentType === EmploymentType.FULL_TIMER;
+      const hours = Number(newAttendance.totalHours || 0);
+      const newDate = new Date(newAttendance.workingDate);
+      const isSat = newDate.getDay() === 6;
+      const isSun2 = newDate.getDay() === 0;
+      const newDateStr = dayjs(newDate).format('YYYY-MM-DD');
+      const newHoliday = await this.masterHolidayService.findByDate(newDateStr);
+      const isNonWorkingDay = isSat || isSun2 || !!newHoliday;
 
-      const isWeekendOrHoliday = isSaturdayFromNew || isSundayFromNew || !!currentHolidayFromNew;
-      const isEligibleForCompOff = isWeekendOrHoliday && isITDeptFromNew && isFTFromNew;
-
-      if (isEligibleForCompOff && hoursFromNew > 3 && hoursFromNew <= 9) {
+      if (isNonWorkingDay && hours >= 1 && hours <= 9) {
+        newAttendance.status = AttendanceStatus.FULL_DAY;
+        newAttendance.firstHalf = WorkLocation.OFFICE;
+        newAttendance.secondHalf = WorkLocation.OFFICE;
+        this.logger.log(`[ATTENDANCE_CREATE] Enforced Full Day for non-working day (${hours}h)`);
+      } else if (isSat && hours > 3) {
         newAttendance.status = AttendanceStatus.FULL_DAY;
         newAttendance.firstHalf = WorkLocation.OFFICE;
         newAttendance.secondHalf = WorkLocation.OFFICE;
@@ -401,27 +396,26 @@ export class EmployeeAttendanceService {
         newAttendance.status = AttendanceStatus.FULL_DAY;
         this.logger.log(`[ATTENDANCE_OVERWRITE] Enforced Full Day synchronization for NEW record (${hoursFromNew}h) with Office splits`);
       } else if (newAttendance.totalHours === 0 || newAttendance.totalHours === null) {
+        // Logic for 0 or NULL hours
+        let newStatus: AttendanceStatus | null = null;
         const isClear = newAttendance.totalHours === null;
-        let newStatus = isClear
-          ? (workingDateObj > today ? null : AttendanceStatus.NOT_UPDATED)
-          : (newAttendance.status &&
-            Object.values(AttendanceStatus).includes(newAttendance.status as any) &&
-            newAttendance.status !== AttendanceStatus.WEEKEND &&
-            newAttendance.status !== AttendanceStatus.HOLIDAY
-            ? (newAttendance.status as AttendanceStatus)
-            : AttendanceStatus.ABSENT); // Explicit 0 hours defaults to ABSENT, overriding Weekend/Holiday
 
         if (isClear) {
-          const dateStr = newAttendance.workingDate instanceof Date
-            ? newAttendance.workingDate.toISOString().split('T')[0]
-            : (newAttendance.workingDate as string).split('T')[0];
+          newStatus = workingDateObj > today ? null : AttendanceStatus.NOT_UPDATED;
+        } else {
+          // Explicit 0 hours
+          newStatus = AttendanceStatus.ABSENT;
+        }
 
-          const holiday = await this.masterHolidayService.findByDate(dateStr);
-          if (holiday) {
-            newStatus = AttendanceStatus.HOLIDAY;
-          } else if (this.masterHolidayService.isWeekend(new Date(newAttendance.workingDate))) {
-            newStatus = AttendanceStatus.WEEKEND;
-          }
+        // Check if it's a non-working day regardless of 0/NULL (Safety Override)
+        const dateStr = dayjs(newAttendance.workingDate).format('YYYY-MM-DD');
+        const holiday = await this.masterHolidayService.findByDate(dateStr);
+        const isWeekend = this.masterHolidayService.isWeekend(new Date(newAttendance.workingDate));
+
+        if (holiday) {
+          newStatus = AttendanceStatus.HOLIDAY;
+        } else if (isWeekend) {
+          newStatus = AttendanceStatus.WEEKEND;
         }
 
         newAttendance.status = newStatus;
@@ -826,31 +820,26 @@ export class EmployeeAttendanceService {
       }
 
       // --- Holiday/Weekend Blocking Logic (Start) ---
-      let dateStrLocal = dayjs(workingDateObj).format('YYYY-MM-DD');
-      let holiday = await this.masterHolidayService.findByDate(dateStrLocal);
-      let isSun = workingDateObj.getDay() === 0;
+      const dateStrLocal = dayjs(workingDateObj).format('YYYY-MM-DD');
+      const holiday = await this.masterHolidayService.findByDate(dateStrLocal);
+      const isSun = workingDateObj.getDay() === 0;
       const isSatLocal = workingDateObj.getDay() === 6;
 
       if (!isPrivileged) {
-        const detail = await this.employeeDetailsRepository.findOne({ where: { employeeId: attendance.employeeId } });
-        let isIT = detail?.department === Department.IT;
-        let isFullTimer = detail?.employmentType === EmploymentType.FULL_TIMER;
-
-        if (holiday && !(isIT && isFullTimer)) {
-          throw new BadRequestException('Attendance is blocked for Holidays.');
-        }
-        if (isSun && !(isIT && isFullTimer)) {
-          throw new BadRequestException('Attendance is blocked for Sundays.');
-        }
-        
         const incomingHours = updateDto.totalHours !== undefined && updateDto.totalHours !== null 
           ? Number(updateDto.totalHours) 
           : Number(attendance.totalHours || 0);
 
-        if ((isSatLocal || (isSun && isIT && isFullTimer) || (holiday && isIT && isFullTimer)) && incomingHours > 0) {
-          if (incomingHours < 4 || incomingHours > 9) {
-            const msg = isSatLocal ? 'Saturday' : (isSun ? 'Sunday' : 'Holiday');
-            throw new BadRequestException(`${msg} hours must be between 4 and 9.`);
+        if (holiday || isSun || isSatLocal) {
+          if (incomingHours === 0) {
+            throw new BadRequestException('Cannot mark absent (0 hours) on Weekends or Holidays.');
+          }
+          if (incomingHours !== null && incomingHours > 0) {
+            const minHours = isSatLocal ? 4 : 1;
+            if (incomingHours < minHours || incomingHours > 9) {
+              const dayType = isSatLocal ? 'Saturday' : isSun ? 'Sunday' : 'Holiday';
+              throw new BadRequestException(`${dayType} hours must be between ${minHours} and 9.`);
+            }
           }
         }
       }
@@ -896,7 +885,14 @@ export class EmployeeAttendanceService {
         const hours = Number(updateDto.totalHours);
 
         // STRICT OVERWRITE: If hours > 6 (or Weekend/Holiday >= 4), it's ALWAYS a Full Day with Office splits.
-        if (hours > 6 || (isWeekendOrHoliday && hours >= 4)) {
+        const dateObj = new Date(attendance.workingDate);
+        const isSat = dateObj.getDay() === 6;
+        const isSun = dateObj.getDay() === 0;
+        const dateStrLocal = dayjs(dateObj).format('YYYY-MM-DD');
+        const holiday = await this.masterHolidayService.findByDate(dateStrLocal);
+        const isWeekendOrHoliday = isSat || isSun || !!holiday;
+
+        if (hours > 6 || (isWeekendOrHoliday && hours >= 1)) {
           attendance.status = AttendanceStatus.FULL_DAY;
           updateDto.status = AttendanceStatus.FULL_DAY;
 
@@ -907,7 +903,7 @@ export class EmployeeAttendanceService {
 
           this.logger.log(`[ATTENDANCE_OVERWRITE] Synchronized Full Day (${hours}h) with Office splits`);
         }
-        // If hours is <= 6 and > 0 (and not a Full Day Saturday), it's Half Day.
+        // If hours is <= 6 and > 0 (and not a Weekend/Holiday Full Day), it's Half Day.
         else if (hours > 0 && hours <= 6 && !isWeekendOrHoliday) {
           attendance.status = AttendanceStatus.HALF_DAY;
           updateDto.status = AttendanceStatus.HALF_DAY;
@@ -915,22 +911,28 @@ export class EmployeeAttendanceService {
         }
         else if (updateDto.totalHours === 0 || updateDto.totalHours === null) {
           const isClear = updateDto.totalHours === null;
-          let newStatus = isClear
-            ? (workingDateObj > today ? null : AttendanceStatus.NOT_UPDATED)
-            : (updateDto.status && Object.values(AttendanceStatus).includes(updateDto.status as any)
-              ? (updateDto.status as AttendanceStatus)
-              : AttendanceStatus.ABSENT); // Explicit 0 hours defaults to ABSENT, skipping Weekend/Holiday check
+          // Logic for 0 or NULL hours
+          let newStatus: AttendanceStatus | null = null;
 
           if (isClear) {
-            const dateStr = dayjs(attendance.workingDate).format('YYYY-MM-DD');
-
-            holiday = await this.masterHolidayService.findByDate(dateStr);
-            if (holiday) {
-              newStatus = AttendanceStatus.HOLIDAY;
-            } else if (this.masterHolidayService.isWeekend(new Date(attendance.workingDate))) {
-              newStatus = AttendanceStatus.WEEKEND;
-            }
+            newStatus = workingDateObj > today ? null : AttendanceStatus.NOT_UPDATED;
+          } else {
+            // Explicit 0 hours
+            newStatus = AttendanceStatus.ABSENT;
           }
+
+          // Check if it's a non-working day regardless of 0/NULL (Safety Override)
+          const dateStr = dayjs(attendance.workingDate).format('YYYY-MM-DD');
+          const holiday = await this.masterHolidayService.findByDate(dateStr);
+          const isWeekend = this.masterHolidayService.isWeekend(new Date(attendance.workingDate));
+
+          if (holiday) {
+            newStatus = AttendanceStatus.HOLIDAY;
+          } else if (isWeekend) {
+            newStatus = AttendanceStatus.WEEKEND;
+          }
+
+          // Handled above
 
           attendance.status = newStatus;
           updateDto.status = newStatus;
@@ -1036,18 +1038,23 @@ export class EmployeeAttendanceService {
 
       const isSat = dateObj.getDay() === 6;
       const isSun = dateObj.getDay() === 0;
-      const holidayObj = await this.masterHolidayService.findByDate(dateStr);
-      const isWeekendOrHoliday = isSat || isSun || !!holidayObj;
+      const dateStrNorm = dayjs(dateObj).format('YYYY-MM-DD');
+      const isHoliday = await this.masterHolidayService.findByDate(dateStrNorm);
 
-      // 0. Primary Rule: Hours strictly dictate status if available
-      if (isWeekendOrHoliday && hours >= 4) {
+      // 0. Primary Rule: Hours strictly dictate status if available for Non-Working Days
+      if (isSat && hours >= 4 && hours <= 9) {
+        return AttendanceStatus.FULL_DAY;
+      }
+      if ((isSun || !!isHoliday) && hours >= 1 && hours <= 9) {
+        return AttendanceStatus.FULL_DAY;
+      }
+
+      // Default rules for standard work days
+      if (hours > 6) {
         return AttendanceStatus.FULL_DAY;
       }
       if (hours > 0 && hours <= 6 && !isWeekendOrHoliday) {
         return AttendanceStatus.HALF_DAY;
-      }
-      if (hours > 6) {
-        return AttendanceStatus.FULL_DAY;
       }
 
       // 1. Check Split-Day Logic if halves are provided (fallback/validation)
@@ -1360,6 +1367,8 @@ export class EmployeeAttendanceService {
       start.setHours(0, 0, 0, 0);
       const end = new Date(endInput.getFullYear(), endInput.getMonth(), endInput.getDate(), 23, 59, 59);
 
+      const allHolidays = await this.masterHolidayService.findAll();
+
       // Fetch all attendance records for this period from employee_attendance table
       const attendances = await this.employeeAttendanceRepository.find({
         where: {
@@ -1400,18 +1409,18 @@ export class EmployeeAttendanceService {
           sHalf.includes('comp off') ||
           sHalf === WorkLocationKeyword.COMP_OFF_LEAVE;
 
-        // Check for Full Leaves (1.0) and Half Days (0.5)
-        if (recordStatus === AttendanceStatus.LEAVE.toLowerCase() || recordStatus === 'absent' || isCompOff) {
-          if (isCompOff) {
-            stats.compOffLeaves += 1;
-          } else {
+        const dateStrLocal = dayjs(date).format('YYYY-MM-DD');
+
+        const day = date.getDay();
+        const isWeekend = day === 0 || day === 6;
+        const isHoliday = allHolidays.some(h => dayjs(h.date || (h as any).holidayDate).format('YYYY-MM-DD') === dateStrLocal);
+
+        // Check for Full Leaves (1.0) and Half Days (0.5), skip Weekends and Holidays
+        if (!isWeekend && !isHoliday) {
+          if (status === AttendanceStatus.LEAVE.toLowerCase() || status === AttendanceStatus.ABSENT.toLowerCase()) {
             stats.totalLeaves += 1;
           }
-        }
-        else if (recordStatus === AttendanceStatus.HALF_DAY.toLowerCase()) {
-          if (isCompOff) {
-            stats.compOffLeaves += 0.5;
-          } else {
+          else if (status === AttendanceStatus.HALF_DAY.toLowerCase()) {
             stats.totalLeaves += 0.5;
           }
         }
@@ -1458,6 +1467,8 @@ export class EmployeeAttendanceService {
       start.setHours(0, 0, 0, 0);
       const end = new Date(endInput.getFullYear(), endInput.getMonth(), endInput.getDate(), 23, 59, 59);
 
+      const allHolidays = await this.masterHolidayService.findAll();
+
       const attendances = await this.employeeAttendanceRepository.find({
         where: {
           employeeId,
@@ -1491,18 +1502,21 @@ export class EmployeeAttendanceService {
         const stats = monthlyStatsMap.get(key);
 
         // 1. If splits exist, use them (most accurate for half-days)
+        const dateStrLocal = dayjs(date).format('YYYY-MM-DD');
+
+        const day = date.getDay();
+        const isWeekend = day === 0 || day === 6;
+        const isHoliday = allHolidays.some(h => {
+          const hDateStr = dayjs(h.date || (h as any).holidayDate).format('YYYY-MM-DD');
+          return hDateStr === dateStrLocal;
+        });
+
         if (record.firstHalf || record.secondHalf) {
           const processHalf = (half: string | null) => {
             if (!half) return;
-            const h = half.toLowerCase().trim();
-            const isCompOffActivity = h.includes('comp off') || h === WorkLocationKeyword.COMP_OFF_LEAVE;
-            
-            if (h.includes(AttendanceStatus.LEAVE.toLowerCase()) || h.includes(AttendanceStatus.ABSENT.toLowerCase()) || isCompOffActivity) {
-              if (isCompOffActivity) {
-                stats.compOffLeaves += 0.5;
-              } else {
-                stats.totalLeaves += 0.5;
-              }
+            const h = half.toLowerCase();
+            if ((h.includes(AttendanceStatus.LEAVE.toLowerCase()) || h.includes(AttendanceStatus.ABSENT.toLowerCase())) && !isWeekend && !isHoliday) {
+              stats.totalLeaves += 0.5;
             } else if (h.includes(WorkLocation.WFH.toLowerCase()) || h.includes(WorkLocation.WORK_FROM_HOME.toLowerCase())) {
               stats.workFromHome += 0.5;
             } else if (h.includes(WorkLocation.CLIENT_VISIT.toLowerCase())) {
@@ -1515,16 +1529,17 @@ export class EmployeeAttendanceService {
           processHalf(record.firstHalf);
           processHalf(record.secondHalf);
         }
-        // 2. Fallback to status and totalHours if splits are missing
         else {
           const status = (record.status || '').toLowerCase();
           const hours = Number(record.totalHours || 0);
 
-          if (status === AttendanceStatus.LEAVE.toLowerCase() || status === AttendanceStatus.ABSENT.toLowerCase()) {
+          if ((status === AttendanceStatus.LEAVE.toLowerCase() || status === AttendanceStatus.ABSENT.toLowerCase()) && !isWeekend && !isHoliday) {
             stats.totalLeaves += 1;
           } else if (status === AttendanceStatus.HALF_DAY.toLowerCase()) {
             // If it's a half day but splits are missing, assume 0.5 Leave and 0.5 Office
-            stats.totalLeaves += 0.5;
+            if (!isWeekend && !isHoliday) {
+              stats.totalLeaves += 0.5;
+            }
             stats.office += 0.5;
           } else if (hours === 9 || status.includes(WorkLocation.PRESENT.toLowerCase()) || status.includes(AttendanceStatus.FULL_DAY.toLowerCase().split(' ')[0])) {
             // Default to Office if it's a full day without specific splits
@@ -1847,11 +1862,7 @@ export class EmployeeAttendanceService {
       // 4. Global holidays
       const yearHolidays = await this.masterHolidayService.findAll();
       const toLocalYMD = (dateInput: Date | string) => {
-        const date = new Date(dateInput);
-        const y = date.getFullYear();
-        const m = String(date.getMonth() + 1).padStart(2, '0');
-        const d = String(date.getDate()).padStart(2, '0');
-        return `${y}-${m}-${d}`;
+        return dayjs(dateInput).format('YYYY-MM-DD');
       };
       const holidayDates = new Set(yearHolidays.map(h => toLocalYMD(h.date || (h as any).holidayDate)));
 
@@ -1941,12 +1952,21 @@ export class EmployeeAttendanceService {
     this.logger.log(`Generating monthly report for ${month}/${year}. Filter Manager: ${managerName || 'None'}`);
     try {
       // 1. Fetch employees (filtered by manager if provided)
-      // We want all active employees for Admin, but only mapped employees (and themselves) for Manager
+      // Include ACTIVE and INACTIVE only if inactiveDate is in this month (so Excel shows them as Inactive for that month; from next month they are excluded)
       const query = this.employeeDetailsRepository
         .createQueryBuilder('employee');
 
+      const reportStartDate = new Date(year, month - 1, 1);
+      query.andWhere(
+        '(employee.userStatus = :activeStatus OR (employee.userStatus = :inactiveStatus AND employee.inactiveDate IS NOT NULL AND employee.inactiveDate >= :monthStart))',
+        {
+          activeStatus: UserStatus.ACTIVE,
+          inactiveStatus: UserStatus.INACTIVE,
+          monthStart: reportStartDate,
+        },
+      );
+
       if (managerName || managerId) {
-        query.andWhere('employee.userStatus = :userStatus', { userStatus: UserStatus.ACTIVE });
         query.leftJoin(
           ManagerMapping,
           'mm',
@@ -2094,8 +2114,13 @@ export class EmployeeAttendanceService {
         fgColor: { argb: 'ADD8E6' } // Light Blue for Holiday
       };
 
-      // Construct columns
-      const columns = ['Name']; // First column
+      const inactiveFill: ExcelJS.Fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FFCDD2' } // Light red for Inactive
+      };
+
+      // Construct columns: Name then date columns (no separate Status column; inactive shown in day cells as "Inactive" in light red)
       const dateHeaders = [''];
       const dayHeaders = ['Name'];
 
@@ -2139,13 +2164,11 @@ export class EmployeeAttendanceService {
       // Style Day Row
       dayRow.eachCell((cell, colNumber) => {
         if (colNumber === 1) {
-          cell.fill = headerFill; // Match other headers (Green) instead of Yellow
+          cell.fill = headerFill;
           cell.font = { bold: true };
         } else {
-          // Check if weekend based on header text? Easier to check date logic again
           const dayIndex = colNumber - 2; // array index
           const dateObj = new Date(year, month - 1, dayIndex + 1);
-          // Fix manual key
           const m = String(month).padStart(2, '0');
           const d = String(dayIndex + 1).padStart(2, '0');
           const dateKey = `${year}-${m}-${d}`;
@@ -2169,16 +2192,18 @@ export class EmployeeAttendanceService {
 
       // --- Data Rows ---
       for (const employee of employees) {
-        // Initialize row with name first
         const employeeName = employee.fullName || employee.employeeId || 'Unknown';
+        const inactiveDateStr = employee.userStatus === UserStatus.INACTIVE && employee.inactiveDate
+          ? dayjs(employee.inactiveDate).format('YYYY-MM-DD')
+          : null;
+
         const row = sheet.addRow([employeeName]);
 
         // Style the name cell (column 1)
         const nameCell = row.getCell(1);
-        // nameCell.fill = yellowFill; // Removed per user request
         nameCell.font = { bold: true };
         nameCell.alignment = { horizontal: 'left', vertical: 'middle' };
-        nameCell.value = employeeName; // Ensure value is set
+        nameCell.value = employeeName;
 
         // Loop through days
         for (let i = 0; i < daysInMonth; i++) {
@@ -2188,7 +2213,7 @@ export class EmployeeAttendanceService {
           const holidayName = holidayMap.get(dateKey);
           const isHoliday = !!holidayName;
 
-          const cell = row.getCell(i + 2); // +2 because 1-based and 1st col is Name
+          const cell = row.getCell(i + 2); // +2: col 1=Name, 2+=days
 
           const empAttendanceMap = attendanceMap.get(employee.employeeId);
           const record = empAttendanceMap?.get(dateKey);
@@ -2301,7 +2326,13 @@ export class EmployeeAttendanceService {
           // PRIORITY 4: Future / Past Logic - for weekdays with no record
           const today = dayjs().format('YYYY-MM-DD');
 
-          if (dateKey > today) {
+          if (inactiveDateStr && dateKey >= inactiveDateStr) {
+            // On or after inactive date -> show "Inactive" in light red (instead of Not Updated)
+            cell.value = 'Inactive';
+            cell.fill = inactiveFill;
+            cell.font = { color: { argb: 'B71C1C' }, size: 10 }; // Dark red text, slightly smaller
+            cell.alignment = { horizontal: 'center' };
+          } else if (dateKey > today) {
             // Future -> "Upcoming"
             cell.value = AttendanceStatus.UPCOMING;
             cell.font = { italic: true, color: { argb: '808080' } }; // Grey
@@ -2444,8 +2475,8 @@ export class EmployeeAttendanceService {
             }
 
             const dateKey = dayjs(tempDate).format('YYYY-MM-DD');
-            const record = attendanceRecords.find(r => dayjs(r.workingDate).format('YYYY-MM-DD') === dateKey);
             const dayName = tempDate.toLocaleDateString('en-US', { weekday: 'long' });
+            const record = attendanceRecords.find(r => dayjs(r.workingDate).format('YYYY-MM-DD') === dateKey);
             const holiday = holidayMap.get(dateKey);
 
             let status = '';

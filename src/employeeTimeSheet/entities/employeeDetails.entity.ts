@@ -59,6 +59,10 @@ export class EmployeeDetails extends BaseEntity {
   })
   userStatus: UserStatus;
 
+  /** Date when employee was set to INACTIVE; used to show them only in that month's timesheet/export, then hide from next month. */
+  @Column({ name: 'inactive_date', type: 'date', nullable: true })
+  inactiveDate: Date | null;
+
   @Column({
     name: 'gender',
     type: 'enum',

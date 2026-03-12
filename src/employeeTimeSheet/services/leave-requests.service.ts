@@ -4428,6 +4428,11 @@ export class LeaveRequestsService {
         list.push(rec);
       });
 
+      const holidays = await this.masterHolidayRepository.find();
+      const holidayDates = new Set(
+        holidays.map((h) => dayjs(h.date).format('YYYY-MM-DD')),
+      );
+
       for (let curYear = calculationStartYear; curYear <= year; curYear++) {
         ytdUsed = 0;
         ytdLop = 0;
@@ -4473,7 +4478,15 @@ export class LeaveRequestsService {
           const attendance = attendanceMap.get(`${curYear}-${m}`) || [];
           const monthlyUsage = attendance.reduce((acc, rec) => {
             let dailyUsage = 0;
-            const status = (rec.status || '').toLowerCase().trim();
+            const status = (rec.status || '').toLowerCase();
+
+            // EXCLUSION: Do not count leave usage for weekends or holidays
+            const recDate = dayjs(rec.workingDate);
+            const isWknd = recDate.day() === 0 || recDate.day() === 6;
+            const isHol = holidayDates.has(recDate.format('YYYY-MM-DD'));
+
+            if (isWknd || isHol) return acc;
+
             if (rec.firstHalf || rec.secondHalf) {
               const processHalf = (half: string | null) => {
                 if (!half) return 0;

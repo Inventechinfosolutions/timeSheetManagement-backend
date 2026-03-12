@@ -9,6 +9,7 @@ import { FileService } from '../../common/core/utils/fileType.utils';
 import { EntityType, ReferenceType } from '../../common/document-uploader/models/documentmetainfo.model';
 import { Readable } from 'stream';
 import { UserType } from 'src/users/enums/user-type.enum';
+import { NO_CACHE_HEADERS } from '../../common/utils/no-cache-headers';
 
 @Controller('leave-requests')
 export class LeaveRequestsController {
@@ -594,6 +595,7 @@ export class LeaveRequestsController {
       const dataStream = await this.documentUploaderService.downloadFile(key);
 
       res.set({
+        ...NO_CACHE_HEADERS,
         'Content-Type': metaData.mimetype,
         'Content-Disposition': `attachment; filename="${metaData.filename}"`,
         'Content-Length': dataStream.ContentLength || undefined,
@@ -633,6 +635,7 @@ export class LeaveRequestsController {
       const dataStream = await this.documentUploaderService.downloadFile(key);
 
       res.set({
+        ...NO_CACHE_HEADERS,
         'Content-Type': metaData.mimetype,
         'Content-Disposition': `inline; filename="${metaData.filename}"`,
         'Content-Length': dataStream.ContentLength || undefined,
