@@ -23,6 +23,9 @@ import { EmailModule } from '../email/email.module';
 import { LeaveRequest } from './entities/leave-request.entity';
 import { LeaveRequestsController } from './controllers/leave-requests.controller';
 import { LeaveRequestsService } from './services/leave-requests.service';
+import { Resignation } from './entities/resignation.entity';
+import { ResignationController } from './controllers/resignation.controller';
+import { ResignationService } from './services/resignation.service';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { FileService } from '../common/core/utils/fileType.utils';
 import { Notification } from '../notifications/entities/notification.entity';
@@ -35,6 +38,7 @@ import { Notification } from '../notifications/entities/notification.entity';
       User, 
       TimesheetBlocker,
       LeaveRequest,
+      Resignation,
       DocumentMetaInfo,
       ManagerMapping,
       MasterHolidays,
@@ -53,13 +57,15 @@ import { Notification } from '../notifications/entities/notification.entity';
     EmployeeLinkController, 
     TimesheetBlockerController,
     LeaveRequestsController,
+    ResignationController,
   ],
   providers: [
-    EmployeeAttendanceService, 
-    EmployeeDetailsService, 
-    EmployeeLinkService, 
+    EmployeeAttendanceService,
+    EmployeeDetailsService,
+    EmployeeLinkService,
     TimesheetBlockerService,
     LeaveRequestsService,
+    ResignationService,
     FileService,
   ],
   exports: [EmployeeDetailsService, EmployeeLinkService],
