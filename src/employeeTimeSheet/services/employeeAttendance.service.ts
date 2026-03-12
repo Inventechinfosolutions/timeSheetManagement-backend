@@ -1898,12 +1898,21 @@ export class EmployeeAttendanceService {
     this.logger.log(`Generating monthly report for ${month}/${year}. Filter Manager: ${managerName || 'None'}`);
     try {
       // 1. Fetch employees (filtered by manager if provided)
-      // We want all active employees for Admin, but only mapped employees (and themselves) for Manager
+      // Include ACTIVE and INACTIVE only if inactiveDate is in this month (so Excel shows them as Inactive for that month; from next month they are excluded)
       const query = this.employeeDetailsRepository
         .createQueryBuilder('employee');
 
+      query.andWhere(
+        '(employee.userStatus = :activeStatus OR (employee.userStatus = :inactiveStatus AND employee.inactiveDate IS NOT NULL AND MONTH(employee.inactiveDate) = :reportMonth AND YEAR(employee.inactiveDate) = :reportYear))',
+        {
+          activeStatus: UserStatus.ACTIVE,
+          inactiveStatus: UserStatus.INACTIVE,
+          reportMonth: month,
+          reportYear: year,
+        },
+      );
+
       if (managerName || managerId) {
-        query.andWhere('employee.userStatus = :userStatus', { userStatus: UserStatus.ACTIVE });
         query.leftJoin(
           ManagerMapping,
           'mm',
@@ -2051,8 +2060,13 @@ export class EmployeeAttendanceService {
         fgColor: { argb: 'ADD8E6' } // Light Blue for Holiday
       };
 
-      // Construct columns
-      const columns = ['Name']; // First column
+      const inactiveFill: ExcelJS.Fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FFCDD2' } // Light red for Inactive
+      };
+
+      // Construct columns: Name then date columns (no separate Status column; inactive shown in day cells as "Inactive" in light red)
       const dateHeaders = [''];
       const dayHeaders = ['Name'];
 
@@ -2096,13 +2110,11 @@ export class EmployeeAttendanceService {
       // Style Day Row
       dayRow.eachCell((cell, colNumber) => {
         if (colNumber === 1) {
-          cell.fill = headerFill; // Match other headers (Green) instead of Yellow
+          cell.fill = headerFill;
           cell.font = { bold: true };
         } else {
-          // Check if weekend based on header text? Easier to check date logic again
           const dayIndex = colNumber - 2; // array index
           const dateObj = new Date(year, month - 1, dayIndex + 1);
-          // Fix manual key
           const m = String(month).padStart(2, '0');
           const d = String(dayIndex + 1).padStart(2, '0');
           const dateKey = `${year}-${m}-${d}`;
@@ -2126,16 +2138,18 @@ export class EmployeeAttendanceService {
 
       // --- Data Rows ---
       for (const employee of employees) {
-        // Initialize row with name first
         const employeeName = employee.fullName || employee.employeeId || 'Unknown';
+        const inactiveDateStr = employee.userStatus === UserStatus.INACTIVE && employee.inactiveDate
+          ? dayjs(employee.inactiveDate).format('YYYY-MM-DD')
+          : null;
+
         const row = sheet.addRow([employeeName]);
 
         // Style the name cell (column 1)
         const nameCell = row.getCell(1);
-        // nameCell.fill = yellowFill; // Removed per user request
         nameCell.font = { bold: true };
         nameCell.alignment = { horizontal: 'left', vertical: 'middle' };
-        nameCell.value = employeeName; // Ensure value is set
+        nameCell.value = employeeName;
 
         // Loop through days
         for (let i = 0; i < daysInMonth; i++) {
@@ -2145,7 +2159,7 @@ export class EmployeeAttendanceService {
           const holidayName = holidayMap.get(dateKey);
           const isHoliday = !!holidayName;
 
-          const cell = row.getCell(i + 2); // +2 because 1-based and 1st col is Name
+          const cell = row.getCell(i + 2); // +2: col 1=Name, 2+=days
 
           const empAttendanceMap = attendanceMap.get(employee.employeeId);
           const record = empAttendanceMap?.get(dateKey);
@@ -2262,6 +2276,12 @@ export class EmployeeAttendanceService {
             // Future -> "Upcoming"
             cell.value = AttendanceStatus.UPCOMING;
             cell.font = { italic: true, color: { argb: '808080' } }; // Grey
+            cell.alignment = { horizontal: 'center' };
+          } else if (inactiveDateStr && dateKey >= inactiveDateStr) {
+            // On or after inactive date -> show "Inactive" in light red (instead of Not Updated)
+            cell.value = 'Inactive';
+            cell.fill = inactiveFill;
+            cell.font = { color: { argb: 'B71C1C' }, size: 10 }; // Dark red text, slightly smaller
             cell.alignment = { horizontal: 'center' };
           } else {
             // Past/Today weekday with NO record -> "Not Updated"
