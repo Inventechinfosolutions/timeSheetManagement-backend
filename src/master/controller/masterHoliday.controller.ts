@@ -32,6 +32,7 @@ import { EntityType, ReferenceType } from '../../common/document-uploader/models
 import { FileService } from '../../common/core/utils/fileType.utils';
 import { DocumentUploaderService } from '../../common/document-uploader/services/document-uploader.service';
 import { Readable } from 'stream';
+import { NO_CACHE_HEADERS } from '../../common/utils/no-cache-headers';
 
 @ApiTags('Master Holidays')
 @ApiBearerAuth()
@@ -173,6 +174,7 @@ export class MasterHolidayController {
       const dataStream = await this.documentUploaderService.downloadFile(key);
 
       res.set({
+        ...NO_CACHE_HEADERS,
         'Content-Type': metaData.mimetype,
         'Content-Disposition': `attachment; filename="${metaData.filename}"`,
         'Content-Length': dataStream.ContentLength || undefined,

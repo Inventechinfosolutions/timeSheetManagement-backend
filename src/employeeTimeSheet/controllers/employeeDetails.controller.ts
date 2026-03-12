@@ -27,6 +27,7 @@ import { EmployeeDetailsDto } from '../dto/employeeDetails.dto';
 import { ResetPasswordDto } from '../dto/resetPassword.dto';
 import { BulkUploadResultDto } from '../dto/bulk-upload-result.dto';
 import { EmployeeDetailsService } from '../services/employeeDetails.service';
+import { NO_CACHE_HEADERS } from '../../common/utils/no-cache-headers';
 import {
   ApiBadRequestResponse,
   ApiBody,
@@ -446,6 +447,7 @@ export class EmployeeDetailsController {
       const { stream, meta } = await this.employeeDetailsService.getProfileImageStream(employee.id);
 
       res.set({
+        ...NO_CACHE_HEADERS,
         'Content-Type': meta.mimetype || 'image/jpeg',
         'Content-Disposition': `inline; filename="${meta.filename || 'profile.jpg'}"`,
       });
