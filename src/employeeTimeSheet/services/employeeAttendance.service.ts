@@ -1902,13 +1902,13 @@ export class EmployeeAttendanceService {
       const query = this.employeeDetailsRepository
         .createQueryBuilder('employee');
 
+      const reportStartDate = new Date(year, month - 1, 1);
       query.andWhere(
-        '(employee.userStatus = :activeStatus OR (employee.userStatus = :inactiveStatus AND employee.inactiveDate IS NOT NULL AND MONTH(employee.inactiveDate) = :reportMonth AND YEAR(employee.inactiveDate) = :reportYear))',
+        '(employee.userStatus = :activeStatus OR (employee.userStatus = :inactiveStatus AND employee.inactiveDate IS NOT NULL AND employee.inactiveDate >= :monthStart))',
         {
           activeStatus: UserStatus.ACTIVE,
           inactiveStatus: UserStatus.INACTIVE,
-          reportMonth: month,
-          reportYear: year,
+          monthStart: reportStartDate,
         },
       );
 
@@ -2272,16 +2272,16 @@ export class EmployeeAttendanceService {
           // PRIORITY 4: Future / Past Logic - for weekdays with no record
           const today = dayjs().format('YYYY-MM-DD');
 
-          if (dateKey > today) {
-            // Future -> "Upcoming"
-            cell.value = AttendanceStatus.UPCOMING;
-            cell.font = { italic: true, color: { argb: '808080' } }; // Grey
-            cell.alignment = { horizontal: 'center' };
-          } else if (inactiveDateStr && dateKey >= inactiveDateStr) {
+          if (inactiveDateStr && dateKey >= inactiveDateStr) {
             // On or after inactive date -> show "Inactive" in light red (instead of Not Updated)
             cell.value = 'Inactive';
             cell.fill = inactiveFill;
             cell.font = { color: { argb: 'B71C1C' }, size: 10 }; // Dark red text, slightly smaller
+            cell.alignment = { horizontal: 'center' };
+          } else if (dateKey > today) {
+            // Future -> "Upcoming"
+            cell.value = AttendanceStatus.UPCOMING;
+            cell.font = { italic: true, color: { argb: '808080' } }; // Grey
             cell.alignment = { horizontal: 'center' };
           } else {
             // Past/Today weekday with NO record -> "Not Updated"
