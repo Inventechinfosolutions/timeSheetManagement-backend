@@ -28,6 +28,7 @@ import { AttendanceStatus } from '../enums/attendance-status.enum';
 import { LeaveRequestStatus } from '../enums/leave-notification-status.enum';
 import { EmployeeDetails } from '../entities/employeeDetails.entity';
 import { EmploymentType } from '../enums/employment-type.enum';
+import { Department } from '../enums/department.enum';
 import { EmailService } from '../../email/email.service';
 import { DocumentUploaderService } from '../../common/document-uploader/services/document-uploader.service';
 import { LeaveRequestType } from '../enums/leave-request-type.enum';
@@ -57,6 +58,7 @@ import { User } from '../../users/entities/user.entity';
 import { NotificationsService } from '../../notifications/Services/notifications.service';
 import { MasterHolidays } from '../../master/models/master-holidays.entity';
 import { LeaveRequestDto } from '../dto/leave-request.dto';
+import { CompOffService } from './comp-off.service';
 
 @Injectable()
 export class LeaveRequestsService {
@@ -193,6 +195,7 @@ export class LeaveRequestsService {
     private notificationsService: NotificationsService,
     private employeeAttendanceService: EmployeeAttendanceService,
     private configService: ConfigService,
+    private compOffService: CompOffService,
   ) {}
 
   // Helper to check if holiday
@@ -280,6 +283,15 @@ export class LeaveRequestsService {
       `Starting creation of leave request for employee: ${data.employeeId}, Type: ${data.requestType}`,
     );
     try {
+      // COMP-OFF: Eligibility gate — only IT Full-Timers can apply Comp Off
+      if (data.requestType === LeaveRequestType.COMP_OFF) {
+        const employee = await this.employeeDetailsRepository.findOne({ where: { employeeId: data.employeeId } });
+        if (!employee || employee.department !== Department.IT || employee.employmentType !== EmploymentType.FULL_TIMER) {
+          throw new ForbiddenException('Comp Off benefits are only available for employees in the Information Technology department with Full Time status.');
+        }
+      }
+      // END COMP-OFF eligibility gate
+
       // Check for overlapping dates based on request type
       if (data.fromDate && data.toDate && data.requestType) {
         this.logger.debug(
@@ -449,11 +461,14 @@ export class LeaveRequestsService {
 
       // --- LOGIC: Populate firstHalf and secondHalf ---
       if (data.isHalfDay) {
+        // COMP-OFF: Use COMP_OFF_LEAVE keyword for comp-off splits
         const mainType =
-          (data.requestType === LeaveRequestType.APPLY_LEAVE ||
-          data.requestType === LeaveRequestType.HALF_DAY
-            ? AttendanceStatus.LEAVE
-            : data.requestType) || WorkLocation.OFFICE;
+          data.requestType === LeaveRequestType.COMP_OFF
+            ? WorkLocation.COMP_OFF_LEAVE
+            : (data.requestType === LeaveRequestType.APPLY_LEAVE ||
+              data.requestType === LeaveRequestType.HALF_DAY
+                ? AttendanceStatus.LEAVE
+                : data.requestType) || WorkLocation.OFFICE;
         const otherHalf = data.otherHalfType || WorkLocation.OFFICE;
 
         if (data.halfDayType === HalfDayType.FIRST_HALF) {
@@ -464,11 +479,14 @@ export class LeaveRequestsService {
           data.secondHalf = mainType;
         }
       } else {
+        // COMP-OFF: Use COMP_OFF_LEAVE keyword for comp-off splits
         const mainType =
-          (data.requestType === LeaveRequestType.APPLY_LEAVE ||
-          data.requestType === LeaveRequestType.HALF_DAY
-            ? AttendanceStatus.LEAVE
-            : data.requestType) || WorkLocation.OFFICE;
+          data.requestType === LeaveRequestType.COMP_OFF
+            ? WorkLocation.COMP_OFF_LEAVE
+            : (data.requestType === LeaveRequestType.APPLY_LEAVE ||
+              data.requestType === LeaveRequestType.HALF_DAY
+                ? AttendanceStatus.LEAVE
+                : data.requestType) || WorkLocation.OFFICE;
         data.firstHalf = mainType;
         data.secondHalf = mainType;
       }
@@ -485,6 +503,41 @@ export class LeaveRequestsService {
       this.logger.log(
         `[CREATE] Successfully saved leave request ID: ${savedRequest.id} for employee: ${data.employeeId}`,
       );
+
+      // COMP-OFF: Mark selected credits as PENDING after request is saved
+      if (data.requestType === LeaveRequestType.COMP_OFF && (data as any).compOffDates) {
+        try {
+          const compOffDateArray = typeof (data as any).compOffDates === 'string'
+            ? JSON.parse((data as any).compOffDates)
+            : (data as any).compOffDates;
+
+          let workingDateArray: string[] = [];
+          if ((data as any).availableDates) {
+            try { workingDateArray = JSON.parse((data as any).availableDates); } catch (e) {}
+          }
+
+          if (Array.isArray(compOffDateArray) && compOffDateArray.length > 0) {
+            const durationPerDay = data.isHalfDay ? 0.5 : 1.0;
+            let halfDayLabel = 'Full';
+            if (data.isHalfDay) {
+              if (data.halfDayType === HalfDayType.FIRST_HALF) halfDayLabel = 'First Half';
+              else if (data.halfDayType === HalfDayType.SECOND_HALF) halfDayLabel = 'Second Half';
+              else halfDayLabel = 'Half Day';
+            }
+            await this.compOffService.markAsPending(
+              data.employeeId,
+              compOffDateArray,
+              workingDateArray,
+              durationPerDay,
+              savedRequest.id,
+              halfDayLabel,
+            );
+          }
+        } catch (e) {
+          this.logger.warn(`[CREATE] Failed to handle CompOff markAsPending: ${e.message}`);
+        }
+      }
+      // END COMP-OFF markAsPending
 
       // Link documents to the saved request.
       // Strategy A (precise): when the frontend sends explicit documentKeys (IDs),
@@ -1896,6 +1949,14 @@ export class LeaveRequestsService {
               totalHours: calculatedHours,
             });
           }
+
+          // COMP-OFF: Consume credits after all attendance records are written
+          if (reqType === LeaveRequestType.COMP_OFF.toLowerCase()) {
+            await this.compOffService.consumeCompOffs(request.id);
+            this.logger.log(`[UPDATE_STATUS] Consumed Comp Off day(s) for ${request.employeeId} via leaveRequestId ${request.id}`);
+          }
+          // END COMP-OFF consume
+
         } catch (e) {
           this.logger.error(
             `[UPDATE_STATUS] Error in approval automation: ${e.message}`,
@@ -1960,6 +2021,16 @@ export class LeaveRequestsService {
                 affectedCount: result.affected,
               });
             }
+
+            // COMP-OFF: Restore credits on rejection/cancellation
+            if (
+              request.requestType === LeaveRequestType.COMP_OFF ||
+              String(request.requestType).toLowerCase() === LeaveRequestType.COMP_OFF.toLowerCase()
+            ) {
+              await this.compOffService.restoreCompOffs(id);
+              this.logger.log(`[UPDATE_STATUS] Restored Comp Off credits for leaveRequestId: ${id}`);
+            }
+            // END COMP-OFF restore
           }
         } catch (err) {
           this.logger.error(

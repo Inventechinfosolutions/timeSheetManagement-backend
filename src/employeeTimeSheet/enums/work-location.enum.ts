@@ -4,6 +4,7 @@ export enum WorkLocation {
   CLIENT_VISIT = 'Client Visit',
   OFFICE = 'Office',
   PRESENT = 'Present',
+  COMP_OFF_LEAVE = 'Comp-Off Leave',
 }
 
 export enum WorkLocationKeyword {
@@ -12,4 +13,5 @@ export enum WorkLocationKeyword {
   CLIENT_VISIT = 'client visit',
   OFFICE = 'office',
   PRESENT = 'present',
+  COMP_OFF_LEAVE = 'comp-off leave',
 }

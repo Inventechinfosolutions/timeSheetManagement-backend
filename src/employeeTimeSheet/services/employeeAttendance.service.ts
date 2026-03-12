@@ -21,6 +21,9 @@ import { EmployeeAttendanceDto } from '../dto/employeeAttendance.dto';
 import { MasterHolidayService } from '../../master/service/master-holiday.service';
 import { TimesheetBlockerService } from './timesheetBlocker.service';
 import { EmployeeDetails } from '../entities/employeeDetails.entity';
+import { Department } from '../enums/department.enum';
+import { EmploymentType } from '../enums/employment-type.enum';
+import { CompOffService } from './comp-off.service';
 import { ManagerMapping, ManagerMappingStatus } from '../../managerMapping/entities/managerMapping.entity';
 import * as ExcelJS from 'exceljs';
 import PDFDocument from 'pdfkit';
@@ -41,6 +44,7 @@ export class EmployeeAttendanceService {
     private readonly employeeDetailsRepository: Repository<EmployeeDetails>,
     private readonly masterHolidayService: MasterHolidayService,
     private readonly blockerService: TimesheetBlockerService,
+    private readonly compOffService: CompOffService,
   ) { }
 
   /**
@@ -312,6 +316,21 @@ export class EmployeeAttendanceService {
         }
 
         const saved = await this.employeeAttendanceRepository.save(existingRecord);
+
+        // COMP-OFF: Earn or clear credit based on hours worked on non-working day
+        const hoursFromExisting = Number(saved.totalHours || 0);
+        const existingEmpDetail = await this.employeeDetailsRepository.findOne({ where: { employeeId: saved.employeeId } });
+        const isEligibleExisting = isNonWorkingDay
+          && existingEmpDetail?.department === Department.IT
+          && existingEmpDetail?.employmentType === EmploymentType.FULL_TIMER;
+        if (isEligibleExisting && hoursFromExisting >= 4 && hoursFromExisting <= 9) {
+          await this.compOffService.createOrUpdateCompOff(saved.employeeId, recDateStr, saved.id, hoursFromExisting);
+        } else if (isEligibleExisting && (hoursFromExisting === 0 || saved.totalHours === null)) {
+          await this.compOffService.deleteByAttendanceId(saved.id);
+          this.logger.log(`[COMP_OFF_DELETE] Cleared comp-off for attendanceId: ${saved.id}`);
+        }
+        // END COMP-OFF
+
         this.logger.log(`[ATTENDANCE_CREATE] Updated record ID: ${saved.id}, sourceRequestId after save: ${saved.sourceRequestId}`);
         return saved;
       }
@@ -424,6 +443,21 @@ export class EmployeeAttendanceService {
       }
 
       const saved = await this.employeeAttendanceRepository.save(newAttendance);
+
+      // COMP-OFF: Earn or clear credit based on hours worked on non-working day
+      const hoursFromNew = Number(saved.totalHours || 0);
+      const newEmpDetail = await this.employeeDetailsRepository.findOne({ where: { employeeId: saved.employeeId } });
+      const isEligibleNew = isNonWorkingDay
+        && newEmpDetail?.department === Department.IT
+        && newEmpDetail?.employmentType === EmploymentType.FULL_TIMER;
+      if (isEligibleNew && hoursFromNew >= 4 && hoursFromNew <= 9) {
+        await this.compOffService.createOrUpdateCompOff(saved.employeeId, newDateStr, saved.id, hoursFromNew);
+      } else if (isEligibleNew && (hoursFromNew === 0 || saved.totalHours === null)) {
+        await this.compOffService.deleteByAttendanceId(saved.id);
+        this.logger.log(`[COMP_OFF_DELETE] Cleared comp-off for attendanceId: ${saved.id}`);
+      }
+      // END COMP-OFF
+
       this.logger.log(`[ATTENDANCE_CREATE] Created attendance ID: ${saved.id}, sourceRequestId after save: ${saved.sourceRequestId}`);
 
       // Trigger monthStatus recalculation

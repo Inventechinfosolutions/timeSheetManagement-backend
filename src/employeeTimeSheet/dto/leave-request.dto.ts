@@ -85,4 +85,8 @@ export class LeaveRequestDto {
   @IsOptional()
   @IsString()
   availableDates?: string;
+
+  @IsOptional()
+  @IsString()
+  compOffDates?: string; // JSON-stringified array of comp-off credit dates
 }
