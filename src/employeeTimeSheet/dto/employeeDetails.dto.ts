@@ -6,9 +6,12 @@ import {
   IsString,
   MaxLength,
   IsEnum,
+  IsDateString,
 } from 'class-validator';
 import { Transform } from 'class-transformer';
 import { Department } from '../enums/department.enum';
+import { EmploymentType } from '../enums/employment-type.enum';
+import { Gender } from '../enums/gender.enum';
 import { UserType } from '../../users/enums/user-type.enum';
 
 export class EmployeeDetailsDto {
@@ -38,10 +41,20 @@ export class EmployeeDetailsDto {
   @Transform(({ value }) => value?.trim())
   designation: string;
 
+  /** FULL_TIMER = 18 leaves/year, INTERN = 12 leaves/year. If not set, inferred from designation (contains "intern"). */
+  @IsEnum(EmploymentType)
+  @IsOptional()
+  employmentType?: EmploymentType;
+
   @IsEmail()
   @IsNotEmpty()
   @MaxLength(255)
   email: string;
+
+  @IsNotEmpty()
+  @IsDateString()
+  joiningDate: Date;
+  
   @IsString()
   @IsNotEmpty()
   @MaxLength(255)
@@ -54,7 +67,15 @@ export class EmployeeDetailsDto {
   @IsOptional()
   confirmPassword?: string;
 
+  @IsEnum(Gender)
+  @IsOptional()
+  gender?: Gender;
+
   @IsEnum(UserType)
   @IsOptional()
   role?: UserType;
+
+  @IsString()
+  @IsOptional()
+  monthStatus?: string;
 }

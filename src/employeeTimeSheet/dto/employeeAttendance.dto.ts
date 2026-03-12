@@ -8,6 +8,7 @@ import {
   IsString,
 } from 'class-validator';
 import { AttendanceStatus } from '../enums/attendance-status.enum';
+import { WorkLocation } from '../enums/work-location.enum';
 
 export class EmployeeAttendanceDto {
   @IsNumber()
@@ -26,15 +27,26 @@ export class EmployeeAttendanceDto {
 
 
 
-  @IsNumber()
   @IsOptional()
-  totalHours: number;
+  totalHours?: number | null;
 
   @IsString()
   @IsOptional()
-  workLocation: string;
+  workLocation?: string | null;
 
   @IsEnum(AttendanceStatus)
   @IsOptional()
-  status: AttendanceStatus;
+  status: AttendanceStatus | string | null;
+
+  @IsNumber()
+  @IsOptional()
+  sourceRequestId: number | null;
+
+  @IsString()
+  @IsOptional()
+  firstHalf: string | null;
+
+  @IsString()
+  @IsOptional()
+  secondHalf: string | null;
 }

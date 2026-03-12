@@ -8,4 +8,5 @@ export class LoginResponse {
   refreshToken: string;
   resetRequired?: boolean;
   status?: string;
+  employeeId?: string;
 }

@@ -1,10 +1,13 @@
 import { Transform } from 'class-transformer';
 import {
   IsDateString,
+  IsEmail,
   IsNotEmpty,
   IsNumber,
   IsOptional,
   IsString,
+  IsArray,
+  ArrayMaxSize,
 } from 'class-validator';
 
 export class LeaveRequestDto {
@@ -47,4 +50,39 @@ export class LeaveRequestDto {
   @IsNumber()
   @IsOptional()
   duration?: number;
+
+  @IsString()
+  @IsOptional()
+  halfDayType?: string;
+
+  @IsString()
+  @IsOptional()
+  otherHalfType?: string;
+
+  @IsNotEmpty()
+  @IsOptional()
+  isHalfDay?: boolean;
+
+  @IsString()
+  @IsOptional()
+  firstHalf?: string;
+
+  @IsString()
+  @IsOptional()
+  secondHalf?: string;
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(20)
+  @IsEmail({}, { each: true })
+  ccEmails?: string[];
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  documentKeys?: string[];
+
+  @IsOptional()
+  @IsString()
+  availableDates?: string;
 }

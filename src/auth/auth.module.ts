@@ -23,8 +23,8 @@ import { EmployeeDetails } from '../employeeTimeSheet/entities/employeeDetails.e
     JwtModule.registerAsync({
       imports: [ConfigModule],
       useFactory: (configService: ConfigService): JwtModuleOptions => {
-        const secret = configService.get<string>('JWT_SECRET') || 'your-secret-key';
-        const expiresIn = configService.get<string>('JWT_EXPIRES_IN') || '7d';
+        const secret = configService.get<string>('JWT_ACCESS_SECRET') || configService.get<string>('JWT_SECRET') || 'your-secret-key';
+        const expiresIn = configService.get<string>('JWT_ACCESS_EXPIRES_IN') || configService.get<string>('JWT_EXPIRES_IN') || '5m';
         return {
           secret,
           signOptions: {
