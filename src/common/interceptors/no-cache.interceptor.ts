@@ -5,22 +5,18 @@ import {
   CallHandler,
 } from '@nestjs/common';
 import { Observable } from 'rxjs';
-import { tap } from 'rxjs/operators';
 import { Response } from 'express';
+import { NO_CACHE_HEADERS } from '../utils/no-cache-headers';
 
+/** Disable browser and proxy caching for all API responses to avoid stale data. */
 @Injectable()
 export class NoCacheInterceptor implements NestInterceptor {
   intercept(context: ExecutionContext, next: CallHandler): Observable<any> {
     const response = context.switchToHttp().getResponse<Response>();
-
-    response.setHeader(
-      'Cache-Control',
-      'no-store, no-cache, must-revalidate, proxy-revalidate',
-    );
-    response.setHeader('Pragma', 'no-cache');
-    response.setHeader('Expires', '0');
-    response.setHeader('Surrogate-Control', 'no-store');
-
+    Object.entries(NO_CACHE_HEADERS).forEach(([key, value]) => {
+      response.setHeader(key, value);
+    });
+    response.setHeader('X-Content-Type-Options', 'nosniff');
     return next.handle();
   }
 }

@@ -29,6 +29,7 @@ import {
 import { EmployeeAttendanceDto } from '../dto/employeeAttendance.dto';
 import { DownloadAttendanceDto } from '../dto/download-attendance.dto';
 import { EmployeeAttendanceService } from '../services/employeeAttendance.service';
+import { NO_CACHE_HEADERS } from '../../common/utils/no-cache-headers';
 
 @ApiTags('Employee Attendance')
 @Controller('employee-attendance')
@@ -69,6 +70,7 @@ export class EmployeeAttendanceController {
       );
 
       res.set({
+        ...NO_CACHE_HEADERS,
         'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
         'Content-Disposition': `attachment; filename=Attendance_${query.month}_${query.year}.xlsx`,
         'Content-Length': buffer.length,
@@ -115,6 +117,7 @@ export class EmployeeAttendanceController {
       );
 
       res.set({
+        ...NO_CACHE_HEADERS,
         'Content-Type': 'application/pdf',
         'Content-Disposition': `attachment; filename=Attendance_${targetEmployeeId}_${query.month}_${query.year}.pdf`,
         'Content-Length': buffer.length,

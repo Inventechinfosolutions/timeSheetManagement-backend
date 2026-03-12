@@ -60,12 +60,19 @@ function getEnvFiles(): string[] {
     CacheModule.registerAsync({
       isGlobal: true,
       imports: [ConfigModule],
-      useFactory: async (configService: ConfigService) => ({
-        store: redisStore,
-        host: configService.get('REDIS_HOST'),
-        port: configService.get('REDIS_PORT'),
-        ttl: 600,
-      }),
+      useFactory: async (configService: ConfigService) => {
+        const redisHost = configService.get<string>('REDIS_HOST');
+        if (redisHost && redisHost.trim() !== '') {
+          return {
+            store: redisStore,
+            host: redisHost,
+            port: configService.get<number>('REDIS_PORT') || 6379,
+            ttl: 600,
+          };
+        }
+        // No Redis: use in-memory store so app works and we avoid stale cache issues
+        return { ttl: 0 };
+      },
       inject: [ConfigService],
     }),
     ManagerMappingModule,
