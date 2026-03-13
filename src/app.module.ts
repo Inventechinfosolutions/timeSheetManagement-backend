@@ -24,6 +24,8 @@ import { NotificationsModule } from './notifications/notifications.module';
 import { CacheModule } from '@nestjs/cache-manager';
 import * as redisStore from 'cache-manager-redis-store';
 import { CachingUtil } from './common/utils/caching.util';
+import { ProjectsModule } from './projects/projects.module';
+import { Project } from './projects/entities/project.entity';
 
 function getEnvFiles(): string[] {
   const envPath = path.join(process.cwd(), '.env');
@@ -54,9 +56,10 @@ function getEnvFiles(): string[] {
     MasterModule,
     ManagerMappingModule,
     ScheduleModule.forRoot(),
-    TypeOrmModule.forFeature([EmployeeAttendance, EmployeeDetails, ManagerMapping]),
+    TypeOrmModule.forFeature([EmployeeAttendance, EmployeeDetails, ManagerMapping, Project]),
     MailModule,
     NotificationsModule,
+    ProjectsModule,
     CacheModule.registerAsync({
       isGlobal: true,
       imports: [ConfigModule],
