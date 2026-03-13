@@ -57,10 +57,18 @@ export class DocumentUploaderService {
   async deleteMinioDoc(key: string) {
     try {
       this.logger.log(`Attempting to delete document with key: ${key}`);
-      const isImageExists = await this.s3ClientService.getMetaData(key);
+      let isImageExists = false;
+      try {
+        const metadata = await this.s3ClientService.getMetaData(key);
+        isImageExists = !!metadata;
+      } catch (error) {
+        // If metadata fetch fails (likely 404), it means image is already gone
+        this.logger.warn(`Image already missing from storage for key: ${key}. Proceeding with database cleanup.`);
+        return { message: 'Image already missing, cleaning up record' };
+      }
+      
       if (!isImageExists) {
-        this.logger.warn(`Image not found for key: ${key}`);
-        throw new HttpException('Image not found', HttpStatus.NOT_FOUND);
+        return { message: 'Image already missing, cleaning up record' };
       }
       await this.s3ClientService.delete(key);
       this.logger.debug(`Successfully deleted image with key: ${key}`);
