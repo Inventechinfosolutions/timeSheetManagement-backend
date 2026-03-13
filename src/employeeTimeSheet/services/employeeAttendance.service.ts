@@ -24,6 +24,7 @@ import { EmployeeDetails } from '../entities/employeeDetails.entity';
 import { Department } from '../enums/department.enum';
 import { EmploymentType } from '../enums/employment-type.enum';
 import { CompOffService } from './comp-off.service';
+import { CompOffStatus } from '../enums/comp-off-status.enum';
 import { ManagerMapping, ManagerMappingStatus } from '../../managerMapping/entities/managerMapping.entity';
 import * as ExcelJS from 'exceljs';
 import PDFDocument from 'pdfkit';
@@ -244,13 +245,12 @@ export class EmployeeAttendanceService {
         const recHoliday = await this.masterHolidayService.findByDate(recDateStr);
         const isNonWorkingDay = isSat || isSun2 || !!recHoliday;
 
-        if (isNonWorkingDay && hours >= 1 && hours <= 9) {
+        const minHoursSync = isSat ? 4 : 1;
+        if (isNonWorkingDay && hours >= minHoursSync && hours <= 9) {
           existingRecord.status = AttendanceStatus.FULL_DAY;
           existingRecord.firstHalf = WorkLocation.OFFICE;
           existingRecord.secondHalf = WorkLocation.OFFICE;
           this.logger.log(`[ATTENDANCE_CREATE] Enforced Full Day for non-working day (${hours}h)`);
-        } else if (isSat && hours > 3) {
-          existingRecord.status = AttendanceStatus.FULL_DAY;
         } else if (hours > 0 && hours <= 6) {
           // Relaxed enforcement: Only set defaults if no source request is linked and splits are empty
           if (!existingRecord.sourceRequestId && (!existingRecord.firstHalf || !existingRecord.secondHalf)) {
@@ -317,17 +317,27 @@ export class EmployeeAttendanceService {
 
         const saved = await this.employeeAttendanceRepository.save(existingRecord);
 
-        // COMP-OFF: Earn or clear credit based on hours worked on non-working day
+        // COMP-OFF Protection: Don't let clear attendance if Comp-Off is already taken
         const hoursFromExisting = Number(saved.totalHours || 0);
+        const minCompOffHours = isSat ? 4 : 1;
+        const linkedCompOff = await this.compOffService.findByAttendanceId(saved.id);
+        if (linkedCompOff && (linkedCompOff.status === CompOffStatus.FULL_TAKEN || linkedCompOff.status === CompOffStatus.HALF_TAKEN)) {
+          if (hoursFromExisting < minCompOffHours || saved.totalHours === null) {
+            throw new BadRequestException('Cannot clear attendance because the associated Comp-Off has already been taken.');
+          }
+        }
+
+        // COMP-OFF: Earn or clear credit based on hours worked on non-working day
         const existingEmpDetail = await this.employeeDetailsRepository.findOne({ where: { employeeId: saved.employeeId } });
         const isEligibleExisting = isNonWorkingDay
           && existingEmpDetail?.department === Department.IT
           && existingEmpDetail?.employmentType === EmploymentType.FULL_TIMER;
-        if (isEligibleExisting && hoursFromExisting >= 4 && hoursFromExisting <= 9) {
+
+        if (isEligibleExisting && hoursFromExisting >= minCompOffHours && hoursFromExisting <= 9) {
           await this.compOffService.createOrUpdateCompOff(saved.employeeId, recDateStr, saved.id, hoursFromExisting);
         } else if (isEligibleExisting && (hoursFromExisting === 0 || saved.totalHours === null)) {
           await this.compOffService.deleteByAttendanceId(saved.id);
-          this.logger.log(`[COMP_OFF_DELETE] Cleared comp-off for attendanceId: ${saved.id}`);
+          this.logger.log(`[COMP_OFF_DELETE] Cleared comp-off for attendanceId: ${saved.id} (Create-Existing Branch)`);
         }
         // END COMP-OFF
 
@@ -375,13 +385,12 @@ export class EmployeeAttendanceService {
       const newHoliday = await this.masterHolidayService.findByDate(newDateStr);
       const isNonWorkingDay = isSat || isSun2 || !!newHoliday;
 
-      if (isNonWorkingDay && hours >= 1 && hours <= 9) {
+      const minHoursSyncNew = isSat ? 4 : 1;
+      if (isNonWorkingDay && hours >= minHoursSyncNew && hours <= 9) {
         newAttendance.status = AttendanceStatus.FULL_DAY;
         newAttendance.firstHalf = WorkLocation.OFFICE;
         newAttendance.secondHalf = WorkLocation.OFFICE;
         this.logger.log(`[ATTENDANCE_CREATE] Enforced Full Day for non-working day (${hours}h)`);
-      } else if (isSat && hours > 3) {
-        newAttendance.status = AttendanceStatus.FULL_DAY;
       } else if (hours > 0 && hours <= 6) {
         // Relaxed enforcement: Only set defaults if no source request is linked and splits are empty
         if (!newAttendance.sourceRequestId && (!newAttendance.firstHalf || !newAttendance.secondHalf)) {
@@ -450,7 +459,8 @@ export class EmployeeAttendanceService {
       const isEligibleNew = isNonWorkingDay
         && newEmpDetail?.department === Department.IT
         && newEmpDetail?.employmentType === EmploymentType.FULL_TIMER;
-      if (isEligibleNew && hoursFromNew >= 4 && hoursFromNew <= 9) {
+      const minCompOffHours = isSat ? 4 : 1;
+      if (isEligibleNew && hoursFromNew >= minCompOffHours && hoursFromNew <= 9) {
         await this.compOffService.createOrUpdateCompOff(saved.employeeId, newDateStr, saved.id, hoursFromNew);
       } else if (isEligibleNew && (hoursFromNew === 0 || saved.totalHours === null)) {
         await this.compOffService.deleteByAttendanceId(saved.id);
@@ -894,7 +904,8 @@ export class EmployeeAttendanceService {
         const holiday = await this.masterHolidayService.findByDate(dateStrLocal);
         const isWeekendOrHoliday = isSat || isSun || !!holiday;
 
-        if (hours > 6 || (isWeekendOrHoliday && hours >= 1)) {
+        const minHoursSyncUpdate = isSat ? 4 : 1;
+        if (hours > 6 || (isWeekendOrHoliday && hours >= minHoursSyncUpdate && hours <= 9)) {
           attendance.status = AttendanceStatus.FULL_DAY;
           updateDto.status = AttendanceStatus.FULL_DAY;
 
@@ -1001,6 +1012,37 @@ export class EmployeeAttendanceService {
       }
 
       const saved = await this.employeeAttendanceRepository.save(attendance);
+
+      // COMP-OFF: Earn or clear credit based on hours worked on non-working day
+      const dateObj = new Date(saved.workingDate);
+      const isSatLocal2 = dateObj.getDay() === 6;
+      const isSun2Value = dateObj.getDay() === 0;
+      const dateStrNorm = dayjs(dateObj).format('YYYY-MM-DD');
+      const holidayLocal = await this.masterHolidayService.findByDate(dateStrNorm);
+      const isNonWorkingDayLocal = isSatLocal2 || isSun2Value || !!holidayLocal;
+      const minCompOffHoursLocal = isSatLocal2 ? 4 : 1;
+      const hoursFromUpdate = Number(saved.totalHours || 0);
+
+      // Protection: Don't let clear attendance if Comp-Off is already taken
+      const linkedCompOffUpdate = await this.compOffService.findByAttendanceId(saved.id);
+      if (linkedCompOffUpdate && (linkedCompOffUpdate.status === CompOffStatus.FULL_TAKEN || linkedCompOffUpdate.status === CompOffStatus.HALF_TAKEN)) {
+        if (hoursFromUpdate < minCompOffHoursLocal || saved.totalHours === null) {
+          throw new BadRequestException('Cannot clear attendance because the associated Comp-Off has already been taken.');
+        }
+      }
+
+      const existingEmpDetailUpdate = await this.employeeDetailsRepository.findOne({ where: { employeeId: saved.employeeId } });
+      const isEligibleUpdate = isNonWorkingDayLocal
+        && existingEmpDetailUpdate?.department === Department.IT
+        && existingEmpDetailUpdate?.employmentType === EmploymentType.FULL_TIMER;
+
+      if (isEligibleUpdate && hoursFromUpdate >= minCompOffHoursLocal && hoursFromUpdate <= 9) {
+        await this.compOffService.createOrUpdateCompOff(saved.employeeId, dateStrNorm, saved.id, hoursFromUpdate);
+      } else if (isEligibleUpdate && (hoursFromUpdate === 0 || saved.totalHours === null)) {
+        await this.compOffService.deleteByAttendanceId(saved.id);
+        this.logger.log(`[COMP_OFF_DELETE] Cleared comp-off for attendanceId: ${saved.id} (Update Branch)`);
+      }
+      // END COMP-OFF
 
       // Trigger monthStatus recalculation
       this.triggerMonthStatusRecalc(saved.employeeId, saved.workingDate).catch(() => { });

@@ -1,5 +1,5 @@
 import { Entity, Column, ManyToOne, JoinColumn, PrimaryGeneratedColumn } from 'typeorm';
-import { BaseEntity } from '../../common/entities/base.entity';
+import { BaseEntity } from '../../common/core/models/base.entity';
 import { EmployeeDetails } from './employeeDetails.entity';
 import { EmployeeAttendance } from './employeeAttendance.entity';
 import { CompOffStatus } from '../enums/comp-off-status.enum';

@@ -13,8 +13,12 @@ export class CompOffService {
     private compOffRepository: Repository<CompOff>,
   ) {}
 
+  async findByAttendanceId(attendanceId: number) {
+    return await this.compOffRepository.findOne({ where: { attendanceId } });
+  }
+
   async createOrUpdateCompOff(employeeId: string, attendanceDate: string, attendanceId: number, hours: number) {
-    if (hours < 4 || hours > 9) return;
+    if (hours < 1 || hours > 9) return;
 
     let compOff = await this.compOffRepository.findOne({
       where: { employeeId, attendanceDate },
