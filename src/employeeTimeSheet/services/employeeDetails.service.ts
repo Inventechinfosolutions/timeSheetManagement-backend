@@ -1015,6 +1015,14 @@ export class EmployeeDetailsService {
     try {
       const employee = await this.getEmployeeById(employeeId); // Validate existence
 
+      // Automatically remove any existing profile photo before uploading a new one
+      try {
+        await this.removeProfileImage(employeeId);
+      } catch (e) {
+        // If removal fails or no image exists, just log and continue
+        this.logger.debug(`No previous profile image to cleanup for employee ${employeeId}`);
+      }
+
       const meta = new DocumentMetaInfo();
       meta.entityId = employeeId;
       meta.entityType = EntityType.EMPLOYEE;
@@ -1057,7 +1065,17 @@ export class EmployeeDetailsService {
       }
 
       for (const doc of docs) {
-        await this.documentUploaderService.deleteDoc(doc.key);
+        try {
+          await this.documentUploaderService.deleteDoc(doc.key);
+        } catch (error) {
+          // If it's already not found, we consider it a win (it's gone).
+          // Only log a warning instead of failing the whole thing.
+          if (error instanceof HttpException && error.getStatus() === HttpStatus.NOT_FOUND) {
+            this.logger.warn(`Document ${doc.key} was already missing during removal for employee ${employeeId}`);
+            continue;
+          }
+          throw error;
+        }
       }
 
       this.logger.log(`Profile image(s) removed for employee ID: ${employeeId}`);

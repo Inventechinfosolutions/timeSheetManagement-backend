@@ -162,7 +162,7 @@ export class S3ClientService implements OnModuleInit {
     if (!targetBucket) {
       throw new Error('Bucket name is required');
     }
-    this.logger.log(`Deleting ${objetName} from ${bucketName}`);
+    this.logger.log(`Deleting ${objetName} from ${targetBucket}`);
     try {
       const documents = await this.documentRepo.findOne({
         where: { id: objetName },
