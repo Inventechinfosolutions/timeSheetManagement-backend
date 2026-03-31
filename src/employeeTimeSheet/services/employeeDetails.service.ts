@@ -23,6 +23,7 @@ import { EmployeeLinkService } from './employeeLink.service';
 import { DocumentUploaderService } from '../../common/document-uploader/services/document-uploader.service';
 import { DocumentMetaInfo, EntityType, ReferenceType } from '../../common/document-uploader/models/documentmetainfo.model';
 import * as XLSX from 'xlsx';
+import * as ExcelJS from 'exceljs';
 import { BulkUploadResultDto, BulkUploadErrorDto } from '../dto/bulk-upload-result.dto';
 import { EmployeeAttendanceService } from './employeeAttendance.service';
 import { ManagerMapping, ManagerMappingStatus } from '../../managerMapping/entities/managerMapping.entity';
@@ -1389,6 +1390,44 @@ export class EmployeeDetailsService {
         error.message || 'Failed to process bulk upload',
         HttpStatus.INTERNAL_SERVER_ERROR
       );
+    }
+  }
+
+  async getBulkUploadTemplate(): Promise<Buffer> {
+    this.logger.log('Generating bulk upload template');
+    try {
+      const workbook = new ExcelJS.Workbook();
+      const worksheet = workbook.addWorksheet('Employee Template');
+
+      // Define headers exactly as expected by parseExcelFile / validateEmployeeData
+      worksheet.columns = [
+        { header: 'fullName', key: 'fullName', width: 25 },
+        { header: 'employeeId', key: 'employeeId', width: 15 },
+        { header: 'department', key: 'department', width: 20 },
+        { header: 'designation', key: 'designation', width: 20 },
+        { header: 'email', key: 'email', width: 25 },
+        { header: 'employmentType', key: 'employmentType', width: 15 },
+        { header: 'joiningDate', key: 'joiningDate', width: 15 },
+        { header: 'gender', key: 'gender', width: 10 },
+        { header: 'role', key: 'role', width: 15 },
+      ];
+
+      // Add a sample row
+      
+
+      // Style the header row
+      worksheet.getRow(1).font = { bold: true };
+      worksheet.getRow(1).fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FFE0E0E0' }
+      };
+
+      const buffer = await workbook.xlsx.writeBuffer();
+      return Buffer.from(buffer);
+    } catch (error) {
+      this.logger.error(`Error generating bulk upload template: ${error.message}`, error.stack);
+      throw new HttpException('Failed to generate template', HttpStatus.INTERNAL_SERVER_ERROR);
     }
   }
 }
