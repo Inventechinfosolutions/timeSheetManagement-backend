@@ -191,6 +191,7 @@ export class EmployeeLinkService {
       const hashedPassword = await bcrypt.hash(password, salt);
 
       employee.password = hashedPassword;
+      employee.lastLinkSentAt = new Date();
       await this.employeeDetailsRepository.save(employee);
 
       // Sync with User table (try exact match first, then lowercase for compatibility)
