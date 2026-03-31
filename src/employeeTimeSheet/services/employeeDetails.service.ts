@@ -118,15 +118,16 @@ export class EmployeeDetailsService {
           status: UserStatus.DRAFT,
           resetRequired: true,
         });
-        this.logger.log(`Associated user record created for employee: ${result.employeeId}`);
+        this.logger.log(`Associated user record created for employee: ${result.employeeId} in DRAFT state`);
       } catch (userError) {
         this.logger.error(`Failed to create associated user record: ${userError.message}`);
       }
 
-      // Generate activation link and credentials
-      const activationInfo = await this.employeeLinkService.generateActivationLink(result.employeeId);
+      // NO LONGER generating activation link immediately.
+      // Admin must click "Send Link" in the UI.
+      // const activationInfo = await this.employeeLinkService.generateActivationLink(result.employeeId);
 
-      this.logger.log(`Employee created and activation link generated for: ${result.employeeId}`);
+      this.logger.log(`Employee created in DRAFT state: ${result.employeeId}`);
 
       return {
         id: result.id,
@@ -136,10 +137,7 @@ export class EmployeeDetailsService {
         department: result.department,
         designation: result.designation,
         employmentType: result.employmentType ?? undefined,
-        loginId: activationInfo.loginId,
-        password: activationInfo.password,
-        activationLink: activationInfo.activationLink,
-        message: 'Employee registered successfully'
+        message: 'Employee registered successfully in DRAFT state. You must manually send the activation link from the list.'
       };
     } catch (error) {
       if (error instanceof HttpException) throw error;
@@ -646,6 +644,12 @@ export class EmployeeDetailsService {
 
       const { confirmPassword, ...updateFields } = updateData;
 
+      // Detect status change for synchronization
+      const statusChanged = updateFields.userStatus && updateFields.userStatus !== employee.userStatus;
+      if (statusChanged) {
+        await this.syncUserStatus(employee, updateFields.userStatus as UserStatus);
+      }
+
       // Handle intern to full-timer conversion automatic date stamping
       if (
         updateFields.employmentType === EmploymentType.FULL_TIMER &&
@@ -856,6 +860,32 @@ export class EmployeeDetailsService {
     return this.updateEmployee(id, updateData);
   }
 
+  /**
+   * Synchronize user status across EmployeeDetails and User entities.
+   * Updates inactiveDate and User table status.
+   */
+  private async syncUserStatus(employee: EmployeeDetails, newStatus: UserStatus): Promise<void> {
+    this.logger.log(`Syncing status for employee ${employee.employeeId} to ${newStatus}`);
+
+    // Update EmployeeDetails status fields
+    employee.userStatus = newStatus;
+    if (newStatus === UserStatus.INACTIVE) {
+      employee.inactiveDate = new Date();
+    } else if (newStatus === UserStatus.ACTIVE) {
+      employee.inactiveDate = null;
+    }
+
+    // Update corresponding User entity for login/auth
+    const user = await this.userRepository.findOne({
+      where: { loginId: employee.employeeId },
+    });
+    if (user) {
+      user.status = newStatus;
+      await this.userRepository.save(user);
+      this.logger.log(`User status synchronized for: ${employee.employeeId}`);
+    }
+  }
+
   async updateStatus(
     employeeId: string,
     status: string
@@ -864,29 +894,8 @@ export class EmployeeDetailsService {
       this.logger.log(`Updating status for employee ${employeeId} to ${status}`);
       const employee = await this.findByEmployeeId(employeeId);
 
-      // Update EmployeeDetails: set inactiveDate when marking INACTIVE, clear when ACTIVE
-      employee.userStatus = status as UserStatus;
-      if (status === UserStatus.INACTIVE) {
-        employee.inactiveDate = new Date();
-      } else if (status === UserStatus.ACTIVE) {
-        employee.inactiveDate = null;
-      }
+      await this.syncUserStatus(employee, status as UserStatus);
       await this.employeeDetailsRepository.save(employee);
-
-      // Update User entity
-      // Map status string to UserStatus enum if possible
-      let userStatus = UserStatus.ACTIVE;
-      if (status === UserStatus.INACTIVE) {
-        userStatus = UserStatus.INACTIVE;
-      } else if (status === UserStatus.ACTIVE) {
-        userStatus = UserStatus.ACTIVE;
-      }
-
-      const user = await this.userRepository.findOne({ where: { loginId: employeeId } });
-      if (user) {
-        user.status = userStatus;
-        await this.userRepository.save(user);
-      }
 
       return { message: 'Status updated successfully', status: employee.userStatus };
 
@@ -1308,7 +1317,7 @@ export class EmployeeDetailsService {
             : null;
           const userStatusVal = rowData.userStatus != null && String(rowData.userStatus).trim() !== ''
             ? (String(rowData.userStatus).trim().toUpperCase().replace(' ', '_') as UserStatus)
-            : UserStatus.ACTIVE;
+            : UserStatus.DRAFT;
           const joiningDateRaw = rowData.joiningDate ?? rowData.dateOfJoining ?? rowData['Joining Date'] ?? rowData['Date of Joining'];
           const conversionDateRaw = rowData.conversionDate ?? rowData['Conversion Date'] ?? rowData['Date of Conversion'];
           const joiningDateParsed = this.parseExcelDate(joiningDateRaw);
@@ -1324,7 +1333,7 @@ export class EmployeeDetailsService {
             employmentType: employmentTypeVal && Object.values(EmploymentType).includes(employmentTypeVal) ? employmentTypeVal : null,
             joiningDate: joiningDateParsed ?? undefined,
             conversionDate: conversionDateParsed ?? undefined,
-            userStatus: Object.values(UserStatus).includes(userStatusVal) ? userStatusVal : UserStatus.ACTIVE,
+            userStatus: Object.values(UserStatus).includes(userStatusVal) ? userStatusVal : UserStatus.DRAFT,
             gender: genderVal && Object.values(Gender).includes(genderVal) ? genderVal : undefined,
             role: roleVal && Object.values(UserType).includes(roleVal) ? roleVal : undefined,
           });
@@ -1343,16 +1352,10 @@ export class EmployeeDetailsService {
             });
           } catch (userError) {
             this.logger.warn(`Failed to create user for employee ${savedEmployee.employeeId}: ${userError.message}`);
-            // Consider if this should be a failure or just a warning. 
-            // Usually critical for login, but employee record IS created.
           }
 
-          // Generate activation link
-          try {
-            await this.employeeLinkService.generateActivationLink(savedEmployee.employeeId);
-          } catch (linkError) {
-            this.logger.warn(`Failed to generate activation link for ${savedEmployee.employeeId}: ${linkError.message}`);
-          }
+          // NO LONGER generating activation link during bulk upload.
+          // Admin must click the "Send Link" button in the Dashboard.
 
           result.successCount++;
           result.createdEmployees.push(savedEmployee.employeeId);
