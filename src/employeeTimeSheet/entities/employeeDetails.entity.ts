@@ -86,4 +86,7 @@ export class EmployeeDetails extends BaseEntity {
     default: MonthStatus.PENDING,
   })
   monthStatus: MonthStatus;
+  
+  @Column({ name: 'last_link_sent_at', type: 'timestamp', nullable: true })
+  lastLinkSentAt: Date | null;
 }

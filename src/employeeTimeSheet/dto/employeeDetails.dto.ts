@@ -13,6 +13,7 @@ import { Department } from '../enums/department.enum';
 import { EmploymentType } from '../enums/employment-type.enum';
 import { Gender } from '../enums/gender.enum';
 import { UserType } from '../../users/enums/user-type.enum';
+import { UserStatus } from '../../users/enums/user-status.enum';
 
 export class EmployeeDetailsDto {
   @IsOptional()
@@ -78,4 +79,8 @@ export class EmployeeDetailsDto {
   @IsString()
   @IsOptional()
   monthStatus?: string;
+
+  @IsEnum(UserStatus)
+  @IsOptional()
+  userStatus?: UserStatus;
 }

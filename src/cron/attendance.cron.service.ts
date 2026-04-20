@@ -2,7 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import dayjs from 'dayjs';
 import { Cron } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, Between } from 'typeorm';
+import { Repository, Between, IsNull } from 'typeorm';
 import { EmployeeAttendance } from '../employeeTimeSheet/entities/employeeAttendance.entity';
 import { AttendanceStatus } from '../employeeTimeSheet/enums/attendance-status.enum';
 import { EmployeeDetails } from '../employeeTimeSheet/entities/employeeDetails.entity';
@@ -40,12 +40,12 @@ export class AttendanceCronService {
    */
   private async isLastWorkingDayOfMonth(): Promise<boolean> {
     const today = new Date();
-    
+
     // 1. If today itself is a weekend or holiday, it cannot be a working day.
     const todayIsWeekend = today.getDay() === 0 || today.getDay() === 6;
     const todayDateStr = dayjs(today).format('YYYY-MM-DD');
     const todayIsHoliday = !!(await this.masterHolidayService.findByDate(todayDateStr));
-    
+
     if (todayIsWeekend || todayIsHoliday) {
       return false;
     }
@@ -58,12 +58,12 @@ export class AttendanceCronService {
       const isWeekend = check.getDay() === 0 || check.getDay() === 6;
       const dateStr = dayjs(check).format('YYYY-MM-DD');
       const isHoliday = !!(await this.masterHolidayService.findByDate(dateStr));
-      
+
       if (!isWeekend && !isHoliday) {
         // We found the very last true working day of the month!
         break;
       }
-      
+
       // Keep stepping backward
       check.setDate(check.getDate() - 1);
     }
@@ -387,7 +387,7 @@ export class AttendanceCronService {
         },
         {
           workingDate: Between(startOfMonth, endOfMonth),
-          status: null as any, // Include records with NULL status (cleared leaves)
+          status: IsNull(), // Include records with NULL status (cleared leaves)
         },
       ],
     });

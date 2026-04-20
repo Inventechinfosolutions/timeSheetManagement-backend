@@ -158,6 +158,27 @@ export class EmployeeDetailsController {
     }
   }
 
+  @Get('bulk-template')
+  @ApiOperation({ summary: 'Download Excel template for employee bulk upload' })
+  @ApiResponse({ status: 200, description: 'Excel template file' })
+  async downloadBulkTemplate(@Res() res: Response) {
+    try {
+      this.logger.log('Downloading employee bulk upload template');
+      const buffer = await this.employeeDetailsService.getBulkUploadTemplate();
+      
+      res.set({
+        'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        'Content-Disposition': 'attachment; filename="employee_bulk_upload_template.xlsx"',
+        'Content-Length': buffer.length,
+      });
+
+      res.send(buffer);
+    } catch (error) {
+      this.logger.error(`Error downloading bulk template: ${error.message}`, error.stack);
+      res.status(500).json({ message: 'Failed to generate template' });
+    }
+  }
+
   @Post(':employeeId/resend-activation')
   @ApiOperation({ summary: 'Resend activation link to employee' })
   @ApiParam({ name: 'employeeId', type: String, description: 'Employee String ID' })
