@@ -257,13 +257,20 @@ export class EmployeeAttendanceService {
           existingRecord.status = AttendanceStatus.HALF_DAY;
           this.logger.log(`[ATTENDANCE_CREATE] Synchronized Half Day status (<= 6h)`);
         } else if (hours === 9 || (isSat && hours > 3 && hours <= 6) || hours > 6) {
-          // STRICT OVERWRITE: Any entry considered "Full Day" must have "Office" splits
-          existingRecord.firstHalf = WorkLocation.OFFICE;
-          existingRecord.secondHalf = WorkLocation.OFFICE;
-          createEmployeeAttendanceDto.firstHalf = WorkLocation.OFFICE as any;
-          createEmployeeAttendanceDto.secondHalf = WorkLocation.OFFICE as any;
+          // RELAXED ENFORCEMENT: Only set default Office splits if they are currently empty or stationary
+          // and no source request is linked.
+          const currentH1 = (existingRecord.firstHalf || '').toLowerCase();
+          const currentH2 = (existingRecord.secondHalf || '').toLowerCase();
+          const isH1Work = currentH1.includes('wfh') || currentH1.includes('work from home') || currentH1.includes('client visit') || currentH1.includes('office');
+          const isH2Work = currentH2.includes('wfh') || currentH2.includes('work from home') || currentH2.includes('client visit') || currentH2.includes('office');
+
+          if (!existingRecord.sourceRequestId && !isH1Work && !isH2Work) {
+            existingRecord.firstHalf = WorkLocation.OFFICE;
+            existingRecord.secondHalf = WorkLocation.OFFICE;
+            this.logger.log(`[ATTENDANCE_CREATE] Defaulted Full Day splits to Office for Record ${existingRecord.id} (${hours}h)`);
+          }
           existingRecord.status = AttendanceStatus.FULL_DAY;
-          this.logger.log(`[ATTENDANCE_OVERWRITE] Enforced Full Day synchronization for existing record (${hours}h) with Office splits`);
+          this.logger.log(`[ATTENDANCE_SYNC] Synchronized Full Day status for existing record (${hours}h)`);
         } else if (existingRecord.totalHours === 0 || existingRecord.totalHours === null) {
           const isClear = existingRecord.totalHours === null;
 
@@ -373,13 +380,19 @@ export class EmployeeAttendanceService {
         newAttendance.status = AttendanceStatus.HALF_DAY;
         this.logger.log(`[ATTENDANCE_CREATE] Synchronized Half Day status (<= 6h)`);
       } else if (hours === 9 || (isSat && hours > 3 && hours <= 6) || hours > 6) {
-        // STRICT OVERWRITE: Any entry considered "Full Day" must have "Office" splits
-        newAttendance.firstHalf = WorkLocation.OFFICE;
-        newAttendance.secondHalf = WorkLocation.OFFICE;
-        createEmployeeAttendanceDto.firstHalf = WorkLocation.OFFICE as any;
-        createEmployeeAttendanceDto.secondHalf = WorkLocation.OFFICE as any;
+        // RELAXED ENFORCEMENT: Only set default Office splits if they are currently empty or stationary
+        const currentH1 = (newAttendance.firstHalf || '').toLowerCase();
+        const currentH2 = (newAttendance.secondHalf || '').toLowerCase();
+        const isH1Work = currentH1.includes('wfh') || currentH1.includes('work from home') || currentH1.includes('client visit') || currentH1.includes('office');
+        const isH2Work = currentH2.includes('wfh') || currentH2.includes('work from home') || currentH2.includes('client visit') || currentH2.includes('office');
+
+        if (!newAttendance.sourceRequestId && !isH1Work && !isH2Work) {
+          newAttendance.firstHalf = WorkLocation.OFFICE;
+          newAttendance.secondHalf = WorkLocation.OFFICE;
+          this.logger.log(`[ATTENDANCE_CREATE] Defaulted Full Day splits to Office for NEW record (${hours}h)`);
+        }
         newAttendance.status = AttendanceStatus.FULL_DAY;
-        this.logger.log(`[ATTENDANCE_OVERWRITE] Enforced Full Day synchronization for NEW record (${hours}h) with Office splits`);
+        this.logger.log(`[ATTENDANCE_SYNC] Synchronized Full Day status for NEW record (${hours}h)`);
       } else if (newAttendance.totalHours === 0 || newAttendance.totalHours === null) {
         // Logic for 0 or NULL hours
         let newStatus: AttendanceStatus | null = null;
@@ -864,12 +877,29 @@ export class EmployeeAttendanceService {
           attendance.status = AttendanceStatus.FULL_DAY;
           updateDto.status = AttendanceStatus.FULL_DAY;
 
-          attendance.firstHalf = WorkLocation.OFFICE;
-          attendance.secondHalf = WorkLocation.OFFICE;
-          updateDto.firstHalf = WorkLocation.OFFICE as any;
-          updateDto.secondHalf = WorkLocation.OFFICE as any;
+          // RELAXED ENFORCEMENT: Only set default Office splits if they are currently empty or stationary
+          // and no source request is linked in either the database or the incoming DTO.
+          const currentH1 = (attendance.firstHalf || '').toLowerCase();
+          const currentH2 = (attendance.secondHalf || '').toLowerCase();
+          const isH1Work = currentH1.includes('wfh') || currentH1.includes('work from home') || currentH1.includes('client visit') || currentH1.includes('office');
+          const isH2Work = currentH2.includes('wfh') || currentH2.includes('work from home') || currentH2.includes('client visit') || currentH2.includes('office');
+          
+          const incomingH1 = (updateDto.firstHalf || '').toLowerCase();
+          const incomingH2 = (updateDto.secondHalf || '').toLowerCase();
+          const isIncomingH1Work = incomingH1.includes('wfh') || incomingH1.includes('work from home') || incomingH1.includes('client visit') || incomingH1.includes('office');
+          const isIncomingH2Work = incomingH2.includes('wfh') || incomingH2.includes('work from home') || incomingH2.includes('client visit') || incomingH2.includes('office');
 
-          this.logger.log(`[ATTENDANCE_OVERWRITE] Synchronized Full Day (${hours}h) with Office splits`);
+          const hasSource = !!attendance.sourceRequestId || !!(updateDto as any).sourceRequestId;
+
+          if (!hasSource && !isH1Work && !isH2Work && !isIncomingH1Work && !isIncomingH2Work) {
+            attendance.firstHalf = WorkLocation.OFFICE;
+            attendance.secondHalf = WorkLocation.OFFICE;
+            updateDto.firstHalf = WorkLocation.OFFICE as any;
+            updateDto.secondHalf = WorkLocation.OFFICE as any;
+            this.logger.log(`[ATTENDANCE_OVERWRITE] Defaulted Full Day (${hours}h) splits to Office`);
+          } else {
+            this.logger.log(`[ATTENDANCE_SYNC] Preserving existing splits for Full Day (${hours}h)`);
+          }
         }
         // If hours is <= 6 and > 0 (and not a Weekend/Holiday Full Day), it's Half Day.
         else if (hours > 0 && hours <= 6 && !isWeekendOrHoliday) {
@@ -1238,8 +1268,22 @@ export class EmployeeAttendanceService {
             });
 
             if (approvedRequest) {
-              // If approved Client Visit or WFH exists AND it is linked, mark as Present (Full Day)
+              // Priority 3.1: If approved Client Visit or WFH exists AND it is linked, mark as Full Day
               attendance.status = AttendanceStatus.FULL_DAY;
+              
+              // RECOVERY: If the splits are missing or say Office, restore the correct WFH/CV labels for the UI
+              const currentH1 = (attendance.firstHalf || '').toLowerCase();
+              const currentH2 = (attendance.secondHalf || '').toLowerCase();
+              const isOffice = currentH1.includes('office') || currentH2.includes('office');
+              const isMissing = !attendance.firstHalf || !attendance.secondHalf || currentH1.includes('not updated') || currentH2.includes('not updated');
+
+              if (isOffice || isMissing) {
+                const activity = approvedRequest.requestType === LeaveRequestType.CLIENT_VISIT ? WorkLocation.CLIENT_VISIT : WorkLocation.WORK_FROM_HOME;
+                attendance.firstHalf = activity;
+                attendance.secondHalf = activity;
+                this.logger.debug(`[RECOVERY] Restored ${activity} splits for UI from SourceRequest ${approvedRequest.id}`);
+              }
+              
               return attendance;
             }
           }
@@ -1428,7 +1472,11 @@ export class EmployeeAttendanceService {
       const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
       const monthlyStatsMap = new Map<string, any>();
 
-      attendances.forEach(record => {
+      const processedAttendances = await Promise.all(
+        attendances.map(record => this.applyStatusBusinessRules(record))
+      );
+
+      processedAttendances.forEach(record => {
         // Use a robust way to get local YYYY-MM from the workingDate
         const date = record.workingDate instanceof Date ? record.workingDate : new Date(record.workingDate);
         const m = date.getMonth();
