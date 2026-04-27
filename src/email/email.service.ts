@@ -1,21 +1,9 @@
 import { Injectable } from '@nestjs/common';
-import * as nodemailer from 'nodemailer';
+import { MailService } from '../common/mail/mail.service';
 
 @Injectable()
 export class EmailService {
-  private transporter;
-
-  constructor() {
-    this.transporter = nodemailer.createTransport({
-      host: process.env.SMTP_HOST,
-      port: Number(process.env.SMTP_PORT),
-      secure: process.env.SMTP_SECURE === 'true',
-      auth: {
-        user: process.env.SMTP_USERNAME,
-        pass: process.env.SMTP_PASSWORD,
-      },
-    });
-  }
+  constructor(private readonly mailService: MailService) {}
 
   async sendEmail(
     to: string,
@@ -25,17 +13,14 @@ export class EmailService {
     replyTo?: string,
     cc?: string[],
   ) {
-    const mailOptions: Record<string, unknown> = {
-      from: process.env.MAIL_FROM || process.env['mail.FROM'],
+    // Forward to MailService which uses the Bull queue
+    await this.mailService.sendMailAsync(
       to,
       subject,
       text,
-      html: htmlContent,
+      htmlContent,
+      cc,
       replyTo,
-    };
-    if (cc && cc.length > 0) {
-      mailOptions.cc = cc;
-    }
-    await this.transporter.sendMail(mailOptions);
+    );
   }
 }

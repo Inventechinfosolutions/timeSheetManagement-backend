@@ -1,14 +1,31 @@
 import { Injectable, Logger } from '@nestjs/common';
 import * as nodemailer from 'nodemailer';
 import { ConfigService } from '@nestjs/config';
+import { InjectQueue } from '@nestjs/bull';
+import { Queue } from 'bull';
 
 @Injectable()
 export class MailService {
   private readonly logger = new Logger(MailService.name);
   private transporter: nodemailer.Transporter;
 
-  constructor(private readonly configService: ConfigService) {
+  constructor(
+    private readonly configService: ConfigService,
+    @InjectQueue('mail-queue') private readonly mailQueue: Queue,
+  ) {
     this.createTransporter();
+  }
+
+  async sendMailAsync(to: string, subject: string, text: string, html?: string, cc?: string[], replyTo?: string) {
+    this.logger.debug(`Adding email job to queue for ${to}...`);
+    await this.mailQueue.add('send-email', {
+      to,
+      subject,
+      text,
+      html,
+      cc,
+      replyTo,
+    });
   }
 
   private createTransporter() {
@@ -28,7 +45,7 @@ export class MailService {
     this.transporter = nodemailer.createTransport({
       host,
       port,
-      secure: false, // Mailtrap requires false for ports 2525, 587, 25 
+      secure: false, // Mailtrap/Office365 often require false for 587
       auth: {
         user,
         pass,
@@ -36,7 +53,7 @@ export class MailService {
     });
   }
 
-  async sendMail(to: string, subject: string, text: string, html?: string) {
+  async sendMail(to: string, subject: string, text: string, html?: string, cc?: string[], replyTo?: string) {
     if (!this.transporter) {
       this.logger.warn('Transporter not initialized. Cannot send email.');
       return;
@@ -44,6 +61,7 @@ export class MailService {
 
     const from =
       this.configService.get<string>('mail.FROM') ||
+      this.configService.get<string>('SMTP_USERNAME') ||
       'noreply@timesheet.com';
 
     try {
@@ -53,10 +71,13 @@ export class MailService {
         subject,
         text,
         html,
+        cc,
+        replyTo,
       });
       this.logger.log(`Email sent to ${to}: ${info.messageId}`);
     } catch (error) {
       this.logger.error(`Failed to send email to ${to}`, error.stack);
+      throw error; // Re-throw to allow queue retry/failure tracking
     }
   }
 }

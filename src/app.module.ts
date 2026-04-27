@@ -19,9 +19,11 @@ import { AttendanceCronService } from './cron/attendance.cron.service';
 import { EmployeeAttendance } from './employeeTimeSheet/entities/employeeAttendance.entity';
 import { EmployeeDetails } from './employeeTimeSheet/entities/employeeDetails.entity';
 import { ManagerMapping } from './managerMapping/entities/managerMapping.entity';
+import { LeaveRequest } from './employeeTimeSheet/entities/leave-request.entity';
 import { MailModule } from './common/mail/mail.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { CacheModule } from '@nestjs/cache-manager';
+import { BullModule } from '@nestjs/bull';
 import * as redisStore from 'cache-manager-redis-store';
 import { CachingUtil } from './common/utils/caching.util';
 
@@ -54,9 +56,19 @@ function getEnvFiles(): string[] {
     MasterModule,
     ManagerMappingModule,
     ScheduleModule.forRoot(),
-    TypeOrmModule.forFeature([EmployeeAttendance, EmployeeDetails, ManagerMapping]),
+    TypeOrmModule.forFeature([EmployeeAttendance, EmployeeDetails, ManagerMapping, LeaveRequest]),
     MailModule,
     NotificationsModule,
+    BullModule.forRootAsync({
+      imports: [ConfigModule],
+      useFactory: async (configService: ConfigService) => ({
+        redis: {
+          host: configService.get<string>('REDIS_HOST') || 'localhost',
+          port: configService.get<number>('REDIS_PORT') || 6379,
+        },
+      }),
+      inject: [ConfigService],
+    }),
     CacheModule.registerAsync({
       isGlobal: true,
       imports: [ConfigModule],

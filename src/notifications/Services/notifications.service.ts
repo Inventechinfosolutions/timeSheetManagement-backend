@@ -40,7 +40,7 @@ export class NotificationsService {
             message: message,
           });
 
-          await this.mailService.sendMail(emp.email, title, message, html);
+          await this.mailService.sendMailAsync(emp.email, title, message, html);
           count++;
           // Create Notification
           await this.notificationRepo.save({
@@ -51,8 +51,6 @@ export class NotificationsService {
             type: 'alert',
           });
 
-          // Add delay to respect mailtrap rate limits
-          await new Promise((resolve) => setTimeout(resolve, 1500));
         }
       }
 
@@ -81,7 +79,7 @@ export class NotificationsService {
             message: message,
           });
 
-          await this.mailService.sendMail(emp.email, title, message, html);
+          await this.mailService.sendMailAsync(emp.email, title, message, html);
           count++;
           // Create Notification
           await this.notificationRepo.save({
@@ -92,8 +90,6 @@ export class NotificationsService {
             type: 'alert',
           });
 
-          // Add delay to respect mailtrap rate limits
-          await new Promise((resolve) => setTimeout(resolve, 1500));
         }
       }
 
@@ -189,7 +185,7 @@ export class NotificationsService {
               message,
             });
 
-            await this.mailService.sendMail(emp.email, title, message, html);
+            await this.mailService.sendMailAsync(emp.email, title, message, html);
             count++;
 
             await this.notificationRepo.save({
@@ -200,7 +196,6 @@ export class NotificationsService {
               type: 'alert',
             });
 
-            await new Promise((resolve) => setTimeout(resolve, 1500));
           } catch (itemError) {
             this.logger.error(`Failed individual reminder for ${emp.email}: ${itemError.message}`);
           }
@@ -239,7 +234,7 @@ export class NotificationsService {
               message,
             });
 
-            await this.mailService.sendMail(emp.email, title, message, html);
+            await this.mailService.sendMailAsync(emp.email, title, message, html);
             count++;
 
             await this.notificationRepo.save({
@@ -250,7 +245,6 @@ export class NotificationsService {
               type: 'alert',
             });
 
-            await new Promise((resolve) => setTimeout(resolve, 1500));
           } catch (itemError) {
             this.logger.error(`Failed individual last-call for ${emp.email}: ${itemError.message}`);
           }
@@ -292,12 +286,10 @@ export class NotificationsService {
         message,
       });
 
-      await this.mailService.sendMail(manager.email, title, message, html);
+      await this.mailService.sendMailAsync(manager.email, title, message, html);
       this.logger.log(
         `Pending report sent to manager: ${manager.fullName} (${pendingEmployeeNames.length} pending employees).`,
       );
-
-      await new Promise((resolve) => setTimeout(resolve, 1500));
     } catch (error) {
       this.logger.error(`Error sending manager pending report to ${manager?.email}: ${error.message}`);
     }
