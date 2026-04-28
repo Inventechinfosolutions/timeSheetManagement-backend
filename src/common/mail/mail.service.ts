@@ -18,13 +18,15 @@ export class MailService {
 
   async sendMailAsync(to: string, subject: string, text: string, html?: string, cc?: string[], replyTo?: string) {
     this.logger.debug(`Adding email job to queue for ${to}...`);
-    await this.mailQueue.add('send-email', {
+    this.mailQueue.add('send-email', {
       to,
       subject,
       text,
       html,
       cc,
       replyTo,
+    }).catch(err => {
+      this.logger.error(`Failed to add email job to queue for ${to}: ${err.message}`);
     });
   }
 
