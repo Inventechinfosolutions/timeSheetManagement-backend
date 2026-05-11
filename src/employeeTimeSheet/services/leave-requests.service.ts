@@ -410,6 +410,17 @@ export class LeaveRequestsService {
               this.logger.warn(
                 `[CREATE] Conflict detected for employee ${data.employeeId}: Existing ${existingTypeLabel} request overlaps with ${overlapDate || existing.fromDate}`,
               );
+
+              if (
+                data.requestType === LeaveRequestType.CLIENT_VISIT &&
+                (existing.requestType === LeaveRequestType.CLIENT_VISIT ||
+                  existing.requestType.includes(LeaveRequestType.CLIENT_VISIT))
+              ) {
+                throw new ConflictException(
+                  `You have already applied for Client Visit from ${dayjs(existing.fromDate).format('DD MMM YYYY')} to ${dayjs(existing.toDate).format('DD MMM YYYY')}`,
+                );
+              }
+
               throw new ConflictException(
                 `Conflict: Request already exists for ${overlapDate || existing.fromDate} (${existingTypeLabel})`,
               );
@@ -3659,22 +3670,17 @@ export class LeaveRequestsService {
         );
 
       if (updateData.datesToModify && updateData.datesToModify.length > 0) {
-        if (request.status === LeaveRequestStatus.APPROVED) {
-          return await this.modifyApprovedDates(
+        if (
+          [LeaveRequestStatus.APPROVED, LeaveRequestStatus.PENDING].includes(
+            request.status as LeaveRequestStatus,
+          )
+        ) {
+          return await this.modifyDates(
             id,
             employeeId,
             updateData.datesToModify,
             updateData,
           );
-        } else if (request.status === LeaveRequestStatus.PENDING) {
-          const startDate = dayjs(request.fromDate);
-          const endDate = dayjs(request.toDate);
-          const totalDays = endDate.diff(startDate, 'day') + 1;
-          if (updateData.datesToModify.length !== totalDays) {
-            throw new BadRequestException(
-              'Partial modification is only allowed for Approved requests. For Pending requests, please edit the entire request.',
-            );
-          }
         }
       }
 
@@ -3841,7 +3847,7 @@ export class LeaveRequestsService {
     }
   }
 
-  async modifyApprovedDates(
+  async modifyDates(
     id: number,
     employeeId: string,
     datesToModify: string[],
@@ -3853,7 +3859,7 @@ export class LeaveRequestsService {
       documentKeys?: string[];
     },
   ) {
-    this.logger.log(`[MODIFY_APPROVED] id=${id}, employee=${employeeId}`);
+    this.logger.log(`[MODIFY_DATES] id=${id}, employee=${employeeId}`);
     try {
       const request = await this.leaveRequestRepository.findOne({
         where: { id, employeeId },
@@ -3912,7 +3918,8 @@ export class LeaveRequestsService {
         if (!isWknd && !isHol) modifyingWorkingDays++;
       }
       const parentWorkingDays = request.duration ?? 0;
-      const isFullModification = modifyingWorkingDays >= parentWorkingDays;
+      // Add a small tolerance for floating point durations
+      const isFullModification = modifyingWorkingDays >= (parentWorkingDays - 0.01);
 
       // Derive new request type from half day choices
       const fHalf = (updateData.firstHalf ||
@@ -3936,7 +3943,10 @@ export class LeaveRequestsService {
 
       if (isFullModification) {
         // ALL dates modified at once — update parent directly, no child created
-        request.status = LeaveRequestStatus.REQUESTING_FOR_MODIFICATION;
+        request.status =
+          request.status === LeaveRequestStatus.APPROVED
+            ? LeaveRequestStatus.REQUESTING_FOR_MODIFICATION
+            : (request.status as LeaveRequestStatus); // Keep PENDING if it was PENDING
         request.title = updateData.title || request.title;
         request.description = updateData.description || request.description;
         request.firstHalf = fHalf;
@@ -4026,7 +4036,10 @@ export class LeaveRequestsService {
             id: undefined,
             fromDate: range.start,
             toDate: range.end,
-            status: LeaveRequestStatus.REQUESTING_FOR_MODIFICATION,
+            status:
+              request.status === LeaveRequestStatus.APPROVED
+                ? LeaveRequestStatus.REQUESTING_FOR_MODIFICATION
+                : (request.status as LeaveRequestStatus), // Keep PENDING
             title: updateData.title || request.title,
             description: updateData.description || request.description,
             firstHalf: fHalf,
@@ -4112,11 +4125,45 @@ export class LeaveRequestsService {
           await this.notifyManagerOfRequest(savedNew);
           await this.notifyEmployeeOfSubmission(savedNew);
         }
+
+        // Update parent to remove modified dates
+        try {
+          const parentDates: string[] = JSON.parse(request.availableDates || '[]');
+          const remainingDates = parentDates.filter(
+            (d) => !datesToModify.includes(d),
+          );
+
+          if (remainingDates.length === 0) {
+            this.logger.log(
+              `[MODIFY_DATES] Parent ${id} has no dates left, deleting.`,
+            );
+            await this.leaveRequestRepository.delete({ id });
+          } else {
+            request.availableDates = JSON.stringify(remainingDates);
+            const parentFactor = request.isHalfDay
+              ? this.getDurationFactor(request.firstHalf, request.secondHalf)
+              : 1.0;
+            request.duration = Number(
+              (remainingDates.length * parentFactor).toFixed(2),
+            );
+            const sortedRemaining = remainingDates.sort();
+            request.fromDate = sortedRemaining[0];
+            request.toDate = sortedRemaining[sortedRemaining.length - 1];
+            await this.leaveRequestRepository.save(request);
+            this.logger.log(
+              `[MODIFY_DATES] Parent ${id} updated with ${remainingDates.length} remaining dates.`,
+            );
+          }
+        } catch (e) {
+          this.logger.error(
+            `[MODIFY_DATES] Failed to update parent ${id}: ${e.message}`,
+          );
+        }
       }
 
       this._recalcMonthStatus(employeeId, datesToModify[0]).catch(() => {});
       this.logger.log(
-        `[MODIFY_APPROVED] Successfully created ${createdRequests.length} modification requests`,
+        `[MODIFY_DATES] Successfully created ${createdRequests.length} modification requests`,
       );
       return {
         success: true,
