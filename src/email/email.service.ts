@@ -14,7 +14,7 @@ export class EmailService {
     cc?: string[],
   ) {
     // Forward to MailService which uses the Bull queue
-    await this.mailService.sendMailAsync(
+    this.mailService.sendMailAsync(
       to,
       subject,
       text,

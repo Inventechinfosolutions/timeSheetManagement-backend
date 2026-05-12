@@ -287,6 +287,7 @@ export class LeaveRequestsService {
         );
         const requestType = data.requestType;
 
+        // --- CONFLICTING TYPES LOGIC ---
         let conflictingTypes: string[] = [];
 
         if (
@@ -296,23 +297,29 @@ export class LeaveRequestsService {
           conflictingTypes = [
             LeaveRequestType.APPLY_LEAVE,
             LeaveRequestType.LEAVE,
+            LeaveRequestType.HALF_DAY,
           ];
         } else if (requestType === LeaveRequestType.WORK_FROM_HOME) {
           conflictingTypes = [
             LeaveRequestType.APPLY_LEAVE,
             LeaveRequestType.LEAVE,
             LeaveRequestType.WORK_FROM_HOME,
+            LeaveRequestType.HALF_DAY,
           ];
         } else if (requestType === LeaveRequestType.CLIENT_VISIT) {
           conflictingTypes = [
             LeaveRequestType.APPLY_LEAVE,
             LeaveRequestType.LEAVE,
             LeaveRequestType.CLIENT_VISIT,
+            LeaveRequestType.WORK_FROM_HOME,
+            LeaveRequestType.HALF_DAY,
           ];
         } else if (requestType === LeaveRequestType.HALF_DAY) {
           conflictingTypes = [
             LeaveRequestType.APPLY_LEAVE,
             LeaveRequestType.LEAVE,
+            LeaveRequestType.WORK_FROM_HOME,
+            LeaveRequestType.CLIENT_VISIT,
             LeaveRequestType.HALF_DAY,
           ];
         } else {
@@ -334,6 +341,8 @@ export class LeaveRequestsService {
         }
 
         // --- CONFLICT CHECK (Explict Date Aware) ---
+        // Fetch overlapping requests. Note: We intentionally don't filter by requestType strictly in the query
+        // to catch split-type combinations (e.g. "Client Visit + Office") which would be missed by In().
         const existingRequests = await this.leaveRequestRepository.find({
           where: {
             employeeId: data.employeeId,
@@ -347,7 +356,6 @@ export class LeaveRequestsService {
               LeaveRequestStatus.CANCELLATION_REJECTED,
               LeaveRequestStatus.MODIFICATION_REJECTED,
             ]),
-            requestType: In(conflictingTypes),
             fromDate: LessThanOrEqual(data.toDate),
             toDate: MoreThanOrEqual(data.fromDate),
           },
@@ -378,6 +386,12 @@ export class LeaveRequestsService {
             // Legacy Record (Range based)
             hasExplicitOverlap = true;
           }
+
+          // Determine if the existing request type actually conflicts with the new one
+          const isConflictingType = conflictingTypes.some(t => 
+            existing.requestType === t || existing.requestType.includes(t)
+          );
+          if (!isConflictingType) continue;
 
           if (hasExplicitOverlap) {
             const existingIsFull = !existing.isHalfDay;
@@ -412,7 +426,9 @@ export class LeaveRequestsService {
               );
 
               if (
-                data.requestType === LeaveRequestType.CLIENT_VISIT &&
+                (data.requestType === LeaveRequestType.CLIENT_VISIT ||
+                  (data.requestType &&
+                    data.requestType.includes(LeaveRequestType.CLIENT_VISIT))) &&
                 (existing.requestType === LeaveRequestType.CLIENT_VISIT ||
                   existing.requestType.includes(LeaveRequestType.CLIENT_VISIT))
               ) {
@@ -4129,8 +4145,11 @@ export class LeaveRequestsService {
         // Update parent to remove modified dates
         try {
           const parentDates: string[] = JSON.parse(request.availableDates || '[]');
+          const normalizedDatesToModify = datesToModify.map((d) =>
+            dayjs(d).format('YYYY-MM-DD'),
+          );
           const remainingDates = parentDates.filter(
-            (d) => !datesToModify.includes(d),
+            (d) => !normalizedDatesToModify.includes(dayjs(d).format('YYYY-MM-DD')),
           );
 
           if (remainingDates.length === 0) {
