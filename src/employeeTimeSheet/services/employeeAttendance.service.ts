@@ -562,23 +562,18 @@ export class EmployeeAttendanceService {
     const today = new Date();
 
     try {
-      if (today.getMonth() + 1 !== monthNum || today.getFullYear() !== yearNum) {
-        throw new BadRequestException('Auto-update is only available for the current month.');
+      const startDate = new Date(yearNum, monthNum - 1, 1, 0, 0, 0);
+      if (startDate > today) {
+        throw new BadRequestException('Auto-update is not available for future months.');
       }
 
-      this.logger.debug(`Fetching holidays and existing records for ${employeeId}...`);
-      const startDate = new Date(yearNum, monthNum - 1, 1, 0, 0, 0);
-      const endDate = new Date();
+      // Determine end date: either today (if current month) or last day of the month (if past month)
+      const lastDayOfMonth = new Date(yearNum, monthNum, 0, 23, 59, 59, 999);
+      const endDate = lastDayOfMonth < today ? lastDayOfMonth : new Date(today);
       endDate.setHours(23, 59, 59, 999);
 
       const holidays = await this.masterHolidayService.findAll();
-      const holidayDates = new Set(holidays.map(h => {
-        const d = new Date(h.holidayDate || (h as any).date);
-        const y = d.getFullYear();
-        const m = String(d.getMonth() + 1).padStart(2, '0');
-        const day = String(d.getDate()).padStart(2, '0');
-        return `${y}-${m}-${day}`;
-      }));
+      const holidayDates = new Set(holidays.map(h => dayjs(h.holidayDate || (h as any).date).format('YYYY-MM-DD')));
 
       const existingRecords = await this.employeeAttendanceRepository.find({
         where: {
@@ -591,11 +586,7 @@ export class EmployeeAttendanceService {
       const existingZeroHourRecords = new Map<string, EmployeeAttendance>();
 
       existingRecords.forEach(r => {
-        const d = new Date(r.workingDate);
-        const y = d.getFullYear();
-        const m = String(d.getMonth() + 1).padStart(2, '0');
-        const day = String(d.getDate()).padStart(2, '0');
-        const dateStr = `${y}-${m}-${day}`;
+        const dateStr = dayjs(r.workingDate).format('YYYY-MM-DD');
 
         if (r.totalHours && r.totalHours > 0) {
           existingDates.add(dateStr);
@@ -654,10 +645,7 @@ export class EmployeeAttendanceService {
       let currentDate = new Date(startDate);
 
       while (currentDate <= endDate) {
-        const year = currentDate.getFullYear();
-        const month = String(currentDate.getMonth() + 1).padStart(2, '0');
-        const day = String(currentDate.getDate()).padStart(2, '0');
-        const dateStr = `${year}-${month}-${day}`;
+        const dateStr = dayjs(currentDate).format('YYYY-MM-DD');
 
         const dayOfWeek = currentDate.getDay();
         const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
