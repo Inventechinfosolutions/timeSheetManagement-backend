@@ -513,17 +513,43 @@ export class EmployeeDetailsService {
         .leftJoinAndMapOne('employee.user', User, 'user', 'user.loginId = employee.employeeId')
         .getManyAndCount();
 
-      const enrichedData = data.map((emp: any) => ({
-        id: emp.id,
-        fullName: emp.fullName,
-        employeeId: emp.employeeId,
-        department: emp.department,
-        designation: emp.designation,
-        email: emp.email,
-        userStatus: emp.user?.status || UserStatus.DRAFT,
-        resetRequired: emp.user?.resetRequired ?? true,
-        lastLoggedIn: emp.user?.lastLoggedIn || null,
-        monthStatus: emp.monthStatus || MonthStatus.PENDING,
+      // Dynamically compute monthStatus for the requested month/year
+      // instead of relying on the stale DB column (which only stores the last recalculated month)
+      const enrichedData = await Promise.all(data.map(async (emp: any) => {
+        let monthStatus = emp.monthStatus || MonthStatus.PENDING;
+
+        // If a specific month/year is requested, compute the real status
+        if (hasMonthYear) {
+          try {
+            const stats = await this.employeeAttendanceService.getDashboardStats(
+              emp.employeeId,
+              String(month),
+              String(year),
+              false, // don't persist — just calculate
+            );
+            const today = new Date();
+            const msStart = new Date(Number(year), Number(month) - 1, 1);
+            const isFutureMonth = msStart.getTime() > today.getTime();
+            monthStatus = (!isFutureMonth && stats.pendingUpdates === 0)
+              ? MonthStatus.SUBMITTED
+              : MonthStatus.PENDING;
+          } catch (e) {
+            this.logger.warn(`Failed to compute dynamic monthStatus for ${emp.employeeId}: ${e.message}`);
+          }
+        }
+
+        return {
+          id: emp.id,
+          fullName: emp.fullName,
+          employeeId: emp.employeeId,
+          department: emp.department,
+          designation: emp.designation,
+          email: emp.email,
+          userStatus: emp.user?.status || UserStatus.DRAFT,
+          resetRequired: emp.user?.resetRequired ?? true,
+          lastLoggedIn: emp.user?.lastLoggedIn || null,
+          monthStatus,
+        };
       }));
 
       return { data: enrichedData, totalItems };
@@ -995,9 +1021,9 @@ export class EmployeeDetailsService {
         await this.userRepository.save(user);
       } else if (!user.resetRequired) {
         // If user already reset password/active, we shouldn't blindly resend activation link
-        // unless explicitly requested to reset. but here we follow requirement: 
+        // unless explicitly requested to reset. but here we follow requirement:
         // "resend button should go and that reset password should be visible to admin"
-        // So this endpoint might arguably check user.resetRequired, but let's allow it 
+        // So this endpoint might arguably check user.resetRequired, but let's allow it
         // and let frontend handle visibility.
       }
 
@@ -1417,7 +1443,7 @@ export class EmployeeDetailsService {
       ];
 
       // Add a sample row
-      
+     
 
       // Style the header row
       worksheet.getRow(1).font = { bold: true };
