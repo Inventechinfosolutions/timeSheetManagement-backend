@@ -205,14 +205,17 @@ export class EmployeeAttendanceService {
           : existingRecord.secondHalf;
 
         // If we have firstHalf or secondHalf (either from incoming DTO or existing record), recalculate
-        if (finalFirstHalf || finalSecondHalf) {
+        if (createEmployeeAttendanceDto.totalHours === null) {
+          // If totalHours is explicitly null, keep it null and do not recalculate from splits
+          this.logger.log(`[ATTENDANCE_CREATE] totalHours is explicitly null, skipping recalculation`);
+        } else if (finalFirstHalf || finalSecondHalf) {
           const calculatedHours = this.calculateTotalHours(finalFirstHalf || null, finalSecondHalf || null);
           createEmployeeAttendanceDto.totalHours = calculatedHours;
           this.logger.log(`[ATTENDANCE_CREATE] Calculated totalHours: ${calculatedHours} from firstHalf: ${finalFirstHalf}, secondHalf: ${finalSecondHalf}`);
-        } else if (createEmployeeAttendanceDto.totalHours === null || createEmployeeAttendanceDto.totalHours === undefined) {
-          // If no firstHalf/secondHalf and incoming totalHours is null/undefined, don't overwrite existing
+        } else if (createEmployeeAttendanceDto.totalHours === undefined) {
+          // If no firstHalf/secondHalf and incoming totalHours is undefined, don't overwrite existing
           delete createEmployeeAttendanceDto.totalHours;
-          this.logger.log(`[ATTENDANCE_CREATE] Skipping null/undefined totalHours to preserve existing value`);
+          this.logger.log(`[ATTENDANCE_CREATE] Skipping undefined totalHours to preserve existing value`);
         }
 
         Object.assign(existingRecord, createEmployeeAttendanceDto);
@@ -327,7 +330,9 @@ export class EmployeeAttendanceService {
       this.logger.log(`[ATTENDANCE_CREATE] sourceRequestId being set to: ${createEmployeeAttendanceDto.sourceRequestId}`);
 
       // Calculate totalHours if firstHalf and secondHalf are provided, or if totalHours is provided
-      if (createEmployeeAttendanceDto.firstHalf || createEmployeeAttendanceDto.secondHalf || createEmployeeAttendanceDto.totalHours) {
+      if (createEmployeeAttendanceDto.totalHours === null) {
+        this.logger.log(`[ATTENDANCE_CREATE] totalHours is explicitly null for NEW record, skipping recalculation`);
+      } else if (createEmployeeAttendanceDto.firstHalf || createEmployeeAttendanceDto.secondHalf || createEmployeeAttendanceDto.totalHours) {
         const calculatedHours = this.calculateTotalHours(
           createEmployeeAttendanceDto.firstHalf || null,
           createEmployeeAttendanceDto.secondHalf || null,
