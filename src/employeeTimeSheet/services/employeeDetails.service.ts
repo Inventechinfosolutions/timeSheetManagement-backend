@@ -503,56 +503,107 @@ export class EmployeeDetailsService {
         );
       }
 
-      if (status && status !== 'All') {
-        query.andWhere('employee.monthStatus = :reqMonthStatus', { reqMonthStatus: status });
+      const isStatusFilterActive = status && status !== 'All' && status !== 'All Status';
+
+      let data: any[];
+      let totalItems: number;
+
+      if (isStatusFilterActive) {
+        // Fetch ALL matching employees without pagination
+        const allData = await query
+          .leftJoinAndMapOne('employee.user', User, 'user', 'user.loginId = employee.employeeId')
+          .getMany();
+
+        // Dynamically compute monthStatus for the requested month/year
+        const enrichedData = await Promise.all(allData.map(async (emp: any) => {
+          let monthStatus = emp.monthStatus || MonthStatus.PENDING;
+
+          if (hasMonthYear) {
+            try {
+              const stats = await this.employeeAttendanceService.getDashboardStats(
+                emp.employeeId,
+                String(month),
+                String(year),
+                false,
+              );
+              const today = new Date();
+              const msStart = new Date(Number(year), Number(month) - 1, 1);
+              const isFutureMonth = msStart.getTime() > today.getTime();
+              monthStatus = (!isFutureMonth && stats.pendingUpdates === 0)
+                ? MonthStatus.SUBMITTED
+                : MonthStatus.PENDING;
+            } catch (e) {
+              this.logger.warn(`Failed to compute dynamic monthStatus for ${emp.employeeId}: ${e.message}`);
+            }
+          }
+
+          return {
+            id: emp.id,
+            fullName: emp.fullName,
+            employeeId: emp.employeeId,
+            department: emp.department,
+            designation: emp.designation,
+            email: emp.email,
+            userStatus: emp.user?.status || UserStatus.DRAFT,
+            resetRequired: emp.user?.resetRequired ?? true,
+            lastLoggedIn: emp.user?.lastLoggedIn || null,
+            monthStatus,
+          };
+        }));
+
+        // Filter in-memory by status
+        const filteredData = enrichedData.filter(emp => emp.monthStatus === status);
+        totalItems = filteredData.length;
+        data = filteredData.slice((page - 1) * limit, page * limit);
+      } else {
+        // Standard path: fetch only the paginated page from database
+        const [dbData, count] = await query
+          .skip((page - 1) * limit)
+          .take(limit)
+          .leftJoinAndMapOne('employee.user', User, 'user', 'user.loginId = employee.employeeId')
+          .getManyAndCount();
+
+        totalItems = count;
+
+        // Dynamically compute monthStatus for the paginated page of employees
+        data = await Promise.all(dbData.map(async (emp: any) => {
+          let monthStatus = emp.monthStatus || MonthStatus.PENDING;
+
+          if (hasMonthYear) {
+            try {
+              const stats = await this.employeeAttendanceService.getDashboardStats(
+                emp.employeeId,
+                String(month),
+                String(year),
+                false,
+              );
+              const today = new Date();
+              const msStart = new Date(Number(year), Number(month) - 1, 1);
+              const isFutureMonth = msStart.getTime() > today.getTime();
+              monthStatus = (!isFutureMonth && stats.pendingUpdates === 0)
+                ? MonthStatus.SUBMITTED
+                : MonthStatus.PENDING;
+            } catch (e) {
+              this.logger.warn(`Failed to compute dynamic monthStatus for ${emp.employeeId}: ${e.message}`);
+            }
+          }
+
+          return {
+            id: emp.id,
+            fullName: emp.fullName,
+            employeeId: emp.employeeId,
+            department: emp.department,
+            designation: emp.designation,
+            email: emp.email,
+            userStatus: emp.user?.status || UserStatus.DRAFT,
+            resetRequired: emp.user?.resetRequired ?? true,
+            lastLoggedIn: emp.user?.lastLoggedIn || null,
+            monthStatus,
+          };
+        }));
       }
 
-      const [data, totalItems] = await query
-        .skip((page - 1) * limit)
-        .take(limit)
-        .leftJoinAndMapOne('employee.user', User, 'user', 'user.loginId = employee.employeeId')
-        .getManyAndCount();
-
-      // Dynamically compute monthStatus for the requested month/year
-      // instead of relying on the stale DB column (which only stores the last recalculated month)
-      const enrichedData = await Promise.all(data.map(async (emp: any) => {
-        let monthStatus = emp.monthStatus || MonthStatus.PENDING;
-
-        // If a specific month/year is requested, compute the real status
-        if (hasMonthYear) {
-          try {
-            const stats = await this.employeeAttendanceService.getDashboardStats(
-              emp.employeeId,
-              String(month),
-              String(year),
-              false, // don't persist — just calculate
-            );
-            const today = new Date();
-            const msStart = new Date(Number(year), Number(month) - 1, 1);
-            const isFutureMonth = msStart.getTime() > today.getTime();
-            monthStatus = (!isFutureMonth && stats.pendingUpdates === 0)
-              ? MonthStatus.SUBMITTED
-              : MonthStatus.PENDING;
-          } catch (e) {
-            this.logger.warn(`Failed to compute dynamic monthStatus for ${emp.employeeId}: ${e.message}`);
-          }
-        }
-
-        return {
-          id: emp.id,
-          fullName: emp.fullName,
-          employeeId: emp.employeeId,
-          department: emp.department,
-          designation: emp.designation,
-          email: emp.email,
-          userStatus: emp.user?.status || UserStatus.DRAFT,
-          resetRequired: emp.user?.resetRequired ?? true,
-          lastLoggedIn: emp.user?.lastLoggedIn || null,
-          monthStatus,
-        };
-      }));
-
-      return { data: enrichedData, totalItems };
+      return { data, totalItems };
     } catch (error) {
       this.logger.error(`Error fetching timesheet list: ${error.message}`, error.stack);
       throw new HttpException('Failed to fetch timesheet list', HttpStatus.INTERNAL_SERVER_ERROR);
