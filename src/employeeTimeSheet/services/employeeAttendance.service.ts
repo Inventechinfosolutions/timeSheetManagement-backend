@@ -1349,6 +1349,10 @@ export class EmployeeAttendanceService {
     }
   }
 
+  async getHolidays(): Promise<any[]> {
+    return this.masterHolidayService.findAll();
+  }
+
   async getTrends(employeeId: string, endDateStr: string, startDateStr?: string): Promise<any[]> {
     this.logger.log(`Fetching trends for employee: ${employeeId}, EndDate: ${endDateStr}`);
     try {

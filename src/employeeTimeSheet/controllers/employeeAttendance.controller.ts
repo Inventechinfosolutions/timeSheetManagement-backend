@@ -29,7 +29,10 @@ import {
 import { EmployeeAttendanceDto } from '../dto/employeeAttendance.dto';
 import { DownloadAttendanceDto } from '../dto/download-attendance.dto';
 import { EmployeeAttendanceService } from '../services/employeeAttendance.service';
+import { LeaveRequestsService } from '../services/leave-requests.service';
+import { TimesheetBlockerService } from '../services/timesheetBlocker.service';
 import { NO_CACHE_HEADERS } from '../../common/utils/no-cache-headers';
+import dayjs from 'dayjs';
 
 @ApiTags('Employee Attendance')
 @Controller('employee-attendance')
@@ -38,6 +41,8 @@ export class EmployeeAttendanceController {
 
   constructor(
     private readonly employeeAttendanceService: EmployeeAttendanceService,
+    private readonly leaveRequestsService: LeaveRequestsService,
+    private readonly timesheetBlockerService: TimesheetBlockerService,
   ) { }
 
   @UseGuards(JwtAuthGuard, ReceptionistReadOnlyGuard)
@@ -384,6 +389,100 @@ export class EmployeeAttendanceController {
       );
     } catch (error) {
       this.logger.error(`Error fetching worked days: ${error.message}`, error.stack);
+      throw error;
+    }
+  }
+
+  @Get('my-timesheet/:employeeId')
+  @ApiOperation({ summary: 'Get consolidated my-timesheet data (attendance + blockers) in a single request' })
+  @ApiParam({ name: 'employeeId', type: String })
+  @ApiQuery({ name: 'month', type: String, required: false })
+  @ApiQuery({ name: 'year', type: String, required: false })
+  async getMyTimesheet(
+    @Param('employeeId') employeeId: string,
+    @Query('month') month?: string,
+    @Query('year') year?: string,
+  ) {
+    try {
+      const now = new Date();
+      const resolvedMonth = (month || String(now.getMonth() + 1)).padStart(2, '0');
+      const resolvedYear = year || String(now.getFullYear());
+
+      this.logger.log(
+        `Fetching consolidated my-timesheet for ${employeeId} (${resolvedMonth}/${resolvedYear})`,
+      );
+
+      const [monthlyAttendance, blockers] = await Promise.all([
+        this.employeeAttendanceService.findByMonth(resolvedMonth, resolvedYear, employeeId),
+        this.timesheetBlockerService.findAllByEmployee(employeeId),
+      ]);
+
+      return { monthlyAttendance, blockers };
+    } catch (error) {
+      this.logger.error(
+        `Error fetching my-timesheet for ${employeeId}: ${error.message}`,
+        error.stack,
+      );
+      throw error;
+    }
+  }
+
+  @Get('employee-dashboard/:employeeId')
+  @ApiOperation({ summary: 'Get consolidated employee dashboard data in a single request' })
+  @ApiParam({ name: 'employeeId', type: String })
+  @ApiQuery({ name: 'month', type: String, required: false })
+  @ApiQuery({ name: 'year', type: String, required: false })
+  async getEmployeeDashboard(
+    @Param('employeeId') employeeId: string,
+    @Query('month') month?: string,
+    @Query('year') year?: string,
+  ) {
+    try {
+      const now = new Date();
+      const resolvedMonth = (month || String(now.getMonth() + 1)).padStart(2, '0');
+      const resolvedYear = year || String(now.getFullYear());
+      const monthNum = parseInt(resolvedMonth, 10);
+      const yearNum = parseInt(resolvedYear, 10);
+
+      const startOfYear = `${resolvedYear}-01-01`;
+      const endOfYear = `${resolvedYear}-12-31`;
+      const lastDayOfMonth = new Date(yearNum, monthNum, 0);
+      const endDateStr = dayjs(lastDayOfMonth).format('YYYY-MM-DD');
+      const startDateStr = `${resolvedYear}-${resolvedMonth}-01`;
+
+      this.logger.log(
+        `Fetching consolidated dashboard for ${employeeId} (${resolvedMonth}/${resolvedYear})`,
+      );
+
+      const [
+        monthlyAttendance,
+        yearlyAttendance,
+        trends,
+        leaveBalance,
+        monthlyLeaveBalance,
+        holidays,
+      ] = await Promise.all([
+        this.employeeAttendanceService.findByMonth(resolvedMonth, resolvedYear, employeeId),
+        this.employeeAttendanceService.findByDateRange(employeeId, startOfYear, endOfYear),
+        this.employeeAttendanceService.getTrendsDetailed(employeeId, endDateStr, startDateStr),
+        this.leaveRequestsService.getLeaveBalance(employeeId, resolvedYear),
+        this.leaveRequestsService.getMonthlyLeaveBalance(employeeId, monthNum, yearNum),
+        this.employeeAttendanceService.getHolidays(),
+      ]);
+
+      return {
+        monthlyAttendance,
+        yearlyAttendance,
+        trends,
+        leaveBalance,
+        monthlyLeaveBalance,
+        holidays,
+      };
+    } catch (error) {
+      this.logger.error(
+        `Error fetching consolidated dashboard for ${employeeId}: ${error.message}`,
+        error.stack,
+      );
       throw error;
     }
   }
