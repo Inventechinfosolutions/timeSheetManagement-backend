@@ -1753,6 +1753,14 @@ export class LeaveRequestsService {
       }
 
       const previousStatus = request.status;
+
+      if (status === LeaveRequestStatus.REJECTED && previousStatus === LeaveRequestStatus.REQUESTING_FOR_MODIFICATION) {
+        status = LeaveRequestStatus.MODIFICATION_REJECTED;
+      }
+      if (status === LeaveRequestStatus.REJECTED && previousStatus === LeaveRequestStatus.REQUESTING_FOR_CANCELLATION) {
+        status = LeaveRequestStatus.CANCELLATION_REJECTED;
+      }
+
       request.status = status;
       if (reviewedBy) request.reviewedBy = reviewedBy;
       request.isRead = true;
@@ -2079,12 +2087,37 @@ export class LeaveRequestsService {
         previousStatus === LeaveRequestStatus.REQUESTING_FOR_MODIFICATION
       ) {
         if (!request.requestModifiedFrom || request.requestModifiedFrom.startsWith('PARENT_ORIGINAL:')) {
-          // This was a full modification on the parent itself. Revert it.
+          // Clone request to create a child request with MODIFICATION_REJECTED status
+          const childRequest = this.leaveRequestRepository.create({
+            employeeId: request.employeeId,
+            requestType: request.requestType,
+            fromDate: request.fromDate,
+            toDate: request.toDate,
+            title: request.title,
+            description: request.description,
+            status: LeaveRequestStatus.MODIFICATION_REJECTED,
+            submittedDate: request.submittedDate,
+            duration: request.duration,
+            isRead: true,
+            isReadEmployee: false,
+            requestModifiedFrom: `${request.id}:${request.requestType}`,
+            firstHalf: request.firstHalf,
+            secondHalf: request.secondHalf,
+            isHalfDay: request.isHalfDay,
+            ccEmails: request.ccEmails,
+            availableDates: JSON.stringify([]), // doesn't block dates
+            isModified: true,
+            modificationCount: request.modificationCount,
+            lastModifiedDate: new Date(),
+          });
+          await this.leaveRequestRepository.save(childRequest);
+
+          // Now revert the parent request itself back to APPROVED status and restore original details.
           request.status = LeaveRequestStatus.APPROVED;
           this.restoreParentOriginalDetails(request);
           await this.leaveRequestRepository.save(request);
           this.logger.log(
-            `[UPDATE_STATUS] Reverted request ${id} back to APPROVED after modification rejection.`,
+            `[UPDATE_STATUS] Reverted parent request ${id} back to APPROVED and created child MODIFICATION_REJECTED ${childRequest.id} after modification rejection.`,
           );
         }
       }
@@ -2153,6 +2186,7 @@ export class LeaveRequestsService {
                 parent.fromDate = mergedDates[0];
                 parent.toDate = mergedDates[mergedDates.length - 1];
                 parent.availableDates = JSON.stringify(mergedDates);
+                parent.status = LeaveRequestStatus.APPROVED;
 
                 await this.leaveRequestRepository.save(parent);
                 this.logger.log(
@@ -2207,14 +2241,40 @@ export class LeaveRequestsService {
 
       // 2. If a FULL cancellation request is REJECTED, revert it to APPROVED.
       if (
-        status === LeaveRequestStatus.REJECTED &&
+        (status === LeaveRequestStatus.REJECTED || status === LeaveRequestStatus.CANCELLATION_REJECTED) &&
         previousStatus === LeaveRequestStatus.REQUESTING_FOR_CANCELLATION
       ) {
-        if (!request.requestModifiedFrom) {
+        if (!request.requestModifiedFrom || request.requestModifiedFrom.startsWith('PARENT_ORIGINAL:')) {
+          // Clone request to create a child request with CANCELLATION_REJECTED status
+          const childRequest = this.leaveRequestRepository.create({
+            employeeId: request.employeeId,
+            requestType: request.requestType,
+            fromDate: request.fromDate,
+            toDate: request.toDate,
+            title: request.title,
+            description: request.description,
+            status: LeaveRequestStatus.CANCELLATION_REJECTED,
+            submittedDate: request.submittedDate,
+            duration: request.duration,
+            isRead: true,
+            isReadEmployee: false,
+            requestModifiedFrom: `${request.id}:${request.requestType}`,
+            firstHalf: request.firstHalf,
+            secondHalf: request.secondHalf,
+            isHalfDay: request.isHalfDay,
+            ccEmails: request.ccEmails,
+            availableDates: JSON.stringify([]), // doesn't block dates
+            isModified: request.isModified,
+            modificationCount: request.modificationCount,
+            lastModifiedDate: new Date(),
+          });
+          await this.leaveRequestRepository.save(childRequest);
+
+          // Revert parent request back to APPROVED.
           request.status = LeaveRequestStatus.APPROVED;
           await this.leaveRequestRepository.save(request);
           this.logger.log(
-            `[UPDATE_STATUS] Reverted request ${id} back to APPROVED after cancellation rejection (full).`,
+            `[UPDATE_STATUS] Reverted parent request ${id} back to APPROVED and created child CANCELLATION_REJECTED ${childRequest.id} after cancellation rejection.`,
           );
         }
       }
@@ -2590,16 +2650,41 @@ export class LeaveRequestsService {
           `[REJECT_CANCELLATION] Partial cancellation ${id} rejected. availableDates wiped.`,
         );
       } else {
-        // Full cancellation rejection - Revert parent to APPROVED
-        request.status = LeaveRequestStatus.APPROVED;
-        this.logger.log(
-          `[REJECT_CANCELLATION] Full cancellation ${id} rejected. Reverted to APPROVED.`,
-        );
-      }
+        // ── FULL cancellation (parent itself was REQUESTING_FOR_CANCELLATION) ──
+        // 1. Create a child request with status CANCELLATION_REJECTED
+        const childRequest = this.leaveRequestRepository.create({
+          employeeId: request.employeeId,
+          requestType: request.requestType,
+          fromDate: request.fromDate,
+          toDate: request.toDate,
+          title: request.title,
+          description: request.description,
+          status: LeaveRequestStatus.CANCELLATION_REJECTED,
+          submittedDate: request.submittedDate,
+          duration: request.duration,
+          isRead: true,
+          isReadEmployee: false,
+          requestModifiedFrom: `${request.id}:${request.requestType}`,
+          firstHalf: request.firstHalf,
+          secondHalf: request.secondHalf,
+          isHalfDay: request.isHalfDay,
+          ccEmails: request.ccEmails,
+          availableDates: JSON.stringify([]), // Doesn't block dates
+          isModified: request.isModified,
+          modificationCount: request.modificationCount,
+          lastModifiedDate: new Date(),
+        });
+        await this.leaveRequestRepository.save(childRequest);
 
-      request.isReadEmployee = false;
-      if (reviewedBy) request.reviewedBy = reviewedBy;
-      await this.leaveRequestRepository.save(request);
+        // 2. Revert parent back to APPROVED status
+        request.status = LeaveRequestStatus.APPROVED;
+        request.isReadEmployee = false;
+        if (reviewedBy) request.reviewedBy = reviewedBy;
+        this.logger.log(
+          `[REJECT_CANCELLATION] Full cancellation ${id} rejected. Parent reverted to APPROVED, child CANCELLATION_REJECTED created.`,
+        );
+        await this.leaveRequestRepository.save(request);
+      }
 
       try {
         const employee = await this.employeeDetailsRepository.findOne({
@@ -4294,7 +4379,26 @@ export class LeaveRequestsService {
 
         // Update parent to remove modified dates
         try {
-          const parentDates: string[] = JSON.parse(request.availableDates || '[]');
+          let parentDates: string[] = [];
+          if (request.availableDates) {
+            try {
+              const parsed = JSON.parse(request.availableDates);
+              if (Array.isArray(parsed)) parentDates = parsed;
+            } catch (e) {}
+          }
+          if (parentDates.length === 0) {
+            let curIter = dayjs(request.fromDate);
+            const endIter = dayjs(request.toDate);
+            while (curIter.isBefore(endIter) || curIter.isSame(endIter, 'day')) {
+              const isWknd = await this._isWeekend(curIter, employeeId);
+              const isHol = await this._isHoliday(curIter);
+              if (!isWknd && !isHol) {
+                parentDates.push(curIter.format('YYYY-MM-DD'));
+              }
+              curIter = curIter.add(1, 'day');
+            }
+          }
+
           const normalizedDatesToModify = datesToModify.map((d) =>
             dayjs(d).format('YYYY-MM-DD'),
           );
@@ -4304,9 +4408,12 @@ export class LeaveRequestsService {
 
           if (remainingDates.length === 0) {
             this.logger.log(
-              `[MODIFY_DATES] Parent ${id} has no dates left, deleting.`,
+              `[MODIFY_DATES] Parent ${id} has no dates left, setting status to CANCELLED.`,
             );
-            await this.leaveRequestRepository.delete({ id });
+            request.status = LeaveRequestStatus.CANCELLED;
+            request.duration = 0;
+            request.availableDates = JSON.stringify([]);
+            await this.leaveRequestRepository.save(request);
           } else {
             request.availableDates = JSON.stringify(remainingDates);
             const parentFactor = request.isHalfDay
@@ -4431,6 +4538,7 @@ export class LeaveRequestsService {
                 parent.fromDate = mergedDates[0];
                 parent.toDate = mergedDates[mergedDates.length - 1];
                 parent.availableDates = JSON.stringify(mergedDates);
+                parent.status = LeaveRequestStatus.APPROVED;
 
                 await this.leaveRequestRepository.save(parent);
                 this.logger.log(
