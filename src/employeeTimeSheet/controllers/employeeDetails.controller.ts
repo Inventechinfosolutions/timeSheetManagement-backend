@@ -257,6 +257,19 @@ export class EmployeeDetailsController {
     }
   }
 
+  @Get('interns')
+  @ApiOperation({ summary: 'Get all historical interns' })
+  @ApiOkResponse({ description: 'Returns a list of all historical interns and their conversion status' })
+  async getInterns() {
+    try {
+      this.logger.log('Fetching all interns');
+      return await this.employeeDetailsService.getInterns();
+    } catch (error) {
+      this.logger.error(`Error fetching interns: ${error.message}`, error.stack);
+      throw error;
+    }
+  }
+
   @Get(':employeeId')
   @ApiOperation({ summary: 'Get employee by Employee ID' })
   @ApiParam({ name: 'employeeId', type: String, description: 'Employee String ID (e.g. emp001)' })

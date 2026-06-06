@@ -1096,8 +1096,17 @@ export class EmployeeAttendanceService {
       const start = new Date(`${year}-${month.padStart(2, '0')}-01T00:00:00`);
       const end = new Date(start.getFullYear(), start.getMonth() + 1, 0, 23, 59, 59);
 
+      const employee = await this.employeeDetailsRepository.findOne({
+        where: { employeeId },
+        select: ['employeeId', 'internId'],
+      });
+      const employeeIds = [employeeId];
+      if (employee?.internId) {
+        employeeIds.push(employee.internId);
+      }
+
       const records = await this.employeeAttendanceRepository.find({
-        where: { employeeId, workingDate: Between(start, end) },
+        where: { employeeId: In(employeeIds), workingDate: Between(start, end) },
         order: { workingDate: 'ASC' },
       });
       return Promise.all(records.map(record => this.applyStatusBusinessRules(record)));
@@ -1116,9 +1125,18 @@ export class EmployeeAttendanceService {
   async findByDate(workingDate: string, employeeId: string): Promise<EmployeeAttendance[]> {
     this.logger.log(`Fetching attendance for employee: ${employeeId}, Date: ${workingDate}`);
     try {
+      const employee = await this.employeeDetailsRepository.findOne({
+        where: { employeeId },
+        select: ['employeeId', 'internId'],
+      });
+      const employeeIds = [employeeId];
+      if (employee?.internId) {
+        employeeIds.push(employee.internId);
+      }
+
       const records = await this.employeeAttendanceRepository.find({
         where: {
-          employeeId,
+          employeeId: In(employeeIds),
           workingDate: Between(new Date(`${workingDate}T00:00:00`), new Date(`${workingDate}T23:59:59`))
         },
       });
@@ -1139,9 +1157,18 @@ export class EmployeeAttendanceService {
       const start = new Date(`${startDate}T00:00:00`);
       const end = new Date(`${endDate}T23:59:59`);
 
+      const employee = await this.employeeDetailsRepository.findOne({
+        where: { employeeId },
+        select: ['employeeId', 'internId'],
+      });
+      const employeeIds = [employeeId];
+      if (employee?.internId) {
+        employeeIds.push(employee.internId);
+      }
+
       const records = await this.employeeAttendanceRepository.find({
         where: {
-          employeeId,
+          employeeId: In(employeeIds),
           workingDate: Between(start, end)
         },
         order: { workingDate: 'ASC' },
@@ -1163,6 +1190,15 @@ export class EmployeeAttendanceService {
       const start = new Date(`${startDate}T00:00:00`);
       const end = new Date(`${endDate}T23:59:59`);
 
+      const employee = await this.employeeDetailsRepository.findOne({
+        where: { employeeId },
+        select: ['employeeId', 'internId'],
+      });
+      const employeeIds = [employeeId];
+      if (employee?.internId) {
+        employeeIds.push(employee.internId);
+      }
+
       const results = await this.employeeAttendanceRepository
         .createQueryBuilder('attendance')
         .innerJoin('employee_details', 'details', 'details.employee_id = attendance.employee_id')
@@ -1176,7 +1212,7 @@ export class EmployeeAttendanceService {
           'attendance.totalHours AS totalHours',
           'attendance.status AS status'
         ])
-        .where('attendance.employeeId = :employeeId', { employeeId })
+        .where('attendance.employeeId IN (:...employeeIds)', { employeeIds })
         .andWhere('attendance.workingDate BETWEEN :start AND :end', { start, end })
         .orderBy('attendance.workingDate', 'ASC')
         .getRawMany();
@@ -1385,10 +1421,19 @@ export class EmployeeAttendanceService {
 
       const allHolidays = await this.masterHolidayService.findAll();
 
+      const employee = await this.employeeDetailsRepository.findOne({
+        where: { employeeId },
+        select: ['employeeId', 'internId'],
+      });
+      const employeeIds = [employeeId];
+      if (employee?.internId) {
+        employeeIds.push(employee.internId);
+      }
+
       // Fetch all attendance records for this period from employee_attendance table
       const attendances = await this.employeeAttendanceRepository.find({
         where: {
-          employeeId,
+          employeeId: In(employeeIds),
           workingDate: Between(start, end),
         },
         order: { workingDate: 'ASC' }
@@ -1472,9 +1517,18 @@ export class EmployeeAttendanceService {
 
       const allHolidays = await this.masterHolidayService.findAll();
 
+      const employee = await this.employeeDetailsRepository.findOne({
+        where: { employeeId },
+        select: ['employeeId', 'internId'],
+      });
+      const employeeIds = [employeeId];
+      if (employee?.internId) {
+        employeeIds.push(employee.internId);
+      }
+
       const attendances = await this.employeeAttendanceRepository.find({
         where: {
-          employeeId,
+          employeeId: In(employeeIds),
           workingDate: Between(start, end),
         },
         order: { workingDate: 'ASC' }
@@ -1642,9 +1696,18 @@ export class EmployeeAttendanceService {
       weekEnd.setDate(weekStart.getDate() + 6);
       weekEnd.setHours(23, 59, 59, 999);
 
+      const employee = await this.employeeDetailsRepository.findOne({
+        where: { employeeId },
+        select: ['employeeId', 'internId'],
+      });
+      const employeeIds = [employeeId];
+      if (employee?.internId) {
+        employeeIds.push(employee.internId);
+      }
+
       const weekRecords = await this.employeeAttendanceRepository.find({
         where: {
-          employeeId,
+          employeeId: In(employeeIds),
           workingDate: Between(weekStart, weekEnd),
         },
       });
@@ -1657,7 +1720,7 @@ export class EmployeeAttendanceService {
 
       const monthRecords = await this.employeeAttendanceRepository.find({
         where: {
-          employeeId,
+          employeeId: In(employeeIds),
           workingDate: Between(monthStart, monthEnd),
         },
       });

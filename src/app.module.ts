@@ -18,6 +18,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { AttendanceCronService } from './cron/attendance.cron.service';
 import { EmployeeAttendance } from './employeeTimeSheet/entities/employeeAttendance.entity';
 import { EmployeeDetails } from './employeeTimeSheet/entities/employeeDetails.entity';
+import { InternDetails } from './employeeTimeSheet/entities/internDetails.entity';
 import { ManagerMapping } from './managerMapping/entities/managerMapping.entity';
 import { LeaveRequest } from './employeeTimeSheet/entities/leave-request.entity';
 import { MailModule } from './common/mail/mail.module';
@@ -56,7 +57,7 @@ function getEnvFiles(): string[] {
     MasterModule,
     ManagerMappingModule,
     ScheduleModule.forRoot(),
-    TypeOrmModule.forFeature([EmployeeAttendance, EmployeeDetails, ManagerMapping, LeaveRequest]),
+    TypeOrmModule.forFeature([EmployeeAttendance, EmployeeDetails, InternDetails, ManagerMapping, LeaveRequest]),
     MailModule,
     NotificationsModule,
     BullModule.forRootAsync({
