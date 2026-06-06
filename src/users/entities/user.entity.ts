@@ -55,4 +55,6 @@ export class User extends BaseEntity {
   })
   role: UserType;
 
+  @Column({ name: 'intern_id', type: 'varchar', length: 100, nullable: true })
+  internId: string | null;
 }

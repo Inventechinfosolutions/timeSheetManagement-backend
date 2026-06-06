@@ -27,6 +27,8 @@ import PDFDocument from 'pdfkit';
 import * as fs from 'fs';
 import * as path from 'path';
 import dayjs from 'dayjs';
+import utc from 'dayjs/plugin/utc';
+dayjs.extend(utc);
 
 @Injectable()
 export class EmployeeAttendanceService {
@@ -568,8 +570,11 @@ export class EmployeeAttendanceService {
 
     try {
       const startDate = new Date(yearNum, monthNum - 1, 1, 0, 0, 0);
-      if (startDate > today) {
-        throw new BadRequestException('Auto-update is not available for future months.');
+      if (
+        yearNum !== today.getFullYear() ||
+        (monthNum - 1) !== today.getMonth()
+      ) {
+        throw new BadRequestException('Auto-update is only available for the current month.');
       }
 
       // Determine end date: either today (if current month) or last day of the month (if past month)
@@ -1096,8 +1101,17 @@ export class EmployeeAttendanceService {
       const start = new Date(`${year}-${month.padStart(2, '0')}-01T00:00:00`);
       const end = new Date(start.getFullYear(), start.getMonth() + 1, 0, 23, 59, 59);
 
+      const employee = await this.employeeDetailsRepository.findOne({
+        where: { employeeId },
+        select: ['employeeId', 'internId'],
+      });
+      const employeeIds = [employeeId];
+      if (employee?.internId) {
+        employeeIds.push(employee.internId);
+      }
+
       const records = await this.employeeAttendanceRepository.find({
-        where: { employeeId, workingDate: Between(start, end) },
+        where: { employeeId: In(employeeIds), workingDate: Between(start, end) },
         order: { workingDate: 'ASC' },
       });
       return Promise.all(records.map(record => this.applyStatusBusinessRules(record)));
@@ -1116,9 +1130,18 @@ export class EmployeeAttendanceService {
   async findByDate(workingDate: string, employeeId: string): Promise<EmployeeAttendance[]> {
     this.logger.log(`Fetching attendance for employee: ${employeeId}, Date: ${workingDate}`);
     try {
+      const employee = await this.employeeDetailsRepository.findOne({
+        where: { employeeId },
+        select: ['employeeId', 'internId'],
+      });
+      const employeeIds = [employeeId];
+      if (employee?.internId) {
+        employeeIds.push(employee.internId);
+      }
+
       const records = await this.employeeAttendanceRepository.find({
         where: {
-          employeeId,
+          employeeId: In(employeeIds),
           workingDate: Between(new Date(`${workingDate}T00:00:00`), new Date(`${workingDate}T23:59:59`))
         },
       });
@@ -1139,9 +1162,18 @@ export class EmployeeAttendanceService {
       const start = new Date(`${startDate}T00:00:00`);
       const end = new Date(`${endDate}T23:59:59`);
 
+      const employee = await this.employeeDetailsRepository.findOne({
+        where: { employeeId },
+        select: ['employeeId', 'internId'],
+      });
+      const employeeIds = [employeeId];
+      if (employee?.internId) {
+        employeeIds.push(employee.internId);
+      }
+
       const records = await this.employeeAttendanceRepository.find({
         where: {
-          employeeId,
+          employeeId: In(employeeIds),
           workingDate: Between(start, end)
         },
         order: { workingDate: 'ASC' },
@@ -1163,6 +1195,15 @@ export class EmployeeAttendanceService {
       const start = new Date(`${startDate}T00:00:00`);
       const end = new Date(`${endDate}T23:59:59`);
 
+      const employee = await this.employeeDetailsRepository.findOne({
+        where: { employeeId },
+        select: ['employeeId', 'internId'],
+      });
+      const employeeIds = [employeeId];
+      if (employee?.internId) {
+        employeeIds.push(employee.internId);
+      }
+
       const results = await this.employeeAttendanceRepository
         .createQueryBuilder('attendance')
         .innerJoin('employee_details', 'details', 'details.employee_id = attendance.employee_id')
@@ -1176,7 +1217,7 @@ export class EmployeeAttendanceService {
           'attendance.totalHours AS totalHours',
           'attendance.status AS status'
         ])
-        .where('attendance.employeeId = :employeeId', { employeeId })
+        .where('attendance.employeeId IN (:...employeeIds)', { employeeIds })
         .andWhere('attendance.workingDate BETWEEN :start AND :end', { start, end })
         .orderBy('attendance.workingDate', 'ASC')
         .getRawMany();
@@ -1385,10 +1426,19 @@ export class EmployeeAttendanceService {
 
       const allHolidays = await this.masterHolidayService.findAll();
 
+      const employee = await this.employeeDetailsRepository.findOne({
+        where: { employeeId },
+        select: ['employeeId', 'internId'],
+      });
+      const employeeIds = [employeeId];
+      if (employee?.internId) {
+        employeeIds.push(employee.internId);
+      }
+
       // Fetch all attendance records for this period from employee_attendance table
       const attendances = await this.employeeAttendanceRepository.find({
         where: {
-          employeeId,
+          employeeId: In(employeeIds),
           workingDate: Between(start, end),
         },
         order: { workingDate: 'ASC' }
@@ -1472,9 +1522,18 @@ export class EmployeeAttendanceService {
 
       const allHolidays = await this.masterHolidayService.findAll();
 
+      const employee = await this.employeeDetailsRepository.findOne({
+        where: { employeeId },
+        select: ['employeeId', 'internId'],
+      });
+      const employeeIds = [employeeId];
+      if (employee?.internId) {
+        employeeIds.push(employee.internId);
+      }
+
       const attendances = await this.employeeAttendanceRepository.find({
         where: {
-          employeeId,
+          employeeId: In(employeeIds),
           workingDate: Between(start, end),
         },
         order: { workingDate: 'ASC' }
@@ -1642,9 +1701,18 @@ export class EmployeeAttendanceService {
       weekEnd.setDate(weekStart.getDate() + 6);
       weekEnd.setHours(23, 59, 59, 999);
 
+      const employee = await this.employeeDetailsRepository.findOne({
+        where: { employeeId },
+        select: ['employeeId', 'internId'],
+      });
+      const employeeIds = [employeeId];
+      if (employee?.internId) {
+        employeeIds.push(employee.internId);
+      }
+
       const weekRecords = await this.employeeAttendanceRepository.find({
         where: {
-          employeeId,
+          employeeId: In(employeeIds),
           workingDate: Between(weekStart, weekEnd),
         },
       });
@@ -1657,7 +1725,7 @@ export class EmployeeAttendanceService {
 
       const monthRecords = await this.employeeAttendanceRepository.find({
         where: {
-          employeeId,
+          employeeId: In(employeeIds),
           workingDate: Between(monthStart, monthEnd),
         },
       });
@@ -2020,7 +2088,18 @@ export class EmployeeAttendanceService {
       const startStr = dayjs(startDate).format('YYYY-MM-DD');
       const endStr = dayjs(endDate).format('YYYY-MM-DD');
 
-      const employeeIds = employees.map(e => e.employeeId);
+      const employeeIds: string[] = [];
+      const idToMainIdMap = new Map<string, string>();
+      employees.forEach(e => {
+        if (e.employeeId) {
+          employeeIds.push(e.employeeId);
+          idToMainIdMap.set(e.employeeId, e.employeeId);
+          if (e.internId) {
+            employeeIds.push(e.internId);
+            idToMainIdMap.set(e.internId, e.employeeId);
+          }
+        }
+      });
 
       const attendanceQuery = this.employeeAttendanceRepository.createQueryBuilder('attendance')
         .where('attendance.workingDate BETWEEN :start AND :end', {
@@ -2047,11 +2126,12 @@ export class EmployeeAttendanceService {
       const attendanceMap = new Map<string, Map<string, EmployeeAttendance>>();
 
       allAttendance.forEach(record => {
-        if (!attendanceMap.has(record.employeeId)) {
-          attendanceMap.set(record.employeeId, new Map());
+        const mainEmployeeId = idToMainIdMap.get(record.employeeId) || record.employeeId;
+        if (!attendanceMap.has(mainEmployeeId)) {
+          attendanceMap.set(mainEmployeeId, new Map());
         }
         const dateKey = normalizeDate(record.workingDate);
-        const empMap = attendanceMap.get(record.employeeId);
+        const empMap = attendanceMap.get(mainEmployeeId);
         if (empMap) {
           empMap.set(dateKey, record);
         }
@@ -2383,14 +2463,33 @@ export class EmployeeAttendanceService {
       const employee = await this.employeeDetailsRepository.findOne({ where: { employeeId } });
       if (!employee) throw new NotFoundException(`Employee with ID ${employeeId} not found`);
 
-      // 2. Fetch Attendance Records for the range
-      const attendanceRecords = await this.employeeAttendanceRepository.find({
-        where: {
-          employeeId,
-          workingDate: Between(startDate, endDate)
-        },
-        order: { workingDate: 'ASC' }
-      });
+      const employeeIds = [employeeId];
+      if (employee?.internId) {
+        employeeIds.push(employee.internId);
+      }
+
+      // 2. Fetch Attendance Records for the range.
+      // Use entity property names (camelCase) in createQueryBuilder, not raw DB column names.
+      // Compare working_date as a plain string to avoid timezone shifting issues in MySQL.
+      const startStr = dayjs(startDate).format('YYYY-MM-DD');
+      const endStr = dayjs(endDate).format('YYYY-MM-DD');
+
+      const qb = this.employeeAttendanceRepository
+        .createQueryBuilder('a')
+        .where('a.employeeId IN (:...employeeIds)', { employeeIds })
+        .andWhere('a.workingDate >= :startStr', { startStr })
+        .andWhere('a.workingDate <= :endStr', { endStr })
+        .orderBy('a.workingDate', 'ASC');
+
+      this.logger.log(`PDF SQL: ${qb.getSql()}`);
+      this.logger.log(`PDF Params: employeeIds=${employeeIds.join(', ')}, startStr=${startStr}, endStr=${endStr}`);
+
+      const attendanceRecords = await qb.getMany();
+
+      this.logger.log(`PDF: querying ${employeeIds.join(', ')} from ${startStr} to ${endStr} → found ${attendanceRecords.length} records`);
+      if (attendanceRecords.length > 0) {
+        this.logger.log(`PDF: first record workingDate=${attendanceRecords[0].workingDate}, type=${typeof attendanceRecords[0].workingDate}`);
+      }
 
       // 3. Fetch Holidays
       const holidays = await this.masterHolidayService.findAll();
@@ -2398,7 +2497,10 @@ export class EmployeeAttendanceService {
       holidays.forEach(h => {
         const d = h.holidayDate || (h as any).date;
         if (d) {
-          const dateKey = dayjs(d).format('YYYY-MM-DD');
+          // Use UTC to match the dateKey in the generation loop
+          const dateKey = d instanceof Date
+            ? d.toISOString().slice(0, 10)
+            : String(d).slice(0, 10);
           holidayMap.set(dateKey, (h as any).name || (h as any).holidayName || AttendanceStatus.HOLIDAY);
         }
       });
@@ -2486,9 +2588,18 @@ export class EmployeeAttendanceService {
               months.push(monthObj);
             }
 
-            const dateKey = dayjs(tempDate).format('YYYY-MM-DD');
+            // Use UTC date formatting for tempDate so it always matches the calendar date.
+            // For the DB record, slice the ISO string (or Date.toISOString) to get YYYY-MM-DD in UTC,
+            // which matches exactly what PostgreSQL stores in the 'date' column.
+            const dateKey = dayjs.utc(tempDate).format('YYYY-MM-DD');
             const dayName = tempDate.toLocaleDateString('en-US', { weekday: 'long' });
-            const record = attendanceRecords.find(r => dayjs(r.workingDate).format('YYYY-MM-DD') === dateKey);
+            const record = attendanceRecords.find(r => {
+              // r.workingDate may be a Date object (midnight UTC) or a string like '2026-04-01'
+              const rKey = r.workingDate instanceof Date
+                ? r.workingDate.toISOString().slice(0, 10)
+                : String(r.workingDate).slice(0, 10);
+              return rKey === dateKey;
+            });
             const holiday = holidayMap.get(dateKey);
 
             let status = '';
@@ -2519,8 +2630,16 @@ export class EmployeeAttendanceService {
                 }
               } else {
                 const s = record.status;
+                const totalHrs = Number(record.totalHours || 0);
                 if (tempDate > new Date()) {
                   status = AttendanceStatus.UPCOMING;
+                } else if (totalHrs > 0) {
+                  // Employee has logged hours — derive status from hours even if halves are missing
+                  if (s && s !== AttendanceStatus.NOT_UPDATED && s !== AttendanceStatus.PENDING) {
+                    status = s;
+                  } else {
+                    status = totalHrs >= 7 ? AttendanceStatus.FULL_DAY : AttendanceStatus.HALF_DAY;
+                  }
                 } else if (!s || s === AttendanceStatus.NOT_UPDATED || s === AttendanceStatus.PENDING) {
                   status = AttendanceStatus.NOT_UPDATED.toUpperCase();
                 } else {

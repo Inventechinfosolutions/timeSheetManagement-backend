@@ -679,7 +679,15 @@ export class LeaveRequestsService {
 
       // 1. Employee Filter
       if (employeeId) {
-        query.andWhere('lr.employeeId = :employeeId', { employeeId });
+        const employee = await this.employeeDetailsRepository.findOne({
+          where: { employeeId },
+          select: ['employeeId', 'internId'],
+        });
+        const employeeIds = [employeeId];
+        if (employee?.internId) {
+          employeeIds.push(employee.internId);
+        }
+        query.andWhere('lr.employeeId IN (:...employeeIds)', { employeeIds });
       }
 
       // 2. Manager Filter (from Upstream)
@@ -1545,11 +1553,17 @@ export class LeaveRequestsService {
           'employmentType',
           'joiningDate',
           'conversionDate',
+          'internId',
         ],
       });
       if (!employee) {
         this.logger.warn(`[STATS] Employee ${employeeId} not found`);
         throw new NotFoundException(`Employee ${employeeId} not found`);
+      }
+
+      const employeeIds = [employee.employeeId];
+      if (employee.internId) {
+        employeeIds.push(employee.internId);
       }
 
       // Prorate entitlement for the year based on status and conversion date
@@ -1581,7 +1595,7 @@ export class LeaveRequestsService {
       const usedResult = await this.leaveRequestRepository
         .createQueryBuilder('lr')
         .select('SUM(lr.duration)', 'total')
-        .where('lr.employeeId = :employeeId', { employeeId })
+        .where('lr.employeeId IN (:...employeeIds)', { employeeIds })
         .andWhere(
           new Brackets((qb) => {
             qb.where('lr.requestType IN (:...leaveTypes)', { leaveTypes })
@@ -1605,7 +1619,7 @@ export class LeaveRequestsService {
       const pendingResult = await this.leaveRequestRepository
         .createQueryBuilder('lr')
         .select('SUM(lr.duration)', 'total')
-        .where('lr.employeeId = :employeeId', { employeeId })
+        .where('lr.employeeId IN (:...employeeIds)', { employeeIds })
         .andWhere(
           new Brackets((qb) => {
             qb.where('lr.requestType IN (:...leaveTypes)', { leaveTypes })
@@ -1651,8 +1665,17 @@ export class LeaveRequestsService {
       `[STATS] getStats: Employee=${employeeId}, Month=${month}, Year=${year}`,
     );
     try {
-      const requests = await this.leaveRequestRepository.find({
+      const employee = await this.employeeDetailsRepository.findOne({
         where: { employeeId },
+        select: ['employeeId', 'internId'],
+      });
+      const employeeIds = [employeeId];
+      if (employee?.internId) {
+        employeeIds.push(employee.internId);
+      }
+
+      const requests = await this.leaveRequestRepository.find({
+        where: { employeeId: In(employeeIds) },
       });
 
       const filteredRequests = requests.filter((req: any) => {
@@ -2676,6 +2699,7 @@ export class LeaveRequestsService {
         this.logger.log(
           `[REJECT_CANCELLATION] Partial cancellation ${id} rejected. availableDates wiped.`,
         );
+        await this.leaveRequestRepository.save(request);
       } else {
         // ── FULL cancellation (parent itself was REQUESTING_FOR_CANCELLATION) ──
         // 1. Create a child request with status CANCELLATION_REJECTED
@@ -4681,11 +4705,17 @@ export class LeaveRequestsService {
           'employmentType',
           'joiningDate',
           'conversionDate',
+          'internId',
         ],
       });
 
       if (!employee)
         throw new NotFoundException(`Employee ${employeeId} not found`);
+
+      const employeeIds = [employeeId];
+      if (employee.internId) {
+        employeeIds.push(employee.internId);
+      }
 
       let runningBalance = 0;
       let ytdUsed = 0;
@@ -4708,7 +4738,7 @@ export class LeaveRequestsService {
 
       const attendanceRecords = await this.employeeAttendanceRepository.find({
         where: {
-          employeeId,
+          employeeId: In(employeeIds),
           workingDate: Between(
             new Date(`${calculationStartYear}-01-01T00:00:00`),
             new Date(`${year}-12-31T23:59:59`),
