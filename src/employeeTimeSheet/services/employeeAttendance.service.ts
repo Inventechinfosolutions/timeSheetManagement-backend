@@ -27,6 +27,8 @@ import PDFDocument from 'pdfkit';
 import * as fs from 'fs';
 import * as path from 'path';
 import dayjs from 'dayjs';
+import utc from 'dayjs/plugin/utc';
+dayjs.extend(utc);
 
 @Injectable()
 export class EmployeeAttendanceService {
@@ -2446,14 +2448,33 @@ export class EmployeeAttendanceService {
       const employee = await this.employeeDetailsRepository.findOne({ where: { employeeId } });
       if (!employee) throw new NotFoundException(`Employee with ID ${employeeId} not found`);
 
-      // 2. Fetch Attendance Records for the range
-      const attendanceRecords = await this.employeeAttendanceRepository.find({
-        where: {
-          employeeId,
-          workingDate: Between(startDate, endDate)
-        },
-        order: { workingDate: 'ASC' }
-      });
+      const employeeIds = [employeeId];
+      if (employee?.internId) {
+        employeeIds.push(employee.internId);
+      }
+
+      // 2. Fetch Attendance Records for the range.
+      // Use entity property names (camelCase) in createQueryBuilder, not raw DB column names.
+      // Compare working_date as a plain string to avoid timezone shifting issues in MySQL.
+      const startStr = dayjs(startDate).format('YYYY-MM-DD');
+      const endStr = dayjs(endDate).format('YYYY-MM-DD');
+
+      const qb = this.employeeAttendanceRepository
+        .createQueryBuilder('a')
+        .where('a.employeeId IN (:...employeeIds)', { employeeIds })
+        .andWhere('a.workingDate >= :startStr', { startStr })
+        .andWhere('a.workingDate <= :endStr', { endStr })
+        .orderBy('a.workingDate', 'ASC');
+
+      this.logger.log(`PDF SQL: ${qb.getSql()}`);
+      this.logger.log(`PDF Params: employeeIds=${employeeIds.join(', ')}, startStr=${startStr}, endStr=${endStr}`);
+
+      const attendanceRecords = await qb.getMany();
+
+      this.logger.log(`PDF: querying ${employeeIds.join(', ')} from ${startStr} to ${endStr} → found ${attendanceRecords.length} records`);
+      if (attendanceRecords.length > 0) {
+        this.logger.log(`PDF: first record workingDate=${attendanceRecords[0].workingDate}, type=${typeof attendanceRecords[0].workingDate}`);
+      }
 
       // 3. Fetch Holidays
       const holidays = await this.masterHolidayService.findAll();
@@ -2461,7 +2482,10 @@ export class EmployeeAttendanceService {
       holidays.forEach(h => {
         const d = h.holidayDate || (h as any).date;
         if (d) {
-          const dateKey = dayjs(d).format('YYYY-MM-DD');
+          // Use UTC to match the dateKey in the generation loop
+          const dateKey = d instanceof Date
+            ? d.toISOString().slice(0, 10)
+            : String(d).slice(0, 10);
           holidayMap.set(dateKey, (h as any).name || (h as any).holidayName || AttendanceStatus.HOLIDAY);
         }
       });
@@ -2549,9 +2573,18 @@ export class EmployeeAttendanceService {
               months.push(monthObj);
             }
 
-            const dateKey = dayjs(tempDate).format('YYYY-MM-DD');
+            // Use UTC date formatting for tempDate so it always matches the calendar date.
+            // For the DB record, slice the ISO string (or Date.toISOString) to get YYYY-MM-DD in UTC,
+            // which matches exactly what PostgreSQL stores in the 'date' column.
+            const dateKey = dayjs.utc(tempDate).format('YYYY-MM-DD');
             const dayName = tempDate.toLocaleDateString('en-US', { weekday: 'long' });
-            const record = attendanceRecords.find(r => dayjs(r.workingDate).format('YYYY-MM-DD') === dateKey);
+            const record = attendanceRecords.find(r => {
+              // r.workingDate may be a Date object (midnight UTC) or a string like '2026-04-01'
+              const rKey = r.workingDate instanceof Date
+                ? r.workingDate.toISOString().slice(0, 10)
+                : String(r.workingDate).slice(0, 10);
+              return rKey === dateKey;
+            });
             const holiday = holidayMap.get(dateKey);
 
             let status = '';
@@ -2582,8 +2615,16 @@ export class EmployeeAttendanceService {
                 }
               } else {
                 const s = record.status;
+                const totalHrs = Number(record.totalHours || 0);
                 if (tempDate > new Date()) {
                   status = AttendanceStatus.UPCOMING;
+                } else if (totalHrs > 0) {
+                  // Employee has logged hours — derive status from hours even if halves are missing
+                  if (s && s !== AttendanceStatus.NOT_UPDATED && s !== AttendanceStatus.PENDING) {
+                    status = s;
+                  } else {
+                    status = totalHrs >= 7 ? AttendanceStatus.FULL_DAY : AttendanceStatus.HALF_DAY;
+                  }
                 } else if (!s || s === AttendanceStatus.NOT_UPDATED || s === AttendanceStatus.PENDING) {
                   status = AttendanceStatus.NOT_UPDATED.toUpperCase();
                 } else {
