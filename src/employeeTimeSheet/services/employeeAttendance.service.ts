@@ -570,8 +570,11 @@ export class EmployeeAttendanceService {
 
     try {
       const startDate = new Date(yearNum, monthNum - 1, 1, 0, 0, 0);
-      if (startDate > today) {
-        throw new BadRequestException('Auto-update is not available for future months.');
+      if (
+        yearNum !== today.getFullYear() ||
+        (monthNum - 1) !== today.getMonth()
+      ) {
+        throw new BadRequestException('Auto-update is only available for the current month.');
       }
 
       // Determine end date: either today (if current month) or last day of the month (if past month)

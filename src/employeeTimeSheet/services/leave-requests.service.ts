@@ -2699,6 +2699,7 @@ export class LeaveRequestsService {
         this.logger.log(
           `[REJECT_CANCELLATION] Partial cancellation ${id} rejected. availableDates wiped.`,
         );
+        await this.leaveRequestRepository.save(request);
       } else {
         // ── FULL cancellation (parent itself was REQUESTING_FOR_CANCELLATION) ──
         // 1. Create a child request with status CANCELLATION_REJECTED
