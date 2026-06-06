@@ -2088,7 +2088,18 @@ export class EmployeeAttendanceService {
       const startStr = dayjs(startDate).format('YYYY-MM-DD');
       const endStr = dayjs(endDate).format('YYYY-MM-DD');
 
-      const employeeIds = employees.map(e => e.employeeId);
+      const employeeIds: string[] = [];
+      const idToMainIdMap = new Map<string, string>();
+      employees.forEach(e => {
+        if (e.employeeId) {
+          employeeIds.push(e.employeeId);
+          idToMainIdMap.set(e.employeeId, e.employeeId);
+          if (e.internId) {
+            employeeIds.push(e.internId);
+            idToMainIdMap.set(e.internId, e.employeeId);
+          }
+        }
+      });
 
       const attendanceQuery = this.employeeAttendanceRepository.createQueryBuilder('attendance')
         .where('attendance.workingDate BETWEEN :start AND :end', {
@@ -2115,11 +2126,12 @@ export class EmployeeAttendanceService {
       const attendanceMap = new Map<string, Map<string, EmployeeAttendance>>();
 
       allAttendance.forEach(record => {
-        if (!attendanceMap.has(record.employeeId)) {
-          attendanceMap.set(record.employeeId, new Map());
+        const mainEmployeeId = idToMainIdMap.get(record.employeeId) || record.employeeId;
+        if (!attendanceMap.has(mainEmployeeId)) {
+          attendanceMap.set(mainEmployeeId, new Map());
         }
         const dateKey = normalizeDate(record.workingDate);
-        const empMap = attendanceMap.get(record.employeeId);
+        const empMap = attendanceMap.get(mainEmployeeId);
         if (empMap) {
           empMap.set(dateKey, record);
         }
