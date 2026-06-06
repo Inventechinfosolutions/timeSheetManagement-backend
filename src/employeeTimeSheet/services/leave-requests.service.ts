@@ -1471,7 +1471,58 @@ export class LeaveRequestsService {
     }
   }
 
-  /** Leave balance: entitlement (18 full timer / 12 intern), used (approved leave in year), pending, balance */
+  /** FULL_TIMER takes precedence over intern-like designations (e.g. Trainee Intern). */
+  private resolveBaseInternStatus(employee: {
+    employmentType?: EmploymentType | null;
+    designation?: string | null;
+  }): boolean {
+    if (employee.employmentType === EmploymentType.FULL_TIMER) {
+      return false;
+    }
+    if (employee.employmentType === EmploymentType.INTERN) {
+      return true;
+    }
+    return (employee.designation || '')
+      .toLowerCase()
+      .includes(EmploymentType.INTERN.toLowerCase());
+  }
+
+  /** Month-aware intern status including intern-to-full-timer conversion date. */
+  private isInternForMonth(
+    employee: {
+      employmentType?: EmploymentType | null;
+      designation?: string | null;
+      conversionDate?: Date | null;
+    },
+    year: number,
+    month: number,
+  ): boolean {
+    let isInternThisMonth = this.resolveBaseInternStatus(employee);
+    const convDate = employee.conversionDate
+      ? dayjs(employee.conversionDate)
+      : null;
+
+    if (convDate?.isValid()) {
+      const convYear = convDate.year();
+      const convMonth = convDate.month() + 1;
+
+      if (year > convYear || (year === convYear && month >= convMonth)) {
+        isInternThisMonth = false;
+        if (
+          year === convYear &&
+          month === convMonth &&
+          convDate.date() > 10
+        ) {
+          isInternThisMonth = true;
+        }
+      } else {
+        isInternThisMonth = true;
+      }
+    }
+
+    return isInternThisMonth;
+  }
+
   /** Leave balance: entitlement (18 full timer / 12 intern), used (approved leave in year), pending, balance */
   async getLeaveBalance(employeeId: string, year: string) {
     this.logger.log(
@@ -1501,21 +1552,10 @@ export class LeaveRequestsService {
         throw new NotFoundException(`Employee ${employeeId} not found`);
       }
 
-      // Explicit employment type: FULL_TIMER = 18, INTERN = 12. Else infer from designation (contains "intern").
-      const isIntern =
-        employee.employmentType === EmploymentType.INTERN ||
-        (employee.designation || '')
-          .toLowerCase()
-          .includes(EmploymentType.INTERN.toLowerCase());
-
       // Prorate entitlement for the year based on status and conversion date
       const joinDate = dayjs(employee.joiningDate);
       const joinMonth = joinDate.isValid() ? joinDate.month() + 1 : 1;
       const joinYear = joinDate.isValid() ? joinDate.year() : yearNum;
-
-      const convDate = (employee as any).conversionDate
-        ? dayjs((employee as any).conversionDate)
-        : null;
 
       let entitlement = 0;
 
@@ -1525,21 +1565,8 @@ export class LeaveRequestsService {
         for (let m = 1; m <= 12; m++) {
           if (yearNum === joinYear && m < joinMonth) continue;
 
-          let monthlyAccrual = isIntern ? 1.0 : 1.5;
-
-          if (convDate && convDate.isValid()) {
-            const cMonth = convDate.month() + 1;
-            const cYear = convDate.year();
-
-            if (yearNum > cYear || (yearNum === cYear && m >= cMonth)) {
-              monthlyAccrual = 1.5;
-              if (yearNum === cYear && m === cMonth && convDate.date() > 10) {
-                monthlyAccrual = 1.0;
-              }
-            } else {
-              monthlyAccrual = 1.0;
-            }
-          }
+          const isInternThisMonth = this.isInternForMonth(employee, yearNum, m);
+          let monthlyAccrual = isInternThisMonth ? 1.0 : 1.5;
 
           if (yearNum === joinYear && m === joinMonth && joinDate.date() > 10) {
             monthlyAccrual = 0;
@@ -4660,12 +4687,6 @@ export class LeaveRequestsService {
       if (!employee)
         throw new NotFoundException(`Employee ${employeeId} not found`);
 
-      const isIntern =
-        employee.employmentType === EmploymentType.INTERN ||
-        (employee.designation || '')
-          .toLowerCase()
-          .includes(EmploymentType.INTERN.toLowerCase());
-
       let runningBalance = 0;
       let ytdUsed = 0;
       let ytdLop = 0;
@@ -4722,28 +4743,7 @@ export class LeaveRequestsService {
         const endM = curYear === year ? month : 12;
 
         for (let m = startM; m <= endM; m++) {
-          let isInternThisMonth = isIntern;
-          const convDate = (employee as any).conversionDate
-            ? dayjs((employee as any).conversionDate)
-            : null;
-          if (convDate && convDate.isValid()) {
-            const convMonth = convDate.month() + 1;
-            const convYear = convDate.year();
-            if (
-              curYear > convYear ||
-              (curYear === convYear && m >= convMonth)
-            ) {
-              isInternThisMonth = false;
-              if (
-                curYear === convYear &&
-                m === convMonth &&
-                convDate.date() > 10
-              )
-                isInternThisMonth = true;
-            } else {
-              isInternThisMonth = true;
-            }
-          }
+          const isInternThisMonth = this.isInternForMonth(employee, curYear, m);
 
           if (curYear === year && m === month)
             targetMonthStats.carryOver = runningBalance;
