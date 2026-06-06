@@ -609,7 +609,14 @@ export class EmployeeAttendanceService {
       const approvedLeaves = await this.leaveRequestRepository.find({
         where: {
           employeeId,
-          status: LeaveRequestStatus.APPROVED,
+          status: In([
+            LeaveRequestStatus.APPROVED,
+            LeaveRequestStatus.REQUESTING_FOR_CANCELLATION,
+            LeaveRequestStatus.REQUESTING_FOR_MODIFICATION,
+            LeaveRequestStatus.MODIFICATION_APPROVED,
+            LeaveRequestStatus.CANCELLATION_REJECTED,
+            LeaveRequestStatus.MODIFICATION_REJECTED,
+          ]),
           fromDate: LessThanOrEqual(dayjs(endDate).format('YYYY-MM-DD')),
           toDate: MoreThanOrEqual(dayjs(startDate).format('YYYY-MM-DD'))
         }
@@ -1254,7 +1261,14 @@ export class EmployeeAttendanceService {
                 id: attendance.sourceRequestId,
                 employeeId: attendance.employeeId,
                 requestType: In([LeaveRequestType.CLIENT_VISIT, LeaveRequestType.WORK_FROM_HOME, WorkLocation.WFH]),
-                status: LeaveRequestStatus.APPROVED,
+                status: In([
+                  LeaveRequestStatus.APPROVED,
+                  LeaveRequestStatus.REQUESTING_FOR_CANCELLATION,
+                  LeaveRequestStatus.REQUESTING_FOR_MODIFICATION,
+                  LeaveRequestStatus.MODIFICATION_APPROVED,
+                  LeaveRequestStatus.CANCELLATION_REJECTED,
+                  LeaveRequestStatus.MODIFICATION_REJECTED,
+                ]),
                 fromDate: LessThanOrEqual(workingDate),
                 toDate: MoreThanOrEqual(workingDate),
               },
@@ -1834,7 +1848,14 @@ export class EmployeeAttendanceService {
       // 3. Fetch all approved leaves for the month for ALL employees
       const allApprovedLeaves = await this.leaveRequestRepository.find({
         where: {
-          status: LeaveRequestStatus.APPROVED,
+          status: In([
+            LeaveRequestStatus.APPROVED,
+            LeaveRequestStatus.REQUESTING_FOR_CANCELLATION,
+            LeaveRequestStatus.REQUESTING_FOR_MODIFICATION,
+            LeaveRequestStatus.MODIFICATION_APPROVED,
+            LeaveRequestStatus.CANCELLATION_REJECTED,
+            LeaveRequestStatus.MODIFICATION_REJECTED,
+          ]),
           fromDate: LessThanOrEqual(dayjs(monthEnd).format('YYYY-MM-DD')),
           toDate: MoreThanOrEqual(dayjs(monthStart).format('YYYY-MM-DD'))
         }

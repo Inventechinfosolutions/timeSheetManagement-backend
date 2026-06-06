@@ -1780,10 +1780,26 @@ export class LeaveRequestsService {
       }
 
       const previousStatus = request.status;
+
+      if (status === LeaveRequestStatus.REJECTED && previousStatus === LeaveRequestStatus.REQUESTING_FOR_MODIFICATION) {
+        status = LeaveRequestStatus.MODIFICATION_REJECTED;
+      }
+      if (status === LeaveRequestStatus.REJECTED && previousStatus === LeaveRequestStatus.REQUESTING_FOR_CANCELLATION) {
+        status = LeaveRequestStatus.CANCELLATION_REJECTED;
+      }
+
       request.status = status;
       if (reviewedBy) request.reviewedBy = reviewedBy;
       request.isRead = true;
       request.isReadEmployee = false;
+
+      if (status === LeaveRequestStatus.MODIFICATION_APPROVED && request.requestModifiedFrom && request.requestModifiedFrom.startsWith('PARENT_ORIGINAL:')) {
+        request.requestModifiedFrom = null as any;
+      }
+
+      // Backup child's availableDates BEFORE save — TypeORM returns the same object reference,
+      // so the terminalFailedStatuses wipe below would destroy it before the restore block runs.
+      const _childAvailableDatesBackup = request.availableDates;
 
       const savedRequest = await this.leaveRequestRepository.save(request);
 
@@ -1799,7 +1815,7 @@ export class LeaveRequestsService {
       ];
 
       if (terminalFailedStatuses.includes(status as any)) {
-        const isChild = !!request.requestModifiedFrom;
+        const isChild = request.requestModifiedFrom && !request.requestModifiedFrom.startsWith('PARENT_ORIGINAL:');
         // 1. Child records ALWAYS get wiped on failure.
         // 2. Parent records get wiped if they are TRULY terminal (REJECTED/CANCELLED)
         //    and NOT being reverted to APPROVED (handled in reversion logic below).
@@ -1994,7 +2010,7 @@ export class LeaveRequestsService {
               workLocation: () => 'NULL',
             });
 
-            const parentIdVal = request.requestModifiedFrom
+            const parentIdVal = request.requestModifiedFrom && !request.requestModifiedFrom.startsWith('PARENT_ORIGINAL:')
               ? String(request.requestModifiedFrom).split(':')[0]
               : null;
             const idsToCheck = [id];
@@ -2094,29 +2110,198 @@ export class LeaveRequestsService {
       // and it was originally an Approved leave, we should ensure the "original" stays.
       // 1. If it's a FULL modification (editing the parent directly), revert parent to APPROVED.
       if (
-        status === LeaveRequestStatus.REJECTED &&
+        (status === LeaveRequestStatus.REJECTED || status === LeaveRequestStatus.MODIFICATION_REJECTED) &&
         previousStatus === LeaveRequestStatus.REQUESTING_FOR_MODIFICATION
       ) {
-        if (!request.requestModifiedFrom) {
-          // This was a full modification on the parent itself. Revert it.
+        if (!request.requestModifiedFrom || request.requestModifiedFrom.startsWith('PARENT_ORIGINAL:')) {
+          // Clone request to create a child request with MODIFICATION_REJECTED status
+          const childRequest = this.leaveRequestRepository.create({
+            employeeId: request.employeeId,
+            requestType: request.requestType,
+            fromDate: request.fromDate,
+            toDate: request.toDate,
+            title: request.title,
+            description: request.description,
+            status: LeaveRequestStatus.MODIFICATION_REJECTED,
+            submittedDate: request.submittedDate,
+            duration: request.duration,
+            isRead: true,
+            isReadEmployee: false,
+            requestModifiedFrom: `${request.id}:${request.requestType}`,
+            firstHalf: request.firstHalf,
+            secondHalf: request.secondHalf,
+            isHalfDay: request.isHalfDay,
+            ccEmails: request.ccEmails,
+            availableDates: JSON.stringify([]), // doesn't block dates
+            isModified: true,
+            modificationCount: request.modificationCount,
+            lastModifiedDate: new Date(),
+          });
+          await this.leaveRequestRepository.save(childRequest);
+
+          // Now revert the parent request itself back to APPROVED status and restore original details.
           request.status = LeaveRequestStatus.APPROVED;
+          this.restoreParentOriginalDetails(request);
           await this.leaveRequestRepository.save(request);
           this.logger.log(
-            `[UPDATE_STATUS] Reverted request ${id} back to APPROVED after modification rejection.`,
+            `[UPDATE_STATUS] Reverted parent request ${id} back to APPROVED and created child MODIFICATION_REJECTED ${childRequest.id} after modification rejection.`,
           );
         }
       }
 
+
+      const isChildModificationRevert =
+        (status === LeaveRequestStatus.MODIFICATION_CANCELLED ||
+          status === LeaveRequestStatus.MODIFICATION_REJECTED) &&
+        request.requestModifiedFrom &&
+        !request.requestModifiedFrom.startsWith('PARENT_ORIGINAL:');
+      if (isChildModificationRevert) {
+        try {
+          const parentId = Number(
+            String(request.requestModifiedFrom).split(':')[0],
+          );
+          if (!isNaN(parentId)) {
+            const parent = await this.leaveRequestRepository.findOne({
+              where: { id: parentId },
+            });
+            if (parent) {
+              // 1. Get dates from the cancelled modification child (use backup — original is wiped above)
+              let restoredDates: string[] = [];
+              if (_childAvailableDatesBackup) {
+                try {
+                  const parsed = JSON.parse(_childAvailableDatesBackup);
+                  if (Array.isArray(parsed)) restoredDates = parsed;
+                } catch (e) {}
+              }
+              // Fallback: derive from date range
+              if (restoredDates.length === 0) {
+                let cur = dayjs(request.fromDate);
+                const end = dayjs(request.toDate);
+                while (cur.isBefore(end) || cur.isSame(end, 'day')) {
+                  const isWknd = await this._isWeekend(cur, request.employeeId);
+                  const isHol = await this._isHoliday(cur);
+                  if (!isWknd && !isHol) restoredDates.push(cur.format('YYYY-MM-DD'));
+                  cur = cur.add(1, 'day');
+                }
+              }
+
+              if (restoredDates.length > 0) {
+                let allParentDates: string[] = [];
+                if (parent.availableDates) {
+                  try {
+                    const parsed = JSON.parse(parent.availableDates);
+                    if (Array.isArray(parsed)) allParentDates = parsed;
+                  } catch (e) {}
+                }
+
+                const mergedDatesSet = new Set([...allParentDates, ...restoredDates]);
+                const mergedDates = Array.from(mergedDatesSet).sort();
+
+                let totalWorkingDays = 0;
+                for (const d of mergedDates) {
+                  const day = dayjs(d);
+                  const isWknd = await this._isWeekend(day, request.employeeId);
+                  const isHol = await this._isHoliday(day);
+                  if (!isWknd && !isHol) totalWorkingDays++;
+                }
+
+                const factor = parent.isHalfDay
+                  ? this.getDurationFactor(parent.firstHalf, parent.secondHalf)
+                  : 1.0;
+
+                parent.duration = Number((totalWorkingDays * factor).toFixed(2));
+                parent.fromDate = mergedDates[0];
+                parent.toDate = mergedDates[mergedDates.length - 1];
+                parent.availableDates = JSON.stringify(mergedDates);
+                parent.status = LeaveRequestStatus.APPROVED;
+
+                await this.leaveRequestRepository.save(parent);
+                this.logger.log(
+                  `[UPDATE_STATUS] [MOD_CANCELLED] Restored ${restoredDates.length} date(s) to parent ${parentId}. duration=${parent.duration}, from=${parent.fromDate}, to=${parent.toDate}`,
+                );
+
+                for (const dateStr of restoredDates) {
+                  try {
+                    const targetDate = dayjs(dateStr);
+                    const startOfDay = targetDate.startOf('day').toDate();
+                    const endOfDay = targetDate.endOf('day').toDate();
+
+                    let attendance = await this.employeeAttendanceRepository.findOne({
+                      where: { employeeId: parent.employeeId, workingDate: Between(startOfDay, endOfDay) },
+                    });
+
+                    const firstHalf = parent.firstHalf || WorkLocation.OFFICE;
+                    const secondHalf = parent.secondHalf || WorkLocation.OFFICE;
+                    const calculatedHours = this.calculateTotalHours(firstHalf, secondHalf);
+                    let derivedStatus = AttendanceStatus.FULL_DAY;
+                    if (calculatedHours === 9) derivedStatus = AttendanceStatus.FULL_DAY;
+                    else if (calculatedHours === 6) derivedStatus = AttendanceStatus.HALF_DAY;
+                    else if (calculatedHours === 0) derivedStatus = AttendanceStatus.LEAVE;
+
+                    if (!attendance) {
+                      attendance = this.employeeAttendanceRepository.create({
+                        employeeId: parent.employeeId, workingDate: startOfDay,
+                        totalHours: calculatedHours, status: derivedStatus,
+                        firstHalf, secondHalf, sourceRequestId: parent.id, workLocation: null,
+                      });
+                      await this.employeeAttendanceRepository.save(attendance);
+                    } else {
+                      await this.employeeAttendanceRepository.createQueryBuilder()
+                        .update(EmployeeAttendance)
+                        .set({ totalHours: calculatedHours, status: derivedStatus, firstHalf, secondHalf, sourceRequestId: parent.id, workLocation: null })
+                        .where('id = :id', { id: attendance.id })
+                        .execute();
+                    }
+                    this.logger.log(`[UPDATE_STATUS] [MOD_CANCELLED] Attendance restored for ${dateStr}`);
+                  } catch (attErr) {
+                    this.logger.error(`[UPDATE_STATUS] [MOD_CANCELLED] Attendance restore failed for ${dateStr}: ${attErr.message}`);
+                  }
+                }
+              }
+            }
+          }
+        } catch (err) {
+          this.logger.error(`[UPDATE_STATUS] [MOD_CANCELLED] Failed to restore dates to parent: ${err.message}`);
+        }
+      }
+      // ─── END: MODIFICATION_CANCELLED RESTORE LOGIC ────────────────────────────
+
       // 2. If a FULL cancellation request is REJECTED, revert it to APPROVED.
       if (
-        status === LeaveRequestStatus.REJECTED &&
+        (status === LeaveRequestStatus.REJECTED || status === LeaveRequestStatus.CANCELLATION_REJECTED) &&
         previousStatus === LeaveRequestStatus.REQUESTING_FOR_CANCELLATION
       ) {
-        if (!request.requestModifiedFrom) {
+        if (!request.requestModifiedFrom || request.requestModifiedFrom.startsWith('PARENT_ORIGINAL:')) {
+          // Clone request to create a child request with CANCELLATION_REJECTED status
+          const childRequest = this.leaveRequestRepository.create({
+            employeeId: request.employeeId,
+            requestType: request.requestType,
+            fromDate: request.fromDate,
+            toDate: request.toDate,
+            title: request.title,
+            description: request.description,
+            status: LeaveRequestStatus.CANCELLATION_REJECTED,
+            submittedDate: request.submittedDate,
+            duration: request.duration,
+            isRead: true,
+            isReadEmployee: false,
+            requestModifiedFrom: `${request.id}:${request.requestType}`,
+            firstHalf: request.firstHalf,
+            secondHalf: request.secondHalf,
+            isHalfDay: request.isHalfDay,
+            ccEmails: request.ccEmails,
+            availableDates: JSON.stringify([]), // doesn't block dates
+            isModified: request.isModified,
+            modificationCount: request.modificationCount,
+            lastModifiedDate: new Date(),
+          });
+          await this.leaveRequestRepository.save(childRequest);
+
+          // Revert parent request back to APPROVED.
           request.status = LeaveRequestStatus.APPROVED;
           await this.leaveRequestRepository.save(request);
           this.logger.log(
-            `[UPDATE_STATUS] Reverted request ${id} back to APPROVED after cancellation rejection (full).`,
+            `[UPDATE_STATUS] Reverted parent request ${id} back to APPROVED and created child CANCELLATION_REJECTED ${childRequest.id} after cancellation rejection.`,
           );
         }
       }
@@ -2125,7 +2310,8 @@ export class LeaveRequestsService {
       if (
         (status === LeaveRequestStatus.CANCELLATION_APPROVED ||
           status === LeaveRequestStatus.MODIFICATION_APPROVED) &&
-        request.requestModifiedFrom
+        request.requestModifiedFrom &&
+        !request.requestModifiedFrom.startsWith('PARENT_ORIGINAL:')
       ) {
         try {
           const parentId = Number(
@@ -2303,7 +2489,7 @@ export class LeaveRequestsService {
           secondHalf: () => 'NULL',
         });
 
-        const parentIdVal = request.requestModifiedFrom
+        const parentIdVal = request.requestModifiedFrom && !request.requestModifiedFrom.startsWith('PARENT_ORIGINAL:')
           ? String(request.requestModifiedFrom).split(':')[0]
           : null;
         const idsToCheck = [id];
@@ -2491,16 +2677,41 @@ export class LeaveRequestsService {
           `[REJECT_CANCELLATION] Partial cancellation ${id} rejected. availableDates wiped.`,
         );
       } else {
-        // Full cancellation rejection - Revert parent to APPROVED
-        request.status = LeaveRequestStatus.APPROVED;
-        this.logger.log(
-          `[REJECT_CANCELLATION] Full cancellation ${id} rejected. Reverted to APPROVED.`,
-        );
-      }
+        // ── FULL cancellation (parent itself was REQUESTING_FOR_CANCELLATION) ──
+        // 1. Create a child request with status CANCELLATION_REJECTED
+        const childRequest = this.leaveRequestRepository.create({
+          employeeId: request.employeeId,
+          requestType: request.requestType,
+          fromDate: request.fromDate,
+          toDate: request.toDate,
+          title: request.title,
+          description: request.description,
+          status: LeaveRequestStatus.CANCELLATION_REJECTED,
+          submittedDate: request.submittedDate,
+          duration: request.duration,
+          isRead: true,
+          isReadEmployee: false,
+          requestModifiedFrom: `${request.id}:${request.requestType}`,
+          firstHalf: request.firstHalf,
+          secondHalf: request.secondHalf,
+          isHalfDay: request.isHalfDay,
+          ccEmails: request.ccEmails,
+          availableDates: JSON.stringify([]), // Doesn't block dates
+          isModified: request.isModified,
+          modificationCount: request.modificationCount,
+          lastModifiedDate: new Date(),
+        });
+        await this.leaveRequestRepository.save(childRequest);
 
-      request.isReadEmployee = false;
-      if (reviewedBy) request.reviewedBy = reviewedBy;
-      await this.leaveRequestRepository.save(request);
+        // 2. Revert parent back to APPROVED status
+        request.status = LeaveRequestStatus.APPROVED;
+        request.isReadEmployee = false;
+        if (reviewedBy) request.reviewedBy = reviewedBy;
+        this.logger.log(
+          `[REJECT_CANCELLATION] Full cancellation ${id} rejected. Parent reverted to APPROVED, child CANCELLATION_REJECTED created.`,
+        );
+        await this.leaveRequestRepository.save(request);
+      }
 
       try {
         const employee = await this.employeeDetailsRepository.findOne({
@@ -3739,6 +3950,17 @@ export class LeaveRequestsService {
       if (request.status === LeaveRequestStatus.APPROVED) {
         updatedData.status = LeaveRequestStatus.REQUESTING_FOR_MODIFICATION;
         updatedData.isRead = false;
+        const originalDetails = {
+          title: request.title,
+          description: request.description,
+          firstHalf: request.firstHalf,
+          secondHalf: request.secondHalf,
+          requestType: request.requestType,
+          isHalfDay: request.isHalfDay,
+          duration: request.duration,
+          availableDates: request.availableDates,
+        };
+        updatedData.requestModifiedFrom = `PARENT_ORIGINAL:${JSON.stringify(originalDetails)}`;
       }
 
       if (updateData.firstHalf !== undefined)
@@ -3986,6 +4208,19 @@ export class LeaveRequestsService {
 
       if (isFullModification) {
         // ALL dates modified at once — update parent directly, no child created
+        if (request.status === LeaveRequestStatus.APPROVED) {
+          const originalDetails = {
+            title: request.title,
+            description: request.description,
+            firstHalf: request.firstHalf,
+            secondHalf: request.secondHalf,
+            requestType: request.requestType,
+            isHalfDay: request.isHalfDay,
+            duration: request.duration,
+            availableDates: request.availableDates,
+          };
+          request.requestModifiedFrom = `PARENT_ORIGINAL:${JSON.stringify(originalDetails)}`;
+        }
         request.status =
           request.status === LeaveRequestStatus.APPROVED
             ? LeaveRequestStatus.REQUESTING_FOR_MODIFICATION
@@ -4171,7 +4406,26 @@ export class LeaveRequestsService {
 
         // Update parent to remove modified dates
         try {
-          const parentDates: string[] = JSON.parse(request.availableDates || '[]');
+          let parentDates: string[] = [];
+          if (request.availableDates) {
+            try {
+              const parsed = JSON.parse(request.availableDates);
+              if (Array.isArray(parsed)) parentDates = parsed;
+            } catch (e) {}
+          }
+          if (parentDates.length === 0) {
+            let curIter = dayjs(request.fromDate);
+            const endIter = dayjs(request.toDate);
+            while (curIter.isBefore(endIter) || curIter.isSame(endIter, 'day')) {
+              const isWknd = await this._isWeekend(curIter, employeeId);
+              const isHol = await this._isHoliday(curIter);
+              if (!isWknd && !isHol) {
+                parentDates.push(curIter.format('YYYY-MM-DD'));
+              }
+              curIter = curIter.add(1, 'day');
+            }
+          }
+
           const normalizedDatesToModify = datesToModify.map((d) =>
             dayjs(d).format('YYYY-MM-DD'),
           );
@@ -4181,9 +4435,12 @@ export class LeaveRequestsService {
 
           if (remainingDates.length === 0) {
             this.logger.log(
-              `[MODIFY_DATES] Parent ${id} has no dates left, deleting.`,
+              `[MODIFY_DATES] Parent ${id} has no dates left, setting status to CANCELLED.`,
             );
-            await this.leaveRequestRepository.delete({ id });
+            request.status = LeaveRequestStatus.CANCELLED;
+            request.duration = 0;
+            request.availableDates = JSON.stringify([]);
+            await this.leaveRequestRepository.save(request);
           } else {
             request.availableDates = JSON.stringify(remainingDates);
             const parentFactor = request.isHalfDay
@@ -4243,15 +4500,127 @@ export class LeaveRequestsService {
         );
       }
 
-      if (request.requestModifiedFrom) {
+      if (request.requestModifiedFrom && !request.requestModifiedFrom.startsWith('PARENT_ORIGINAL:')) {
         // PARTIAL modification (child record)
+        // Backup dates BEFORE wiping — they are needed to restore the parent
+        const modifiedDatesBackup = request.availableDates;
+
         request.status = LeaveRequestStatus.MODIFICATION_CANCELLED;
         request.availableDates = JSON.stringify([]); // No longer blocking/claiming dates
         await this.leaveRequestRepository.save(request);
+
+        // ── RESTORE DATES BACK TO PARENT ──────────────────────────────────────
+        try {
+          const parentId = Number(
+            String(request.requestModifiedFrom).split(':')[0],
+          );
+          if (!isNaN(parentId)) {
+            const parent = await this.leaveRequestRepository.findOne({
+              where: { id: parentId },
+            });
+            if (parent) {
+              let restoredDates: string[] = [];
+              if (modifiedDatesBackup) {
+                try {
+                  const parsed = JSON.parse(modifiedDatesBackup);
+                  if (Array.isArray(parsed)) restoredDates = parsed;
+                } catch (e) {}
+              }
+              if (restoredDates.length === 0) {
+                let cur = dayjs(request.fromDate);
+                const end = dayjs(request.toDate);
+                while (cur.isBefore(end) || cur.isSame(end, 'day')) {
+                  const isWknd = await this._isWeekend(cur, employeeId);
+                  const isHol = await this._isHoliday(cur);
+                  if (!isWknd && !isHol) restoredDates.push(cur.format('YYYY-MM-DD'));
+                  cur = cur.add(1, 'day');
+                }
+              }
+
+              if (restoredDates.length > 0) {
+                let allParentDates: string[] = [];
+                if (parent.availableDates) {
+                  try {
+                    const parsed = JSON.parse(parent.availableDates);
+                    if (Array.isArray(parsed)) allParentDates = parsed;
+                  } catch (e) {}
+                }
+
+                const mergedDatesSet = new Set([...allParentDates, ...restoredDates]);
+                const mergedDates = Array.from(mergedDatesSet).sort();
+
+                let totalWorkingDays = 0;
+                for (const d of mergedDates) {
+                  const day = dayjs(d);
+                  const isWknd = await this._isWeekend(day, employeeId);
+                  const isHol = await this._isHoliday(day);
+                  if (!isWknd && !isHol) totalWorkingDays++;
+                }
+
+                const factor = parent.isHalfDay
+                  ? this.getDurationFactor(parent.firstHalf, parent.secondHalf)
+                  : 1.0;
+
+                parent.duration = Number((totalWorkingDays * factor).toFixed(2));
+                parent.fromDate = mergedDates[0];
+                parent.toDate = mergedDates[mergedDates.length - 1];
+                parent.availableDates = JSON.stringify(mergedDates);
+                parent.status = LeaveRequestStatus.APPROVED;
+
+                await this.leaveRequestRepository.save(parent);
+                this.logger.log(
+                  `[UNDO_MODIFY] Restored ${restoredDates.length} date(s) to parent ${parentId}. duration=${parent.duration}, from=${parent.fromDate}, to=${parent.toDate}`,
+                );
+
+                for (const dateStr of restoredDates) {
+                  try {
+                    const targetDate = dayjs(dateStr);
+                    const startOfDay = targetDate.startOf('day').toDate();
+                    const endOfDay = targetDate.endOf('day').toDate();
+
+                    let attendance = await this.employeeAttendanceRepository.findOne({
+                      where: { employeeId: parent.employeeId, workingDate: Between(startOfDay, endOfDay) },
+                    });
+
+                    const firstHalf = parent.firstHalf || WorkLocation.OFFICE;
+                    const secondHalf = parent.secondHalf || WorkLocation.OFFICE;
+                    const calculatedHours = this.calculateTotalHours(firstHalf, secondHalf);
+                    let derivedStatus = AttendanceStatus.FULL_DAY;
+                    if (calculatedHours === 9) derivedStatus = AttendanceStatus.FULL_DAY;
+                    else if (calculatedHours === 6) derivedStatus = AttendanceStatus.HALF_DAY;
+                    else if (calculatedHours === 0) derivedStatus = AttendanceStatus.LEAVE;
+
+                    if (!attendance) {
+                      attendance = this.employeeAttendanceRepository.create({
+                        employeeId: parent.employeeId, workingDate: startOfDay,
+                        totalHours: calculatedHours, status: derivedStatus,
+                        firstHalf, secondHalf, sourceRequestId: parent.id, workLocation: null,
+                      });
+                      await this.employeeAttendanceRepository.save(attendance);
+                    } else {
+                      await this.employeeAttendanceRepository.createQueryBuilder()
+                        .update(EmployeeAttendance)
+                        .set({ totalHours: calculatedHours, status: derivedStatus, firstHalf, secondHalf, sourceRequestId: parent.id, workLocation: null })
+                        .where('id = :id', { id: attendance.id })
+                        .execute();
+                    }
+                    this.logger.log(`[UNDO_MODIFY] Attendance restored for ${dateStr}`);
+                  } catch (attErr) {
+                    this.logger.error(`[UNDO_MODIFY] Attendance restore failed for ${dateStr}: ${attErr.message}`);
+                  }
+                }
+              }
+            }
+          }
+        } catch (restoreErr) {
+          this.logger.error(`[UNDO_MODIFY] Failed to restore dates to parent: ${restoreErr.message}`);
+        }
+        // ── END RESTORE ───────────────────────────────────────────────────────
       } else {
         // FULL modification (parent record itself)
         // Revert it back to APPROVED so the original leave remains active
         request.status = LeaveRequestStatus.APPROVED;
+        this.restoreParentOriginalDetails(request);
         await this.leaveRequestRepository.save(request);
         this.logger.log(
           `[UNDO_MODIFY] Reverted parent request ${id} to APPROVED status.`,
@@ -4460,6 +4829,33 @@ export class LeaveRequestsService {
         'Failed to calculate monthly leave balance',
         HttpStatus.INTERNAL_SERVER_ERROR,
       );
+    }
+  }
+
+  private restoreParentOriginalDetails(request: LeaveRequest) {
+    if (
+      request.requestModifiedFrom &&
+      request.requestModifiedFrom.startsWith('PARENT_ORIGINAL:')
+    ) {
+      try {
+        const jsonStr = request.requestModifiedFrom.replace('PARENT_ORIGINAL:', '');
+        const original = JSON.parse(jsonStr);
+        if (original) {
+          if (original.title !== undefined) request.title = original.title;
+          if (original.description !== undefined) request.description = original.description;
+          if (original.firstHalf !== undefined) request.firstHalf = original.firstHalf;
+          if (original.secondHalf !== undefined) request.secondHalf = original.secondHalf;
+          if (original.requestType !== undefined) request.requestType = original.requestType;
+          if (original.isHalfDay !== undefined) request.isHalfDay = original.isHalfDay;
+          if (original.duration !== undefined) request.duration = Number(original.duration);
+          if (original.availableDates !== undefined) request.availableDates = original.availableDates;
+        }
+      } catch (err) {
+        this.logger.error(
+          `[RESTORE_ORIGINAL] Failed to parse original details for request ${request.id}: ${err.message}`,
+        );
+      }
+      request.requestModifiedFrom = null as any;
     }
   }
 }
