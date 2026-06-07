@@ -4520,7 +4520,7 @@ export class LeaveRequestsService {
 
       if (request.status !== LeaveRequestStatus.REQUESTING_FOR_MODIFICATION) {
         throw new BadRequestException(
-          'Only requests with status "Requesting for Modification" can be undone.',
+          'Only requests with status "Modification Requested" can be undone.',
         );
       }
 
