@@ -675,6 +675,8 @@ export class LeaveRequestsService {
           'lr.ccEmails AS ccEmails',
           'ed.department AS department',
           'ed.fullName AS fullName',
+          'ed.internId AS internId',
+          'ed.conversionDate AS conversionDate',
         ]);
 
       // 1. Employee Filter
@@ -888,6 +890,8 @@ export class LeaveRequestsService {
           'lr.ccEmails AS ccEmails',
           'ed.department AS department',
           'ed.fullName AS fullName',
+          'ed.internId AS internId',
+          'ed.conversionDate AS conversionDate',
         ])
         .getRawOne();
 
