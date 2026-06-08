@@ -64,28 +64,24 @@ td { padding: 0; }
 
 <!-- HEADER -->
 <tr>
-<td style="background-color:#0a8fe7; padding:36px 40px 48px 40px;">
+<td style="background-color:#0a8fe7; padding:20px 40px 30px 40px;">
   <table width="100%" cellpadding="0" cellspacing="0" border="0">
     <tr>
-      <td align="left">
-        <h2 style="margin:0; color:#ffffff; font-size:24px; font-weight:bold;">
-          INVENTECH
-        </h2>
-        <p style="margin:6px 0 0; color:#dbeeff; font-size:11px; letter-spacing:1px; text-transform:uppercase;">
-          Info Solutions Pvt. Ltd.
-        </p>
+      <td width="40" style="vertical-align: middle;">&nbsp;</td>
+      <td align="center" style="vertical-align: middle;">
+        <span style="font-family: 'Georgia', 'Times New Roman', serif; font-size: 30px; font-weight: bold; color: #ffffff; line-height: 1;">WORKSPHERE</span>
       </td>
-      <td align="right" style="font-size:30px; color:#ffffff;">
+      <td align="right" width="40" style="font-size:30px; color:#ffffff; vertical-align: middle;">
         🔔
       </td>
     </tr>
   </table>
 
   <!-- TITLE CARD -->
-  <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:50px;">
+  <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:26px;">
     <tr>
-      <td style="background-color:#ffffff; padding:16px 20px; border-radius:6px; text-align:center;">
-        <h1 style="margin:0; font-size:18px; letter-spacing:1px; text-transform:uppercase; color:#0a8fe7;">
+      <td style="background-color:#ffffff; padding:8px 16px; border-radius:8px; text-align:center;">
+        <h1 style="margin:0; font-size:13px; letter-spacing:1px; text-transform:uppercase; color:#0a8fe7;">
           ${title}
         </h1>
       </td>
@@ -148,7 +144,7 @@ td { padding: 0; }
 
 <!-- BRAND FOOTER -->
 <p style="margin-top:20px; font-size:12px; color:#9ca3af;">
-  Sent securely via <strong>InvenTech TimeSheet Pro</strong>
+  Sent securely via <strong>Worksphere</strong>
 </p>
 
 </td>

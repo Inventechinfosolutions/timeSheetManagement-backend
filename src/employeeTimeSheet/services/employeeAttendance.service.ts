@@ -8,7 +8,13 @@ import {
   HttpStatus,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Between, Repository, LessThanOrEqual, MoreThanOrEqual, In } from 'typeorm';
+import {
+  Between,
+  Repository,
+  LessThanOrEqual,
+  MoreThanOrEqual,
+  In,
+} from 'typeorm';
 import { EmployeeAttendance } from '../entities/employeeAttendance.entity';
 import { AttendanceStatus } from '../enums/attendance-status.enum';
 import { LeaveRequestStatus } from '../enums/leave-notification-status.enum';
@@ -21,7 +27,10 @@ import { EmployeeAttendanceDto } from '../dto/employeeAttendance.dto';
 import { MasterHolidayService } from '../../master/service/master-holiday.service';
 import { TimesheetBlockerService } from './timesheetBlocker.service';
 import { EmployeeDetails } from '../entities/employeeDetails.entity';
-import { ManagerMapping, ManagerMappingStatus } from '../../managerMapping/entities/managerMapping.entity';
+import {
+  ManagerMapping,
+  ManagerMappingStatus,
+} from '../../managerMapping/entities/managerMapping.entity';
 import * as ExcelJS from 'exceljs';
 import PDFDocument from 'pdfkit';
 import * as fs from 'fs';
@@ -43,7 +52,7 @@ export class EmployeeAttendanceService {
     private readonly employeeDetailsRepository: Repository<EmployeeDetails>,
     private readonly masterHolidayService: MasterHolidayService,
     private readonly blockerService: TimesheetBlockerService,
-  ) { }
+  ) {}
 
   /**
    * Calculate total working hours based on firstHalf and secondHalf values
@@ -52,22 +61,37 @@ export class EmployeeAttendanceService {
    * @param providedHours - Optional hours provided by user
    * @returns Total working hours
    */
-  private calculateTotalHours(firstHalf: string | null, secondHalf: string | null, providedHours?: number | null): number {
+  private calculateTotalHours(
+    firstHalf: string | null,
+    secondHalf: string | null,
+    providedHours?: number | null,
+  ): number {
     try {
       // 1. If user provided a specific value, respect it
-      if (providedHours !== undefined && providedHours !== null && providedHours > 0) {
+      if (
+        providedHours !== undefined &&
+        providedHours !== null &&
+        providedHours > 0
+      ) {
         return Number(providedHours);
       }
 
       // 2. Otherwise use system defaults based on activities
       const isWork = (half: string | null): boolean => {
-        if (!half || half === AttendanceStatus.LEAVE || half === AttendanceStatus.ABSENT) return false;
+        if (
+          !half ||
+          half === AttendanceStatus.LEAVE ||
+          half === AttendanceStatus.ABSENT
+        )
+          return false;
         const normalized = half.toLowerCase();
-        return normalized.includes(WorkLocation.OFFICE.toLowerCase()) ||
+        return (
+          normalized.includes(WorkLocation.OFFICE.toLowerCase()) ||
           normalized.includes(WorkLocation.WFH) ||
           normalized.includes(WorkLocation.WORK_FROM_HOME) ||
           normalized.includes(WorkLocation.CLIENT_VISIT) ||
-          normalized.includes(WorkLocation.PRESENT);
+          normalized.includes(WorkLocation.PRESENT)
+        );
       };
 
       const h1Work = isWork(firstHalf);
@@ -82,18 +106,33 @@ export class EmployeeAttendanceService {
     }
   }
 
-  private determineDefaultActivity(firstHalf: WorkLocation | AttendanceStatus | null, secondHalf: WorkLocation | AttendanceStatus | null): WorkLocation {
+  private determineDefaultActivity(
+    firstHalf: WorkLocation | AttendanceStatus | null,
+    secondHalf: WorkLocation | AttendanceStatus | null,
+  ): WorkLocation {
     try {
       const h1 = (firstHalf || '').toLowerCase();
       const h2 = (secondHalf || '').toLowerCase();
 
       // If one half has a work activity, use that
-      if (h1.includes(WorkLocation.WFH) || h1.includes(WorkLocation.WORK_FROM_HOME)) return WorkLocation.WORK_FROM_HOME;
-      if (h2.includes(WorkLocation.WFH) || h2.includes(WorkLocation.WORK_FROM_HOME)) return WorkLocation.WORK_FROM_HOME;
-      if (h1.includes(WorkLocation.CLIENT_VISIT)) return WorkLocation.CLIENT_VISIT;
-      if (h2.includes(WorkLocation.CLIENT_VISIT)) return WorkLocation.CLIENT_VISIT;
-      if (h1.includes(WorkLocation.OFFICE.toLowerCase())) return WorkLocation.OFFICE;
-      if (h2.includes(WorkLocation.OFFICE.toLowerCase())) return WorkLocation.OFFICE;
+      if (
+        h1.includes(WorkLocation.WFH) ||
+        h1.includes(WorkLocation.WORK_FROM_HOME)
+      )
+        return WorkLocation.WORK_FROM_HOME;
+      if (
+        h2.includes(WorkLocation.WFH) ||
+        h2.includes(WorkLocation.WORK_FROM_HOME)
+      )
+        return WorkLocation.WORK_FROM_HOME;
+      if (h1.includes(WorkLocation.CLIENT_VISIT))
+        return WorkLocation.CLIENT_VISIT;
+      if (h2.includes(WorkLocation.CLIENT_VISIT))
+        return WorkLocation.CLIENT_VISIT;
+      if (h1.includes(WorkLocation.OFFICE.toLowerCase()))
+        return WorkLocation.OFFICE;
+      if (h2.includes(WorkLocation.OFFICE.toLowerCase()))
+        return WorkLocation.OFFICE;
 
       return WorkLocation.OFFICE; // Default to Office
     } catch (error) {
@@ -111,10 +150,15 @@ export class EmployeeAttendanceService {
     }
   }
 
-
-  async create(createEmployeeAttendanceDto: EmployeeAttendanceDto, isPrivileged: boolean = false): Promise<EmployeeAttendance | null> {
+  async create(
+    createEmployeeAttendanceDto: EmployeeAttendanceDto,
+    isPrivileged: boolean = false,
+  ): Promise<EmployeeAttendance | null> {
     try {
-      if (!isPrivileged && !this.isEditableMonth(new Date(createEmployeeAttendanceDto.workingDate))) {
+      if (
+        !isPrivileged &&
+        !this.isEditableMonth(new Date(createEmployeeAttendanceDto.workingDate))
+      ) {
         throw new BadRequestException('Attendance for this month is locked.');
       }
 
@@ -125,14 +169,19 @@ export class EmployeeAttendanceService {
 
       // (Moved future check down)
 
-      if (createEmployeeAttendanceDto.employeeId && createEmployeeAttendanceDto.workingDate) {
+      if (
+        createEmployeeAttendanceDto.employeeId &&
+        createEmployeeAttendanceDto.workingDate
+      ) {
         const blocker = await this.blockerService.isBlocked(
           createEmployeeAttendanceDto.employeeId,
-          createEmployeeAttendanceDto.workingDate
+          createEmployeeAttendanceDto.workingDate,
         );
         if (blocker) {
           const blockedByName = blocker.blockedBy || 'Administrator';
-          throw new BadRequestException(`Timesheet is locked for this date by ${blockedByName}. Please contact them to unlock.`);
+          throw new BadRequestException(
+            `Timesheet is locked for this date by ${blockedByName}. Please contact them to unlock.`,
+          );
         }
       }
 
@@ -148,20 +197,30 @@ export class EmployeeAttendanceService {
       const isSatLocal = startOfDay.getDay() === 6;
 
       if (!isPrivileged) {
-        const incomingHours = createEmployeeAttendanceDto.totalHours !== undefined && createEmployeeAttendanceDto.totalHours !== null 
-          ? Number(createEmployeeAttendanceDto.totalHours) 
-          : null;
+        const incomingHours =
+          createEmployeeAttendanceDto.totalHours !== undefined &&
+          createEmployeeAttendanceDto.totalHours !== null
+            ? Number(createEmployeeAttendanceDto.totalHours)
+            : null;
 
         // Weekends (Sat/Sun) and Holidays: Apply validation rules, block 0 hours
         if (holiday || isSun || isSatLocal) {
           if (incomingHours === 0) {
-            throw new BadRequestException('Cannot mark absent (0 hours) on Weekends or Holidays.');
+            throw new BadRequestException(
+              'Cannot mark absent (0 hours) on Weekends or Holidays.',
+            );
           }
           if (incomingHours !== null && incomingHours > 0) {
             const minHours = isSatLocal ? 4 : 1;
             if (incomingHours < minHours || incomingHours > 9) {
-              const dayType = isSatLocal ? 'Saturday' : isSun ? 'Sunday' : 'Holiday';
-              throw new BadRequestException(`${dayType} hours must be between ${minHours} and 9.`);
+              const dayType = isSatLocal
+                ? 'Saturday'
+                : isSun
+                  ? 'Sunday'
+                  : 'Holiday';
+              throw new BadRequestException(
+                `${dayType} hours must be between ${minHours} and 9.`,
+              );
             }
           }
         }
@@ -177,7 +236,14 @@ export class EmployeeAttendanceService {
 
       // Rule: Do not create future records with 0 hours, UNLESS status or workLocation is provided.
       // Only apply this checks if NO existing record exists. If record exists, we might intend to update/clear it.
-      if (!existingRecord && !createEmployeeAttendanceDto.status && !createEmployeeAttendanceDto.workLocation && (!createEmployeeAttendanceDto.totalHours || createEmployeeAttendanceDto.totalHours === 0) && workingDateObj > today) {
+      if (
+        !existingRecord &&
+        !createEmployeeAttendanceDto.status &&
+        !createEmployeeAttendanceDto.workLocation &&
+        (!createEmployeeAttendanceDto.totalHours ||
+          createEmployeeAttendanceDto.totalHours === 0) &&
+        workingDateObj > today
+      ) {
         return null;
       }
 
@@ -185,39 +251,64 @@ export class EmployeeAttendanceService {
       createEmployeeAttendanceDto.workLocation = null;
 
       if (existingRecord) {
-        this.logger.log(`[ATTENDANCE_CREATE] Found existing record ID: ${existingRecord.id}, Date: ${existingRecord.workingDate}`);
-        this.logger.log(`[ATTENDANCE_CREATE] Existing sourceRequestId: ${existingRecord.sourceRequestId}`);
-        this.logger.log(`[ATTENDANCE_CREATE] Incoming sourceRequestId: ${createEmployeeAttendanceDto.sourceRequestId}`);
+        this.logger.log(
+          `[ATTENDANCE_CREATE] Found existing record ID: ${existingRecord.id}, Date: ${existingRecord.workingDate}`,
+        );
+        this.logger.log(
+          `[ATTENDANCE_CREATE] Existing sourceRequestId: ${existingRecord.sourceRequestId}`,
+        );
+        this.logger.log(
+          `[ATTENDANCE_CREATE] Incoming sourceRequestId: ${createEmployeeAttendanceDto.sourceRequestId}`,
+        );
 
         // GUARD: Protect Approved Leaves for non-privileged users
-        if (!isPrivileged && existingRecord.sourceRequestId && !createEmployeeAttendanceDto.sourceRequestId) {
-          this.logger.warn(`[ATTENDANCE_RESTRICTION] Blocking manual update for record ${existingRecord.id} because it is linked to Leave Request ${existingRecord.sourceRequestId}`);
+        if (
+          !isPrivileged &&
+          existingRecord.sourceRequestId &&
+          !createEmployeeAttendanceDto.sourceRequestId
+        ) {
+          this.logger.warn(
+            `[ATTENDANCE_RESTRICTION] Blocking manual update for record ${existingRecord.id} because it is linked to Leave Request ${existingRecord.sourceRequestId}`,
+          );
           return existingRecord; // Skip update and return existing record
         }
 
         // Update existing record
-        this.logger.log(`[ATTENDANCE_CREATE] Updating existing record with new data`);
+        this.logger.log(
+          `[ATTENDANCE_CREATE] Updating existing record with new data`,
+        );
 
         // Calculate totalHours based on incoming or existing firstHalf/secondHalf
-        const finalFirstHalf = createEmployeeAttendanceDto.firstHalf !== undefined
-          ? createEmployeeAttendanceDto.firstHalf
-          : existingRecord.firstHalf;
-        const finalSecondHalf = createEmployeeAttendanceDto.secondHalf !== undefined
-          ? createEmployeeAttendanceDto.secondHalf
-          : existingRecord.secondHalf;
+        const finalFirstHalf =
+          createEmployeeAttendanceDto.firstHalf !== undefined
+            ? createEmployeeAttendanceDto.firstHalf
+            : existingRecord.firstHalf;
+        const finalSecondHalf =
+          createEmployeeAttendanceDto.secondHalf !== undefined
+            ? createEmployeeAttendanceDto.secondHalf
+            : existingRecord.secondHalf;
 
         // If we have firstHalf or secondHalf (either from incoming DTO or existing record), recalculate
         if (createEmployeeAttendanceDto.totalHours === null) {
           // If totalHours is explicitly null, keep it null and do not recalculate from splits
-          this.logger.log(`[ATTENDANCE_CREATE] totalHours is explicitly null, skipping recalculation`);
+          this.logger.log(
+            `[ATTENDANCE_CREATE] totalHours is explicitly null, skipping recalculation`,
+          );
         } else if (finalFirstHalf || finalSecondHalf) {
-          const calculatedHours = this.calculateTotalHours(finalFirstHalf || null, finalSecondHalf || null);
+          const calculatedHours = this.calculateTotalHours(
+            finalFirstHalf || null,
+            finalSecondHalf || null,
+          );
           createEmployeeAttendanceDto.totalHours = calculatedHours;
-          this.logger.log(`[ATTENDANCE_CREATE] Calculated totalHours: ${calculatedHours} from firstHalf: ${finalFirstHalf}, secondHalf: ${finalSecondHalf}`);
+          this.logger.log(
+            `[ATTENDANCE_CREATE] Calculated totalHours: ${calculatedHours} from firstHalf: ${finalFirstHalf}, secondHalf: ${finalSecondHalf}`,
+          );
         } else if (createEmployeeAttendanceDto.totalHours === undefined) {
           // If no firstHalf/secondHalf and incoming totalHours is undefined, don't overwrite existing
           delete createEmployeeAttendanceDto.totalHours;
-          this.logger.log(`[ATTENDANCE_CREATE] Skipping undefined totalHours to preserve existing value`);
+          this.logger.log(
+            `[ATTENDANCE_CREATE] Skipping undefined totalHours to preserve existing value`,
+          );
         }
 
         Object.assign(existingRecord, createEmployeeAttendanceDto);
@@ -232,7 +323,7 @@ export class EmployeeAttendanceService {
             existingRecord.totalHours,
             existingRecord.workingDate,
             existingRecord.firstHalf,
-            existingRecord.secondHalf
+            existingRecord.secondHalf,
           );
         }
 
@@ -242,58 +333,91 @@ export class EmployeeAttendanceService {
         const isSat = recDate.getDay() === 6;
         const isSun2 = recDate.getDay() === 0;
         const recDateStr = dayjs(recDate).format('YYYY-MM-DD');
-        const recHoliday = await this.masterHolidayService.findByDate(recDateStr);
+        const recHoliday =
+          await this.masterHolidayService.findByDate(recDateStr);
         const isNonWorkingDay = isSat || isSun2 || !!recHoliday;
 
         if (isNonWorkingDay && hours >= 1 && hours <= 9) {
           existingRecord.status = AttendanceStatus.FULL_DAY;
           existingRecord.firstHalf = WorkLocation.OFFICE;
           existingRecord.secondHalf = WorkLocation.OFFICE;
-          this.logger.log(`[ATTENDANCE_CREATE] Enforced Full Day for non-working day (${hours}h)`);
+          this.logger.log(
+            `[ATTENDANCE_CREATE] Enforced Full Day for non-working day (${hours}h)`,
+          );
         } else if (isSat && hours > 3) {
           existingRecord.status = AttendanceStatus.FULL_DAY;
         } else if (hours > 0 && hours <= 6) {
           // Relaxed enforcement: Only set defaults if no source request is linked and splits are empty
-          if (!existingRecord.sourceRequestId && (!existingRecord.firstHalf || !existingRecord.secondHalf)) {
+          if (
+            !existingRecord.sourceRequestId &&
+            (!existingRecord.firstHalf || !existingRecord.secondHalf)
+          ) {
             existingRecord.firstHalf = WorkLocation.OFFICE;
             existingRecord.secondHalf = AttendanceStatus.LEAVE;
-            this.logger.log(`[ATTENDANCE_CREATE] Enforced default Half Day splits for Record ${existingRecord.id}`);
+            this.logger.log(
+              `[ATTENDANCE_CREATE] Enforced default Half Day splits for Record ${existingRecord.id}`,
+            );
           }
           existingRecord.status = AttendanceStatus.HALF_DAY;
-          this.logger.log(`[ATTENDANCE_CREATE] Synchronized Half Day status (<= 6h)`);
-        } else if (hours === 9 || (isSat && hours > 3 && hours <= 6) || hours > 6) {
+          this.logger.log(
+            `[ATTENDANCE_CREATE] Synchronized Half Day status (<= 6h)`,
+          );
+        } else if (
+          hours === 9 ||
+          (isSat && hours > 3 && hours <= 6) ||
+          hours > 6
+        ) {
           // RELAXED ENFORCEMENT: Only set default Office splits if they are currently empty or stationary
           // and no source request is linked.
           const currentH1 = (existingRecord.firstHalf || '').toLowerCase();
           const currentH2 = (existingRecord.secondHalf || '').toLowerCase();
-          const isH1Work = currentH1.includes('wfh') || currentH1.includes('work from home') || currentH1.includes('client visit') || currentH1.includes('office');
-          const isH2Work = currentH2.includes('wfh') || currentH2.includes('work from home') || currentH2.includes('client visit') || currentH2.includes('office');
+          const isH1Work =
+            currentH1.includes('wfh') ||
+            currentH1.includes('work from home') ||
+            currentH1.includes('client visit') ||
+            currentH1.includes('office');
+          const isH2Work =
+            currentH2.includes('wfh') ||
+            currentH2.includes('work from home') ||
+            currentH2.includes('client visit') ||
+            currentH2.includes('office');
 
           if (!existingRecord.sourceRequestId && !isH1Work && !isH2Work) {
             existingRecord.firstHalf = WorkLocation.OFFICE;
             existingRecord.secondHalf = WorkLocation.OFFICE;
-            this.logger.log(`[ATTENDANCE_CREATE] Defaulted Full Day splits to Office for Record ${existingRecord.id} (${hours}h)`);
+            this.logger.log(
+              `[ATTENDANCE_CREATE] Defaulted Full Day splits to Office for Record ${existingRecord.id} (${hours}h)`,
+            );
           }
           existingRecord.status = AttendanceStatus.FULL_DAY;
-          this.logger.log(`[ATTENDANCE_SYNC] Synchronized Full Day status for existing record (${hours}h)`);
-        } else if (existingRecord.totalHours === 0 || existingRecord.totalHours === null) {
+          this.logger.log(
+            `[ATTENDANCE_SYNC] Synchronized Full Day status for existing record (${hours}h)`,
+          );
+        } else if (
+          existingRecord.totalHours === 0 ||
+          existingRecord.totalHours === null
+        ) {
           const isClear = existingRecord.totalHours === null;
-
 
           // Logic for 0 or NULL hours
           let newStatus: AttendanceStatus | null = null;
-          
+
           if (isClear) {
-            newStatus = workingDateObj > today ? null : AttendanceStatus.NOT_UPDATED;
+            newStatus =
+              workingDateObj > today ? null : AttendanceStatus.NOT_UPDATED;
           } else {
             // Explicit 0 hours
             newStatus = AttendanceStatus.ABSENT;
           }
 
           // Check if it's a non-working day regardless of 0/NULL (Safety Override)
-          const dateStr = dayjs(existingRecord.workingDate).format('YYYY-MM-DD');
+          const dateStr = dayjs(existingRecord.workingDate).format(
+            'YYYY-MM-DD',
+          );
           const holiday = await this.masterHolidayService.findByDate(dateStr);
-          const isWeekend = this.masterHolidayService.isWeekend(new Date(existingRecord.workingDate));
+          const isWeekend = this.masterHolidayService.isWeekend(
+            new Date(existingRecord.workingDate),
+          );
 
           if (holiday) {
             newStatus = AttendanceStatus.HOLIDAY;
@@ -314,37 +438,57 @@ export class EmployeeAttendanceService {
           ) {
             existingRecord.firstHalf = newStatus as any;
             existingRecord.secondHalf = newStatus as any;
-            existingRecord.totalHours = newStatus === AttendanceStatus.ABSENT ? 0 : null;
+            existingRecord.totalHours =
+              newStatus === AttendanceStatus.ABSENT ? 0 : null;
           } else {
             existingRecord.firstHalf = null;
             existingRecord.secondHalf = null;
             existingRecord.totalHours = null; // Explicitly set to null
           }
-          this.logger.log(`[ATTENDANCE_CREATE] Synchronized ${isClear ? 'NULL' : '0'} hours status: ${existingRecord.status}`);
+          this.logger.log(
+            `[ATTENDANCE_CREATE] Synchronized ${isClear ? 'NULL' : '0'} hours status: ${existingRecord.status}`,
+          );
         }
 
-        const saved = await this.employeeAttendanceRepository.save(existingRecord);
-        this.logger.log(`[ATTENDANCE_CREATE] Updated record ID: ${saved.id}, sourceRequestId after save: ${saved.sourceRequestId}`);
+        const saved =
+          await this.employeeAttendanceRepository.save(existingRecord);
+        this.logger.log(
+          `[ATTENDANCE_CREATE] Updated record ID: ${saved.id}, sourceRequestId after save: ${saved.sourceRequestId}`,
+        );
         return saved;
       }
 
-      this.logger.log(`[ATTENDANCE_CREATE] Creating NEW attendance record for ${createEmployeeAttendanceDto.employeeId} on ${createEmployeeAttendanceDto.workingDate}`);
-      this.logger.log(`[ATTENDANCE_CREATE] sourceRequestId being set to: ${createEmployeeAttendanceDto.sourceRequestId}`);
+      this.logger.log(
+        `[ATTENDANCE_CREATE] Creating NEW attendance record for ${createEmployeeAttendanceDto.employeeId} on ${createEmployeeAttendanceDto.workingDate}`,
+      );
+      this.logger.log(
+        `[ATTENDANCE_CREATE] sourceRequestId being set to: ${createEmployeeAttendanceDto.sourceRequestId}`,
+      );
 
       // Calculate totalHours if firstHalf and secondHalf are provided, or if totalHours is provided
       if (createEmployeeAttendanceDto.totalHours === null) {
-        this.logger.log(`[ATTENDANCE_CREATE] totalHours is explicitly null for NEW record, skipping recalculation`);
-      } else if (createEmployeeAttendanceDto.firstHalf || createEmployeeAttendanceDto.secondHalf || createEmployeeAttendanceDto.totalHours) {
+        this.logger.log(
+          `[ATTENDANCE_CREATE] totalHours is explicitly null for NEW record, skipping recalculation`,
+        );
+      } else if (
+        createEmployeeAttendanceDto.firstHalf ||
+        createEmployeeAttendanceDto.secondHalf ||
+        createEmployeeAttendanceDto.totalHours
+      ) {
         const calculatedHours = this.calculateTotalHours(
           createEmployeeAttendanceDto.firstHalf || null,
           createEmployeeAttendanceDto.secondHalf || null,
-          createEmployeeAttendanceDto.totalHours
+          createEmployeeAttendanceDto.totalHours,
         );
         createEmployeeAttendanceDto.totalHours = calculatedHours;
-        this.logger.log(`[ATTENDANCE_CREATE] Final totalHours for new record: ${calculatedHours}`);
+        this.logger.log(
+          `[ATTENDANCE_CREATE] Final totalHours for new record: ${calculatedHours}`,
+        );
       }
 
-      const newAttendance = this.employeeAttendanceRepository.create(createEmployeeAttendanceDto as any) as unknown as EmployeeAttendance;
+      const newAttendance = this.employeeAttendanceRepository.create(
+        createEmployeeAttendanceDto as any,
+      ) as unknown as EmployeeAttendance;
       newAttendance.workLocation = null; // Always null
 
       // Only calculate status if NOT provided
@@ -357,7 +501,7 @@ export class EmployeeAttendanceService {
           newAttendance.totalHours,
           newAttendance.workingDate,
           newAttendance.firstHalf,
-          newAttendance.secondHalf
+          newAttendance.secondHalf,
         );
       }
 
@@ -374,39 +518,68 @@ export class EmployeeAttendanceService {
         newAttendance.status = AttendanceStatus.FULL_DAY;
         newAttendance.firstHalf = WorkLocation.OFFICE;
         newAttendance.secondHalf = WorkLocation.OFFICE;
-        this.logger.log(`[ATTENDANCE_CREATE] Enforced Full Day for non-working day (${hours}h)`);
+        this.logger.log(
+          `[ATTENDANCE_CREATE] Enforced Full Day for non-working day (${hours}h)`,
+        );
       } else if (isSat && hours > 3) {
         newAttendance.status = AttendanceStatus.FULL_DAY;
       } else if (hours > 0 && hours <= 6) {
         // Relaxed enforcement: Only set defaults if no source request is linked and splits are empty
-        if (!newAttendance.sourceRequestId && (!newAttendance.firstHalf || !newAttendance.secondHalf)) {
+        if (
+          !newAttendance.sourceRequestId &&
+          (!newAttendance.firstHalf || !newAttendance.secondHalf)
+        ) {
           newAttendance.firstHalf = WorkLocation.OFFICE;
           newAttendance.secondHalf = AttendanceStatus.LEAVE;
-          this.logger.log(`[ATTENDANCE_CREATE] Enforced default Half Day splits for NEW record`);
+          this.logger.log(
+            `[ATTENDANCE_CREATE] Enforced default Half Day splits for NEW record`,
+          );
         }
         newAttendance.status = AttendanceStatus.HALF_DAY;
-        this.logger.log(`[ATTENDANCE_CREATE] Synchronized Half Day status (<= 6h)`);
-      } else if (hours === 9 || (isSat && hours > 3 && hours <= 6) || hours > 6) {
+        this.logger.log(
+          `[ATTENDANCE_CREATE] Synchronized Half Day status (<= 6h)`,
+        );
+      } else if (
+        hours === 9 ||
+        (isSat && hours > 3 && hours <= 6) ||
+        hours > 6
+      ) {
         // RELAXED ENFORCEMENT: Only set default Office splits if they are currently empty or stationary
         const currentH1 = (newAttendance.firstHalf || '').toLowerCase();
         const currentH2 = (newAttendance.secondHalf || '').toLowerCase();
-        const isH1Work = currentH1.includes('wfh') || currentH1.includes('work from home') || currentH1.includes('client visit') || currentH1.includes('office');
-        const isH2Work = currentH2.includes('wfh') || currentH2.includes('work from home') || currentH2.includes('client visit') || currentH2.includes('office');
+        const isH1Work =
+          currentH1.includes('wfh') ||
+          currentH1.includes('work from home') ||
+          currentH1.includes('client visit') ||
+          currentH1.includes('office');
+        const isH2Work =
+          currentH2.includes('wfh') ||
+          currentH2.includes('work from home') ||
+          currentH2.includes('client visit') ||
+          currentH2.includes('office');
 
         if (!newAttendance.sourceRequestId && !isH1Work && !isH2Work) {
           newAttendance.firstHalf = WorkLocation.OFFICE;
           newAttendance.secondHalf = WorkLocation.OFFICE;
-          this.logger.log(`[ATTENDANCE_CREATE] Defaulted Full Day splits to Office for NEW record (${hours}h)`);
+          this.logger.log(
+            `[ATTENDANCE_CREATE] Defaulted Full Day splits to Office for NEW record (${hours}h)`,
+          );
         }
         newAttendance.status = AttendanceStatus.FULL_DAY;
-        this.logger.log(`[ATTENDANCE_SYNC] Synchronized Full Day status for NEW record (${hours}h)`);
-      } else if (newAttendance.totalHours === 0 || newAttendance.totalHours === null) {
+        this.logger.log(
+          `[ATTENDANCE_SYNC] Synchronized Full Day status for NEW record (${hours}h)`,
+        );
+      } else if (
+        newAttendance.totalHours === 0 ||
+        newAttendance.totalHours === null
+      ) {
         // Logic for 0 or NULL hours
         let newStatus: AttendanceStatus | null = null;
         const isClear = newAttendance.totalHours === null;
 
         if (isClear) {
-          newStatus = workingDateObj > today ? null : AttendanceStatus.NOT_UPDATED;
+          newStatus =
+            workingDateObj > today ? null : AttendanceStatus.NOT_UPDATED;
         } else {
           // Explicit 0 hours
           newStatus = AttendanceStatus.ABSENT;
@@ -415,7 +588,9 @@ export class EmployeeAttendanceService {
         // Check if it's a non-working day regardless of 0/NULL (Safety Override)
         const dateStr = dayjs(newAttendance.workingDate).format('YYYY-MM-DD');
         const holiday = await this.masterHolidayService.findByDate(dateStr);
-        const isWeekend = this.masterHolidayService.isWeekend(new Date(newAttendance.workingDate));
+        const isWeekend = this.masterHolidayService.isWeekend(
+          new Date(newAttendance.workingDate),
+        );
 
         if (holiday) {
           newStatus = AttendanceStatus.HOLIDAY;
@@ -434,37 +609,52 @@ export class EmployeeAttendanceService {
         ) {
           newAttendance.firstHalf = newAttendance.status as any;
           newAttendance.secondHalf = newAttendance.status as any;
-          newAttendance.totalHours = newAttendance.status === AttendanceStatus.ABSENT ? 0 : null;
+          newAttendance.totalHours =
+            newAttendance.status === AttendanceStatus.ABSENT ? 0 : null;
         } else {
           newAttendance.firstHalf = null;
           newAttendance.secondHalf = null;
           newAttendance.totalHours = null; // Explicitly set to null
         }
-        this.logger.log(`[ATTENDANCE_CREATE] Synchronized ${isClear ? 'NULL' : '0'} hours status: ${newAttendance.status}`);
+        this.logger.log(
+          `[ATTENDANCE_CREATE] Synchronized ${isClear ? 'NULL' : '0'} hours status: ${newAttendance.status}`,
+        );
       }
 
       const saved = await this.employeeAttendanceRepository.save(newAttendance);
-      this.logger.log(`[ATTENDANCE_CREATE] Created attendance ID: ${saved.id}, sourceRequestId after save: ${saved.sourceRequestId}`);
+      this.logger.log(
+        `[ATTENDANCE_CREATE] Created attendance ID: ${saved.id}, sourceRequestId after save: ${saved.sourceRequestId}`,
+      );
 
       // Trigger monthStatus recalculation
-      this.triggerMonthStatusRecalc(saved.employeeId, saved.workingDate).catch(() => { });
+      this.triggerMonthStatusRecalc(saved.employeeId, saved.workingDate).catch(
+        () => {},
+      );
 
       return saved;
     } catch (error) {
-      this.logger.error(`[ATTENDANCE_CREATE] Error creating attendance for ${createEmployeeAttendanceDto.employeeId}: ${error.message}`, error.stack);
+      this.logger.error(
+        `[ATTENDANCE_CREATE] Error creating attendance for ${createEmployeeAttendanceDto.employeeId}: ${error.message}`,
+        error.stack,
+      );
       if (error instanceof BadRequestException) throw error;
       if (error instanceof ForbiddenException) throw error;
       if (error instanceof NotFoundException) throw error;
       if (error instanceof HttpException) throw error;
       throw new HttpException(
         `Failed to create attendance: ${error.message}`,
-        HttpStatus.INTERNAL_SERVER_ERROR
+        HttpStatus.INTERNAL_SERVER_ERROR,
       );
     }
   }
 
-  async checkEntryBlock(employeeId: string, date: string): Promise<{ isBlocked: boolean; reason: string | null }> {
-    this.logger.log(`Checking entry block for employee: ${employeeId} on date: ${date}`);
+  async checkEntryBlock(
+    employeeId: string,
+    date: string,
+  ): Promise<{ isBlocked: boolean; reason: string | null }> {
+    this.logger.log(
+      `Checking entry block for employee: ${employeeId} on date: ${date}`,
+    );
     try {
       const workingDate = new Date(date);
 
@@ -474,7 +664,10 @@ export class EmployeeAttendanceService {
       }
 
       // 2. Check Manual Blocker
-      const blocker = await this.blockerService.isBlocked(employeeId, workingDate);
+      const blocker = await this.blockerService.isBlocked(
+        employeeId,
+        workingDate,
+      );
       if (blocker) {
         return { isBlocked: true, reason: blocker.reason || 'Admin Blocked' };
       }
@@ -501,8 +694,12 @@ export class EmployeeAttendanceService {
         const isRestricted = (val: string) =>
           val &&
           !val.toLowerCase().includes(WorkLocation.OFFICE.toLowerCase()) &&
-          !val.toLowerCase().includes(AttendanceStatus.NOT_UPDATED.toLowerCase()) &&
-          !val.toLowerCase().includes(AttendanceStatus.UPCOMING.toLowerCase()) &&
+          !val
+            .toLowerCase()
+            .includes(AttendanceStatus.NOT_UPDATED.toLowerCase()) &&
+          !val
+            .toLowerCase()
+            .includes(AttendanceStatus.UPCOMING.toLowerCase()) &&
           !val.toLowerCase().includes(AttendanceStatus.HOLIDAY.toLowerCase()) &&
           !val.toLowerCase().includes(AttendanceStatus.WEEKEND.toLowerCase());
 
@@ -513,17 +710,24 @@ export class EmployeeAttendanceService {
 
       return { isBlocked: false, reason: null };
     } catch (error) {
-      this.logger.error(`Error checking entry block for ${employeeId}: ${error.message}`);
+      this.logger.error(
+        `Error checking entry block for ${employeeId}: ${error.message}`,
+      );
       if (error instanceof HttpException) throw error;
       throw new HttpException(
         `Failed to check entry block: ${error.message}`,
-        HttpStatus.INTERNAL_SERVER_ERROR
+        HttpStatus.INTERNAL_SERVER_ERROR,
       );
     }
   }
 
-  async createBulk(attendanceDtos: EmployeeAttendanceDto[], isPrivileged: boolean = false): Promise<EmployeeAttendance[]> {
-    this.logger.log(`Starting bulk attendance process for ${attendanceDtos.length} items`);
+  async createBulk(
+    attendanceDtos: EmployeeAttendanceDto[],
+    isPrivileged: boolean = false,
+  ): Promise<EmployeeAttendance[]> {
+    this.logger.log(
+      `Starting bulk attendance process for ${attendanceDtos.length} items`,
+    );
     try {
       const results: EmployeeAttendance[] = [];
       for (const dto of attendanceDtos) {
@@ -541,13 +745,18 @@ export class EmployeeAttendanceService {
             results.push(record);
           }
         } catch (error) {
-          this.logger.error(`Failed to process bulk item for ${dto.workingDate}: ${error.message}`);
+          this.logger.error(
+            `Failed to process bulk item for ${dto.workingDate}: ${error.message}`,
+          );
         }
       }
 
       // Trigger monthStatus recalculation if any records were processed
       if (attendanceDtos.length > 0) {
-        this.triggerMonthStatusRecalc(attendanceDtos[0].employeeId, attendanceDtos[0].workingDate).catch(() => { });
+        this.triggerMonthStatusRecalc(
+          attendanceDtos[0].employeeId,
+          attendanceDtos[0].workingDate,
+        ).catch(() => {});
       }
 
       return results;
@@ -556,13 +765,20 @@ export class EmployeeAttendanceService {
       if (error instanceof HttpException) throw error;
       throw new HttpException(
         `Failed to process bulk attendance: ${error.message}`,
-        HttpStatus.INTERNAL_SERVER_ERROR
+        HttpStatus.INTERNAL_SERVER_ERROR,
       );
     }
   }
 
-  async autoUpdateTimesheet(employeeId: string, month: string, year: string, dryRun: boolean = false): Promise<any> {
-    this.logger.log(`Auto-update started for: ${employeeId}, Month: ${month}/${year}, DryRun: ${dryRun}`);
+  async autoUpdateTimesheet(
+    employeeId: string,
+    month: string,
+    year: string,
+    dryRun: boolean = false,
+  ): Promise<any> {
+    this.logger.log(
+      `Auto-update started for: ${employeeId}, Month: ${month}/${year}, DryRun: ${dryRun}`,
+    );
 
     const monthNum = parseInt(month, 10);
     const yearNum = parseInt(year, 10);
@@ -572,9 +788,11 @@ export class EmployeeAttendanceService {
       const startDate = new Date(yearNum, monthNum - 1, 1, 0, 0, 0);
       if (
         yearNum !== today.getFullYear() ||
-        (monthNum - 1) !== today.getMonth()
+        monthNum - 1 !== today.getMonth()
       ) {
-        throw new BadRequestException('Auto-update is only available for the current month.');
+        throw new BadRequestException(
+          'Auto-update is only available for the current month.',
+        );
       }
 
       // Determine end date: either today (if current month) or last day of the month (if past month)
@@ -583,19 +801,23 @@ export class EmployeeAttendanceService {
       endDate.setHours(23, 59, 59, 999);
 
       const holidays = await this.masterHolidayService.findAll();
-      const holidayDates = new Set(holidays.map(h => dayjs(h.holidayDate || (h as any).date).format('YYYY-MM-DD')));
+      const holidayDates = new Set(
+        holidays.map((h) =>
+          dayjs(h.holidayDate || h.date).format('YYYY-MM-DD'),
+        ),
+      );
 
       const existingRecords = await this.employeeAttendanceRepository.find({
         where: {
           employeeId,
-          workingDate: Between(startDate, endDate)
-        }
+          workingDate: Between(startDate, endDate),
+        },
       });
 
       const existingDates = new Set<string>();
       const existingZeroHourRecords = new Map<string, EmployeeAttendance>();
 
-      existingRecords.forEach(r => {
+      existingRecords.forEach((r) => {
         const dateStr = dayjs(r.workingDate).format('YYYY-MM-DD');
 
         if (r.totalHours && r.totalHours > 0) {
@@ -603,7 +825,10 @@ export class EmployeeAttendanceService {
           return;
         }
 
-        if (r.status === AttendanceStatus.LEAVE || r.status === AttendanceStatus.HALF_DAY) {
+        if (
+          r.status === AttendanceStatus.LEAVE ||
+          r.status === AttendanceStatus.HALF_DAY
+        ) {
           existingDates.add(dateStr);
           return;
         }
@@ -623,17 +848,20 @@ export class EmployeeAttendanceService {
             LeaveRequestStatus.MODIFICATION_REJECTED,
           ]),
           fromDate: LessThanOrEqual(dayjs(endDate).format('YYYY-MM-DD')),
-          toDate: MoreThanOrEqual(dayjs(startDate).format('YYYY-MM-DD'))
-        }
+          toDate: MoreThanOrEqual(dayjs(startDate).format('YYYY-MM-DD')),
+        },
       });
 
       const absenceDates = new Set<string>();
       const locationRequestDates = new Map<string, string>(); // date -> 'WFH' | 'Client Visit'
 
-      approvedLeaves.forEach(leave => {
-        const isAbsence = leave.requestType === LeaveRequestType.APPLY_LEAVE || leave.requestType === LeaveRequestType.LEAVE || leave.requestType === LeaveRequestType.HALF_DAY;
+      approvedLeaves.forEach((leave) => {
+        const isAbsence =
+          leave.requestType === LeaveRequestType.APPLY_LEAVE ||
+          leave.requestType === LeaveRequestType.LEAVE ||
+          leave.requestType === LeaveRequestType.HALF_DAY;
 
-        let current = new Date(leave.fromDate);
+        const current = new Date(leave.fromDate);
         current.setHours(12, 0, 0, 0);
         const end = new Date(leave.toDate);
         end.setHours(23, 59, 59, 999);
@@ -659,7 +887,7 @@ export class EmployeeAttendanceService {
 
       const recordsToCreate: EmployeeAttendanceDto[] = [];
       const updatedDateStrings: string[] = [];
-      let currentDate = new Date(startDate);
+      const currentDate = new Date(startDate);
 
       while (currentDate <= endDate) {
         const dateStr = dayjs(currentDate).format('YYYY-MM-DD');
@@ -679,9 +907,13 @@ export class EmployeeAttendanceService {
           const existingZeroHour = existingZeroHourRecords.get(dateStr);
           const locationRequestType = locationRequestDates.get(dateStr);
 
-          const activity = locationRequestType === LeaveRequestType.WORK_FROM_HOME || locationRequestType === WorkLocation.WFH
-            ? WorkLocation.WORK_FROM_HOME
-            : (locationRequestType === LeaveRequestType.CLIENT_VISIT ? WorkLocation.CLIENT_VISIT : WorkLocation.OFFICE);
+          const activity =
+            locationRequestType === LeaveRequestType.WORK_FROM_HOME ||
+            locationRequestType === WorkLocation.WFH
+              ? WorkLocation.WORK_FROM_HOME
+              : locationRequestType === LeaveRequestType.CLIENT_VISIT
+                ? WorkLocation.CLIENT_VISIT
+                : WorkLocation.OFFICE;
 
           dto.firstHalf = activity;
           dto.secondHalf = activity;
@@ -702,36 +934,51 @@ export class EmployeeAttendanceService {
 
       if (recordsToCreate.length === 0) {
         this.logger.log(`No eligible days found to update for ${employeeId}.`);
-        return { message: 'No eligible days found to update.', count: 0, updatedDates: [] };
-      }
-
-      if (dryRun) {
-        this.logger.log(`Dry run completed for ${employeeId}. Found ${recordsToCreate.length} potential updates.`);
         return {
-          message: 'Dry run successful',
-          count: recordsToCreate.length,
-          updatedDates: updatedDateStrings
+          message: 'No eligible days found to update.',
+          count: 0,
+          updatedDates: [],
         };
       }
 
-      this.logger.log(`Updating ${recordsToCreate.length} records for ${employeeId}...`);
+      if (dryRun) {
+        this.logger.log(
+          `Dry run completed for ${employeeId}. Found ${recordsToCreate.length} potential updates.`,
+        );
+        return {
+          message: 'Dry run successful',
+          count: recordsToCreate.length,
+          updatedDates: updatedDateStrings,
+        };
+      }
+
+      this.logger.log(
+        `Updating ${recordsToCreate.length} records for ${employeeId}...`,
+      );
       await this.createBulk(recordsToCreate);
 
       if (!dryRun) {
-        this.triggerMonthStatusRecalc(employeeId, startDate).catch(() => { });
+        this.triggerMonthStatusRecalc(employeeId, startDate).catch(() => {});
       }
 
-      this.logger.log(`Auto-update completed for ${employeeId}. Dates: ${updatedDateStrings.join(', ')}`);
+      this.logger.log(
+        `Auto-update completed for ${employeeId}. Dates: ${updatedDateStrings.join(', ')}`,
+      );
       return {
         message: 'Timesheet updated successfully',
         count: recordsToCreate.length,
-        updatedDates: updatedDateStrings
+        updatedDates: updatedDateStrings,
       };
-
     } catch (error) {
-      this.logger.error(`Error during auto-update for ${employeeId}: ${error.message}`, error.stack);
+      this.logger.error(
+        `Error during auto-update for ${employeeId}: ${error.message}`,
+        error.stack,
+      );
       if (error instanceof HttpException) throw error;
-      throw new HttpException('Failed to auto-update timesheet', HttpStatus.INTERNAL_SERVER_ERROR);
+      throw new HttpException(
+        'Failed to auto-update timesheet',
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
     }
   }
 
@@ -739,13 +986,17 @@ export class EmployeeAttendanceService {
     this.logger.log(`Fetching all attendance records`);
     try {
       const records = await this.employeeAttendanceRepository.find();
-      return Promise.all(records.map(record => this.applyStatusBusinessRules(record)));
+      return Promise.all(
+        records.map((record) => this.applyStatusBusinessRules(record)),
+      );
     } catch (error) {
-      this.logger.error(`Error fetching all attendance records: ${error.message}`);
+      this.logger.error(
+        `Error fetching all attendance records: ${error.message}`,
+      );
       if (error instanceof HttpException) throw error;
       throw new HttpException(
         `Failed to fetch attendance records: ${error.message}`,
-        HttpStatus.INTERNAL_SERVER_ERROR
+        HttpStatus.INTERNAL_SERVER_ERROR,
       );
     }
   }
@@ -753,30 +1004,47 @@ export class EmployeeAttendanceService {
   async findOne(id: number): Promise<EmployeeAttendance> {
     this.logger.log(`Fetching attendance record with ID: ${id}`);
     try {
-      const attendance = await this.employeeAttendanceRepository.findOne({ where: { id } });
-      if (!attendance) throw new NotFoundException(`Record with ID ${id} not found`);
+      const attendance = await this.employeeAttendanceRepository.findOne({
+        where: { id },
+      });
+      if (!attendance)
+        throw new NotFoundException(`Record with ID ${id} not found`);
       return await this.applyStatusBusinessRules(attendance);
     } catch (error) {
-      this.logger.error(`Error fetching attendance record ${id}: ${error.message}`);
+      this.logger.error(
+        `Error fetching attendance record ${id}: ${error.message}`,
+      );
       if (error instanceof HttpException) throw error;
       throw new HttpException(
         `Failed to fetch attendance record: ${error.message}`,
-        HttpStatus.INTERNAL_SERVER_ERROR
+        HttpStatus.INTERNAL_SERVER_ERROR,
       );
     }
   }
 
-  async update(id: number, updateDto: Partial<EmployeeAttendanceDto>, isPrivileged: boolean = false): Promise<EmployeeAttendance | null> {
+  async update(
+    id: number,
+    updateDto: Partial<EmployeeAttendanceDto>,
+    isPrivileged: boolean = false,
+  ): Promise<EmployeeAttendance | null> {
     try {
       const attendance = await this.findOne(id);
 
       this.logger.log(`[ATTENDANCE_UPDATE] ===== START UPDATE =====`);
-      this.logger.log(`[ATTENDANCE_UPDATE] Updating attendance ID: ${id}, EmployeeID: ${attendance.employeeId}`);
-      this.logger.log(`[ATTENDANCE_UPDATE] Date: ${attendance.workingDate}, Current sourceRequestId: ${attendance.sourceRequestId}`);
-      this.logger.log(`[ATTENDANCE_UPDATE] Incoming sourceRequestId in DTO: ${(updateDto as any).sourceRequestId}`);
+      this.logger.log(
+        `[ATTENDANCE_UPDATE] Updating attendance ID: ${id}, EmployeeID: ${attendance.employeeId}`,
+      );
+      this.logger.log(
+        `[ATTENDANCE_UPDATE] Date: ${attendance.workingDate}, Current sourceRequestId: ${attendance.sourceRequestId}`,
+      );
+      this.logger.log(
+        `[ATTENDANCE_UPDATE] Incoming sourceRequestId in DTO: ${(updateDto as any).sourceRequestId}`,
+      );
 
-
-      if (!isPrivileged && !this.isEditableMonth(new Date(attendance.workingDate))) {
+      if (
+        !isPrivileged &&
+        !this.isEditableMonth(new Date(attendance.workingDate))
+      ) {
         throw new BadRequestException('Attendance for this month is locked.');
       }
 
@@ -789,30 +1057,41 @@ export class EmployeeAttendanceService {
       const hasWorkActivity = (val: string | null) => {
         if (!val) return false;
         const v = val.toLowerCase();
-        return v.includes(WorkLocation.OFFICE.toLowerCase()) ||
+        return (
+          v.includes(WorkLocation.OFFICE.toLowerCase()) ||
           v.includes(WorkLocation.WFH.toLowerCase()) ||
           v.includes(WorkLocation.WORK_FROM_HOME.toLowerCase()) ||
-          v.includes(WorkLocation.CLIENT_VISIT.toLowerCase());
+          v.includes(WorkLocation.CLIENT_VISIT.toLowerCase())
+        );
       };
 
-      const hasActivity = hasWorkActivity(attendance.firstHalf) ||
+      const hasActivity =
+        hasWorkActivity(attendance.firstHalf) ||
         hasWorkActivity(attendance.secondHalf) ||
         hasWorkActivity(updateDto.firstHalf as any) ||
         hasWorkActivity(updateDto.secondHalf as any);
 
-      if ((updateDto.totalHours === 0 || updateDto.totalHours === null) && workingDateObj > today && !hasActivity) {
-        this.logger.log(`[ATTENDANCE_UPDATE] Deleting future record with 0 hours and no work activity`);
+      if (
+        (updateDto.totalHours === 0 || updateDto.totalHours === null) &&
+        workingDateObj > today &&
+        !hasActivity
+      ) {
+        this.logger.log(
+          `[ATTENDANCE_UPDATE] Deleting future record with 0 hours and no work activity`,
+        );
         await this.employeeAttendanceRepository.delete(id);
         return null;
       }
 
       const blocker = await this.blockerService.isBlocked(
         attendance.employeeId,
-        attendance.workingDate
+        attendance.workingDate,
       );
       if (blocker) {
         const blockedByName = blocker.blockedBy || 'Administrator';
-        throw new BadRequestException(`Timesheet is locked for this date by ${blockedByName}. Please contact them to unlock.`);
+        throw new BadRequestException(
+          `Timesheet is locked for this date by ${blockedByName}. Please contact them to unlock.`,
+        );
       }
 
       // --- Holiday/Weekend Blocking Logic (Start) ---
@@ -822,31 +1101,49 @@ export class EmployeeAttendanceService {
       const isSatLocal = workingDateObj.getDay() === 6;
 
       if (!isPrivileged) {
-        const incomingHours = updateDto.totalHours !== undefined && updateDto.totalHours !== null 
-          ? Number(updateDto.totalHours) 
-          : null;
+        const incomingHours =
+          updateDto.totalHours !== undefined && updateDto.totalHours !== null
+            ? Number(updateDto.totalHours)
+            : null;
 
         if (holiday || isSun || isSatLocal) {
           if (incomingHours === 0) {
-            throw new BadRequestException('Cannot mark absent (0 hours) on Weekends or Holidays.');
+            throw new BadRequestException(
+              'Cannot mark absent (0 hours) on Weekends or Holidays.',
+            );
           }
           if (incomingHours !== null && incomingHours > 0) {
             const minHours = isSatLocal ? 4 : 1;
             if (incomingHours < minHours || incomingHours > 9) {
-              const dayType = isSatLocal ? 'Saturday' : isSun ? 'Sunday' : 'Holiday';
-              throw new BadRequestException(`${dayType} hours must be between ${minHours} and 9.`);
+              const dayType = isSatLocal
+                ? 'Saturday'
+                : isSun
+                  ? 'Sunday'
+                  : 'Holiday';
+              throw new BadRequestException(
+                `${dayType} hours must be between ${minHours} and 9.`,
+              );
             }
           }
         }
       }
       // --- Holiday/Weekend Blocking Logic (End) ---
 
-      const isHalfDayStatus = attendance.status === AttendanceStatus.HALF_DAY || String(attendance.status).toLowerCase() === AttendanceStatus.HALF_DAY.toLowerCase();
+      const isHalfDayStatus =
+        attendance.status === AttendanceStatus.HALF_DAY ||
+        String(attendance.status).toLowerCase() ===
+          AttendanceStatus.HALF_DAY.toLowerCase();
       const isLocked = !!attendance.sourceRequestId && isHalfDayStatus;
 
       // GUARD: Protect Approved Leaves for non-privileged users
-      if (!isPrivileged && attendance.sourceRequestId && !(updateDto as any).sourceRequestId) {
-        this.logger.warn(`[ATTENDANCE_RESTRICTION] Blocking manual single-record update for record ${attendance.id} because it is linked to Leave Request ${attendance.sourceRequestId} (Locked State: ${isLocked})`);
+      if (
+        !isPrivileged &&
+        attendance.sourceRequestId &&
+        !(updateDto as any).sourceRequestId
+      ) {
+        this.logger.warn(
+          `[ATTENDANCE_RESTRICTION] Blocking manual single-record update for record ${attendance.id} because it is linked to Leave Request ${attendance.sourceRequestId} (Locked State: ${isLocked})`,
+        );
         return attendance; // Skip update and return existing record
       }
 
@@ -856,7 +1153,7 @@ export class EmployeeAttendanceService {
 
       const existingStatus = attendance.status;
       const isLeave = existingStatus === AttendanceStatus.LEAVE;
-      const originalTotalHours = attendance.totalHours; // Capture original hours 
+      const originalTotalHours = attendance.totalHours; // Capture original hours
 
       Object.assign(attendance, updateDto);
       attendance.workLocation = null; // Force null again after assign
@@ -875,7 +1172,8 @@ export class EmployeeAttendanceService {
         const isSat = dateObj.getDay() === 6;
         const isSun = dateObj.getDay() === 0;
         const dateStrLocal = dayjs(dateObj).format('YYYY-MM-DD');
-        const holiday = await this.masterHolidayService.findByDate(dateStrLocal);
+        const holiday =
+          await this.masterHolidayService.findByDate(dateStrLocal);
         const isWeekendOrHoliday = isSat || isSun || !!holiday;
 
         if (hours > 6 || (isWeekendOrHoliday && hours >= 1)) {
@@ -886,39 +1184,72 @@ export class EmployeeAttendanceService {
           // and no source request is linked in either the database or the incoming DTO.
           const currentH1 = (attendance.firstHalf || '').toLowerCase();
           const currentH2 = (attendance.secondHalf || '').toLowerCase();
-          const isH1Work = currentH1.includes('wfh') || currentH1.includes('work from home') || currentH1.includes('client visit') || currentH1.includes('office');
-          const isH2Work = currentH2.includes('wfh') || currentH2.includes('work from home') || currentH2.includes('client visit') || currentH2.includes('office');
-          
+          const isH1Work =
+            currentH1.includes('wfh') ||
+            currentH1.includes('work from home') ||
+            currentH1.includes('client visit') ||
+            currentH1.includes('office');
+          const isH2Work =
+            currentH2.includes('wfh') ||
+            currentH2.includes('work from home') ||
+            currentH2.includes('client visit') ||
+            currentH2.includes('office');
+
           const incomingH1 = (updateDto.firstHalf || '').toLowerCase();
           const incomingH2 = (updateDto.secondHalf || '').toLowerCase();
-          const isIncomingH1Work = incomingH1.includes('wfh') || incomingH1.includes('work from home') || incomingH1.includes('client visit') || incomingH1.includes('office');
-          const isIncomingH2Work = incomingH2.includes('wfh') || incomingH2.includes('work from home') || incomingH2.includes('client visit') || incomingH2.includes('office');
+          const isIncomingH1Work =
+            incomingH1.includes('wfh') ||
+            incomingH1.includes('work from home') ||
+            incomingH1.includes('client visit') ||
+            incomingH1.includes('office');
+          const isIncomingH2Work =
+            incomingH2.includes('wfh') ||
+            incomingH2.includes('work from home') ||
+            incomingH2.includes('client visit') ||
+            incomingH2.includes('office');
 
-          const hasSource = !!attendance.sourceRequestId || !!(updateDto as any).sourceRequestId;
+          const hasSource =
+            !!attendance.sourceRequestId ||
+            !!(updateDto as any).sourceRequestId;
 
-          if (!hasSource && !isH1Work && !isH2Work && !isIncomingH1Work && !isIncomingH2Work) {
+          if (
+            !hasSource &&
+            !isH1Work &&
+            !isH2Work &&
+            !isIncomingH1Work &&
+            !isIncomingH2Work
+          ) {
             attendance.firstHalf = WorkLocation.OFFICE;
             attendance.secondHalf = WorkLocation.OFFICE;
             updateDto.firstHalf = WorkLocation.OFFICE as any;
             updateDto.secondHalf = WorkLocation.OFFICE as any;
-            this.logger.log(`[ATTENDANCE_OVERWRITE] Defaulted Full Day (${hours}h) splits to Office`);
+            this.logger.log(
+              `[ATTENDANCE_OVERWRITE] Defaulted Full Day (${hours}h) splits to Office`,
+            );
           } else {
-            this.logger.log(`[ATTENDANCE_SYNC] Preserving existing splits for Full Day (${hours}h)`);
+            this.logger.log(
+              `[ATTENDANCE_SYNC] Preserving existing splits for Full Day (${hours}h)`,
+            );
           }
         }
         // If hours is <= 6 and > 0 (and not a Weekend/Holiday Full Day), it's Half Day.
         else if (hours > 0 && hours <= 6 && !isWeekendOrHoliday) {
           attendance.status = AttendanceStatus.HALF_DAY;
           updateDto.status = AttendanceStatus.HALF_DAY;
-          this.logger.log(`[ATTENDANCE_UPDATE] Synchronized Half Day (${hours}h) status`);
-        }
-        else if (updateDto.totalHours === 0 || updateDto.totalHours === null) {
+          this.logger.log(
+            `[ATTENDANCE_UPDATE] Synchronized Half Day (${hours}h) status`,
+          );
+        } else if (
+          updateDto.totalHours === 0 ||
+          updateDto.totalHours === null
+        ) {
           const isClear = updateDto.totalHours === null;
           // Logic for 0 or NULL hours
           let newStatus: AttendanceStatus | null = null;
 
           if (isClear) {
-            newStatus = workingDateObj > today ? null : AttendanceStatus.NOT_UPDATED;
+            newStatus =
+              workingDateObj > today ? null : AttendanceStatus.NOT_UPDATED;
           } else {
             // Explicit 0 hours
             newStatus = AttendanceStatus.ABSENT;
@@ -927,7 +1258,9 @@ export class EmployeeAttendanceService {
           // Check if it's a non-working day regardless of 0/NULL (Safety Override)
           const dateStr = dayjs(attendance.workingDate).format('YYYY-MM-DD');
           const holiday = await this.masterHolidayService.findByDate(dateStr);
-          const isWeekend = this.masterHolidayService.isWeekend(new Date(attendance.workingDate));
+          const isWeekend = this.masterHolidayService.isWeekend(
+            new Date(attendance.workingDate),
+          );
 
           if (holiday) {
             newStatus = AttendanceStatus.HOLIDAY;
@@ -949,7 +1282,8 @@ export class EmployeeAttendanceService {
           ) {
             attendance.firstHalf = newStatus as any;
             attendance.secondHalf = newStatus as any;
-            attendance.totalHours = newStatus === AttendanceStatus.ABSENT ? 0 : null;
+            attendance.totalHours =
+              newStatus === AttendanceStatus.ABSENT ? 0 : null;
             updateDto.firstHalf = newStatus as any;
             updateDto.secondHalf = newStatus as any;
             updateDto.totalHours = attendance.totalHours as any;
@@ -963,33 +1297,57 @@ export class EmployeeAttendanceService {
             updateDto.totalHours = null as any;
           }
 
-
-          this.logger.log(`[ATTENDANCE_UPDATE] Reset to ${isClear ? 'NULL' : '0'} hours: ${newStatus}`);
+          this.logger.log(
+            `[ATTENDANCE_UPDATE] Reset to ${isClear ? 'NULL' : '0'} hours: ${newStatus}`,
+          );
         }
-
       }
 
-      // If ONLY splits were updated (unlikely from frontend but possible from API), 
+      // If ONLY splits were updated (unlikely from frontend but possible from API),
       // recalculate totalHours and status
-      else if (updateDto.firstHalf !== undefined || updateDto.secondHalf !== undefined) {
-        const firstHalf = updateDto.firstHalf !== undefined ? updateDto.firstHalf : attendance.firstHalf;
-        const secondHalf = updateDto.secondHalf !== undefined ? updateDto.secondHalf : attendance.secondHalf;
-        const calculatedHours = this.calculateTotalHours(firstHalf || null, secondHalf || null);
+      else if (
+        updateDto.firstHalf !== undefined ||
+        updateDto.secondHalf !== undefined
+      ) {
+        const firstHalf =
+          updateDto.firstHalf !== undefined
+            ? updateDto.firstHalf
+            : attendance.firstHalf;
+        const secondHalf =
+          updateDto.secondHalf !== undefined
+            ? updateDto.secondHalf
+            : attendance.secondHalf;
+        const calculatedHours = this.calculateTotalHours(
+          firstHalf || null,
+          secondHalf || null,
+        );
 
         attendance.totalHours = calculatedHours;
         updateDto.totalHours = calculatedHours;
 
-        const newStatus = await this.determineStatus(calculatedHours, attendance.workingDate, firstHalf, secondHalf);
+        const newStatus = await this.determineStatus(
+          calculatedHours,
+          attendance.workingDate,
+          firstHalf,
+          secondHalf,
+        );
         attendance.status = newStatus;
         updateDto.status = newStatus;
 
-        this.logger.log(`[ATTENDANCE_UPDATE] Split-based update: ${calculatedHours}h, status: ${newStatus}`);
+        this.logger.log(
+          `[ATTENDANCE_UPDATE] Split-based update: ${calculatedHours}h, status: ${newStatus}`,
+        );
       }
 
-
       // Auto-fill splits for Full Day (9 hours) if missing
-      if (attendance.totalHours === 9 && (!attendance.firstHalf || !attendance.secondHalf)) {
-        const defaultActivity = this.determineDefaultActivity(attendance.firstHalf, attendance.secondHalf);
+      if (
+        attendance.totalHours === 9 &&
+        (!attendance.firstHalf || !attendance.secondHalf)
+      ) {
+        const defaultActivity = this.determineDefaultActivity(
+          attendance.firstHalf,
+          attendance.secondHalf,
+        );
         if (!attendance.firstHalf) {
           attendance.firstHalf = defaultActivity;
           updateDto.firstHalf = defaultActivity;
@@ -998,24 +1356,31 @@ export class EmployeeAttendanceService {
           attendance.secondHalf = defaultActivity;
           updateDto.secondHalf = defaultActivity;
         }
-        this.logger.log(`[ATTENDANCE_UPDATE] Auto-filled missing splits for Full Day: ${attendance.firstHalf}, ${attendance.secondHalf}`);
+        this.logger.log(
+          `[ATTENDANCE_UPDATE] Auto-filled missing splits for Full Day: ${attendance.firstHalf}, ${attendance.secondHalf}`,
+        );
       }
 
       const saved = await this.employeeAttendanceRepository.save(attendance);
 
       // Trigger monthStatus recalculation
-      this.triggerMonthStatusRecalc(saved.employeeId, saved.workingDate).catch(() => { });
+      this.triggerMonthStatusRecalc(saved.employeeId, saved.workingDate).catch(
+        () => {},
+      );
 
       return saved;
     } catch (error) {
-      this.logger.error(`[ATTENDANCE_UPDATE] Error updating attendance ID ${id}: ${error.message}`, error.stack);
+      this.logger.error(
+        `[ATTENDANCE_UPDATE] Error updating attendance ID ${id}: ${error.message}`,
+        error.stack,
+      );
       if (error instanceof BadRequestException) throw error;
       if (error instanceof ForbiddenException) throw error;
       if (error instanceof NotFoundException) throw error;
       if (error instanceof HttpException) throw error;
       throw new HttpException(
         `Failed to update attendance: ${error.message}`,
-        HttpStatus.INTERNAL_SERVER_ERROR
+        HttpStatus.INTERNAL_SERVER_ERROR,
       );
     }
   }
@@ -1024,7 +1389,7 @@ export class EmployeeAttendanceService {
     hours: number,
     workingDate: Date,
     firstHalf?: string | null,
-    secondHalf?: string | null
+    secondHalf?: string | null,
   ): Promise<AttendanceStatus | null> {
     try {
       const dateObj = new Date(workingDate);
@@ -1059,17 +1424,22 @@ export class EmployeeAttendanceService {
         const h1 = (firstHalf || '').toLowerCase();
         const h2 = (secondHalf || '').toLowerCase();
 
-        const isWork = (val: string) => val.includes(WorkLocation.OFFICE.toLowerCase()) ||
+        const isWork = (val: string) =>
+          val.includes(WorkLocation.OFFICE.toLowerCase()) ||
           val.includes(WorkLocation.WFH.toLowerCase()) ||
           val.includes(WorkLocation.WORK_FROM_HOME.toLowerCase()) ||
           val.includes(WorkLocation.CLIENT_VISIT.toLowerCase()) ||
           val.includes(WorkLocation.PRESENT.toLowerCase());
-        const isLeave = (val: string) => val.includes(AttendanceStatus.LEAVE.toLowerCase());
-        const isAbsent = (val: string) => val.includes(AttendanceStatus.ABSENT.toLowerCase());
+        const isLeave = (val: string) =>
+          val.includes(AttendanceStatus.LEAVE.toLowerCase());
+        const isAbsent = (val: string) =>
+          val.includes(AttendanceStatus.ABSENT.toLowerCase());
 
         if (isWork(h1) && isWork(h2)) return AttendanceStatus.FULL_DAY;
-        if ((isWork(h1) && isLeave(h2)) || (isLeave(h1) && isWork(h2))) return AttendanceStatus.HALF_DAY;
-        if ((isWork(h1) && isAbsent(h2)) || (isAbsent(h1) && isWork(h2))) return AttendanceStatus.HALF_DAY;
+        if ((isWork(h1) && isLeave(h2)) || (isLeave(h1) && isWork(h2)))
+          return AttendanceStatus.HALF_DAY;
+        if ((isWork(h1) && isAbsent(h2)) || (isAbsent(h1) && isWork(h2)))
+          return AttendanceStatus.HALF_DAY;
         if (isLeave(h1) && isLeave(h2)) return AttendanceStatus.LEAVE; // Custom string or enum value if exists
       }
 
@@ -1077,13 +1447,18 @@ export class EmployeeAttendanceService {
         const holiday = await this.masterHolidayService.findByDate(dateStr);
         if (holiday) return AttendanceStatus.HOLIDAY;
 
-        if (this.masterHolidayService.isWeekend(dateObj)) return AttendanceStatus.WEEKEND;
+        if (this.masterHolidayService.isWeekend(dateObj))
+          return AttendanceStatus.WEEKEND;
 
         const today = new Date();
         today.setHours(0, 0, 0, 0);
         dateObj.setHours(0, 0, 0, 0);
 
-        return dateObj > today ? null : (firstHalf === AttendanceStatus.NOT_UPDATED ? AttendanceStatus.NOT_UPDATED : AttendanceStatus.ABSENT);
+        return dateObj > today
+          ? null
+          : firstHalf === AttendanceStatus.NOT_UPDATED
+            ? AttendanceStatus.NOT_UPDATED
+            : AttendanceStatus.ABSENT;
       } else if (hours > 0) {
         // Hours > 0 and <= 6 is HALF_DAY
         return AttendanceStatus.HALF_DAY;
@@ -1095,11 +1470,24 @@ export class EmployeeAttendanceService {
     }
   }
 
-  async findByMonth(month: string, year: string, employeeId: string): Promise<EmployeeAttendance[]> {
-    this.logger.log(`Fetching attendance for employee: ${employeeId}, Month: ${month}/${year}`);
+  async findByMonth(
+    month: string,
+    year: string,
+    employeeId: string,
+  ): Promise<EmployeeAttendance[]> {
+    this.logger.log(
+      `Fetching attendance for employee: ${employeeId}, Month: ${month}/${year}`,
+    );
     try {
       const start = new Date(`${year}-${month.padStart(2, '0')}-01T00:00:00`);
-      const end = new Date(start.getFullYear(), start.getMonth() + 1, 0, 23, 59, 59);
+      const end = new Date(
+        start.getFullYear(),
+        start.getMonth() + 1,
+        0,
+        23,
+        59,
+        59,
+      );
 
       const employee = await this.employeeDetailsRepository.findOne({
         where: { employeeId },
@@ -1111,24 +1499,34 @@ export class EmployeeAttendanceService {
       }
 
       const records = await this.employeeAttendanceRepository.find({
-        where: { employeeId: In(employeeIds), workingDate: Between(start, end) },
+        where: {
+          employeeId: In(employeeIds),
+          workingDate: Between(start, end),
+        },
         order: { workingDate: 'ASC' },
       });
-      return Promise.all(records.map(record => this.applyStatusBusinessRules(record)));
+      return Promise.all(
+        records.map((record) => this.applyStatusBusinessRules(record)),
+      );
     } catch (error) {
-      this.logger.error(`Error fetching attendance for ${employeeId} in ${month}/${year}: ${error.message}`);
+      this.logger.error(
+        `Error fetching attendance for ${employeeId} in ${month}/${year}: ${error.message}`,
+      );
       if (error instanceof HttpException) throw error;
       throw new HttpException(
         `Failed to fetch monthly attendance: ${error.message}`,
-        HttpStatus.INTERNAL_SERVER_ERROR
+        HttpStatus.INTERNAL_SERVER_ERROR,
       );
     }
   }
 
-
-
-  async findByDate(workingDate: string, employeeId: string): Promise<EmployeeAttendance[]> {
-    this.logger.log(`Fetching attendance for employee: ${employeeId}, Date: ${workingDate}`);
+  async findByDate(
+    workingDate: string,
+    employeeId: string,
+  ): Promise<EmployeeAttendance[]> {
+    this.logger.log(
+      `Fetching attendance for employee: ${employeeId}, Date: ${workingDate}`,
+    );
     try {
       const employee = await this.employeeDetailsRepository.findOne({
         where: { employeeId },
@@ -1142,22 +1540,35 @@ export class EmployeeAttendanceService {
       const records = await this.employeeAttendanceRepository.find({
         where: {
           employeeId: In(employeeIds),
-          workingDate: Between(new Date(`${workingDate}T00:00:00`), new Date(`${workingDate}T23:59:59`))
+          workingDate: Between(
+            new Date(`${workingDate}T00:00:00`),
+            new Date(`${workingDate}T23:59:59`),
+          ),
         },
       });
-      return Promise.all(records.map(record => this.applyStatusBusinessRules(record)));
+      return Promise.all(
+        records.map((record) => this.applyStatusBusinessRules(record)),
+      );
     } catch (error) {
-      this.logger.error(`Error fetching attendance for ${employeeId} on ${workingDate}: ${error.message}`);
+      this.logger.error(
+        `Error fetching attendance for ${employeeId} on ${workingDate}: ${error.message}`,
+      );
       if (error instanceof HttpException) throw error;
       throw new HttpException(
         `Failed to fetch attendance by date: ${error.message}`,
-        HttpStatus.INTERNAL_SERVER_ERROR
+        HttpStatus.INTERNAL_SERVER_ERROR,
       );
     }
   }
 
-  async findByDateRange(employeeId: string, startDate: string, endDate: string): Promise<EmployeeAttendance[]> {
-    this.logger.log(`Fetching attendance for employee: ${employeeId} from ${startDate} to ${endDate}`);
+  async findByDateRange(
+    employeeId: string,
+    startDate: string,
+    endDate: string,
+  ): Promise<EmployeeAttendance[]> {
+    this.logger.log(
+      `Fetching attendance for employee: ${employeeId} from ${startDate} to ${endDate}`,
+    );
     try {
       const start = new Date(`${startDate}T00:00:00`);
       const end = new Date(`${endDate}T23:59:59`);
@@ -1174,23 +1585,33 @@ export class EmployeeAttendanceService {
       const records = await this.employeeAttendanceRepository.find({
         where: {
           employeeId: In(employeeIds),
-          workingDate: Between(start, end)
+          workingDate: Between(start, end),
         },
         order: { workingDate: 'ASC' },
       });
-      return Promise.all(records.map(record => this.applyStatusBusinessRules(record)));
+      return Promise.all(
+        records.map((record) => this.applyStatusBusinessRules(record)),
+      );
     } catch (error) {
-      this.logger.error(`Error fetching attendance range for ${employeeId}: ${error.message}`);
+      this.logger.error(
+        `Error fetching attendance range for ${employeeId}: ${error.message}`,
+      );
       if (error instanceof HttpException) throw error;
       throw new HttpException(
         `Failed to fetch attendance range: ${error.message}`,
-        HttpStatus.INTERNAL_SERVER_ERROR
+        HttpStatus.INTERNAL_SERVER_ERROR,
       );
     }
   }
 
-  async findWorkedDays(employeeId: string, startDate: string, endDate: string): Promise<any[]> {
-    this.logger.log(`Fetching worked days for employee: ${employeeId} from ${startDate} to ${endDate}`);
+  async findWorkedDays(
+    employeeId: string,
+    startDate: string,
+    endDate: string,
+  ): Promise<any[]> {
+    this.logger.log(
+      `Fetching worked days for employee: ${employeeId} from ${startDate} to ${endDate}`,
+    );
     try {
       const start = new Date(`${startDate}T00:00:00`);
       const end = new Date(`${endDate}T23:59:59`);
@@ -1206,7 +1627,11 @@ export class EmployeeAttendanceService {
 
       const results = await this.employeeAttendanceRepository
         .createQueryBuilder('attendance')
-        .innerJoin('employee_details', 'details', 'details.employee_id = attendance.employee_id')
+        .innerJoin(
+          'employee_details',
+          'details',
+          'details.employee_id = attendance.employee_id',
+        )
         .select([
           'details.id AS id',
           'details.full_name AS fullName',
@@ -1215,20 +1640,25 @@ export class EmployeeAttendanceService {
           'details.designation AS designation',
           'attendance.workingDate AS workingDate',
           'attendance.totalHours AS totalHours',
-          'attendance.status AS status'
+          'attendance.status AS status',
         ])
         .where('attendance.employeeId IN (:...employeeIds)', { employeeIds })
-        .andWhere('attendance.workingDate BETWEEN :start AND :end', { start, end })
+        .andWhere('attendance.workingDate BETWEEN :start AND :end', {
+          start,
+          end,
+        })
         .orderBy('attendance.workingDate', 'ASC')
         .getRawMany();
 
       return results;
     } catch (error) {
-      this.logger.error(`Error fetching worked days for ${employeeId}: ${error.message}`);
+      this.logger.error(
+        `Error fetching worked days for ${employeeId}: ${error.message}`,
+      );
       if (error instanceof HttpException) throw error;
       throw new HttpException(
         `Failed to fetch worked days: ${error.message}`,
-        HttpStatus.INTERNAL_SERVER_ERROR
+        HttpStatus.INTERNAL_SERVER_ERROR,
       );
     }
   }
@@ -1236,30 +1666,43 @@ export class EmployeeAttendanceService {
   async remove(id: number): Promise<void> {
     this.logger.log(`Removing attendance record with ID: ${id}`);
     try {
-      const attendance = await this.employeeAttendanceRepository.findOne({ where: { id } });
-      if (attendance && !this.isEditableMonth(new Date(attendance.workingDate))) {
-        throw new BadRequestException('Cannot delete locked attendance records.');
+      const attendance = await this.employeeAttendanceRepository.findOne({
+        where: { id },
+      });
+      if (
+        attendance &&
+        !this.isEditableMonth(new Date(attendance.workingDate))
+      ) {
+        throw new BadRequestException(
+          'Cannot delete locked attendance records.',
+        );
       }
       const result = await this.employeeAttendanceRepository.delete(id);
-      if (result.affected === 0) throw new NotFoundException(`Record with ID ${id} not found`);
+      if (result.affected === 0)
+        throw new NotFoundException(`Record with ID ${id} not found`);
 
       // [RECALC]: Trigger MonthStatus recalculation from DB truth
       if (attendance) {
-        this.triggerMonthStatusRecalc(attendance.employeeId, attendance.workingDate).catch(() => { });
+        this.triggerMonthStatusRecalc(
+          attendance.employeeId,
+          attendance.workingDate,
+        ).catch(() => {});
       }
     } catch (error) {
-      this.logger.error(`Error removing attendance record ${id}: ${error.message}`);
+      this.logger.error(
+        `Error removing attendance record ${id}: ${error.message}`,
+      );
       if (error instanceof HttpException) throw error;
       throw new HttpException(
         `Failed to remove attendance record: ${error.message}`,
-        HttpStatus.INTERNAL_SERVER_ERROR
+        HttpStatus.INTERNAL_SERVER_ERROR,
       );
     }
   }
 
-
-
-  private async applyStatusBusinessRules(attendance: EmployeeAttendance): Promise<EmployeeAttendance> {
+  private async applyStatusBusinessRules(
+    attendance: EmployeeAttendance,
+  ): Promise<EmployeeAttendance> {
     try {
       const today = dayjs().format('YYYY-MM-DD');
       const workingDateObj = new Date(attendance.workingDate);
@@ -1270,9 +1713,13 @@ export class EmployeeAttendanceService {
         // Removed the override that was intended to "unlock" weekends/holidays
         // since editability is handled separately in checkEntryBlock.
 
-        if (!attendance.status || attendance.status === AttendanceStatus.NOT_UPDATED) {
+        if (
+          !attendance.status ||
+          attendance.status === AttendanceStatus.NOT_UPDATED
+        ) {
           // Priority 1: Check Holiday
-          const holiday = await this.masterHolidayService.findByDate(workingDate);
+          const holiday =
+            await this.masterHolidayService.findByDate(workingDate);
           if (holiday) {
             attendance.status = AttendanceStatus.HOLIDAY;
             return attendance;
@@ -1282,7 +1729,8 @@ export class EmployeeAttendanceService {
           // But respect explicit status if it exists (e.g. Absent, Leave)
           if (this.masterHolidayService.isWeekend(workingDateObj)) {
             const currentStatus = attendance.status as AttendanceStatus;
-            const hasExplicitStatus = currentStatus !== null &&
+            const hasExplicitStatus =
+              currentStatus !== null &&
               (currentStatus === AttendanceStatus.ABSENT ||
                 currentStatus === AttendanceStatus.LEAVE ||
                 currentStatus === AttendanceStatus.HALF_DAY ||
@@ -1294,14 +1742,18 @@ export class EmployeeAttendanceService {
             }
           }
 
-          // Priority 3: Check for approved Client Visit or Work From Home request 
+          // Priority 3: Check for approved Client Visit or Work From Home request
           // ONLY if the record is explicitly linked via sourceRequestId
           if (attendance.sourceRequestId) {
             const approvedRequest = await this.leaveRequestRepository.findOne({
               where: {
                 id: attendance.sourceRequestId,
                 employeeId: attendance.employeeId,
-                requestType: In([LeaveRequestType.CLIENT_VISIT, LeaveRequestType.WORK_FROM_HOME, WorkLocation.WFH]),
+                requestType: In([
+                  LeaveRequestType.CLIENT_VISIT,
+                  LeaveRequestType.WORK_FROM_HOME,
+                  WorkLocation.WFH,
+                ]),
                 status: In([
                   LeaveRequestStatus.APPROVED,
                   LeaveRequestStatus.REQUESTING_FOR_CANCELLATION,
@@ -1318,20 +1770,30 @@ export class EmployeeAttendanceService {
             if (approvedRequest) {
               // Priority 3.1: If approved Client Visit or WFH exists AND it is linked, mark as Full Day
               attendance.status = AttendanceStatus.FULL_DAY;
-              
+
               // RECOVERY: If the splits are missing or say Office, restore the correct WFH/CV labels for the UI
               const currentH1 = (attendance.firstHalf || '').toLowerCase();
               const currentH2 = (attendance.secondHalf || '').toLowerCase();
-              const isOffice = currentH1.includes('office') || currentH2.includes('office');
-              const isMissing = !attendance.firstHalf || !attendance.secondHalf || currentH1.includes('not updated') || currentH2.includes('not updated');
+              const isOffice =
+                currentH1.includes('office') || currentH2.includes('office');
+              const isMissing =
+                !attendance.firstHalf ||
+                !attendance.secondHalf ||
+                currentH1.includes('not updated') ||
+                currentH2.includes('not updated');
 
               if (isOffice || isMissing) {
-                const activity = approvedRequest.requestType === LeaveRequestType.CLIENT_VISIT ? WorkLocation.CLIENT_VISIT : WorkLocation.WORK_FROM_HOME;
+                const activity =
+                  approvedRequest.requestType === LeaveRequestType.CLIENT_VISIT
+                    ? WorkLocation.CLIENT_VISIT
+                    : WorkLocation.WORK_FROM_HOME;
                 attendance.firstHalf = activity;
                 attendance.secondHalf = activity;
-                this.logger.debug(`[RECOVERY] Restored ${activity} splits for UI from SourceRequest ${approvedRequest.id}`);
+                this.logger.debug(
+                  `[RECOVERY] Restored ${activity} splits for UI from SourceRequest ${approvedRequest.id}`,
+                );
               }
-              
+
               return attendance;
             }
           }
@@ -1346,7 +1808,9 @@ export class EmployeeAttendanceService {
       }
       return attendance;
     } catch (error) {
-      this.logger.error(`Error applying status business rules for ${attendance.employeeId}: ${error.message}`);
+      this.logger.error(
+        `Error applying status business rules for ${attendance.employeeId}: ${error.message}`,
+      );
       throw error;
     }
   }
@@ -1380,7 +1844,9 @@ export class EmployeeAttendanceService {
       // 3. Any other past month -> LOCKED
       return false;
     } catch (error) {
-      this.logger.error(`Error checking if month is editable: ${error.message}`);
+      this.logger.error(
+        `Error checking if month is editable: ${error.message}`,
+      );
       return false;
     }
   }
@@ -1388,7 +1854,10 @@ export class EmployeeAttendanceService {
   /**
    * REFACTORED: Triggers the DB-truth recalculation for an employee's month.
    */
-  public async triggerMonthStatusRecalc(employeeId: string, date: Date | string): Promise<void> {
+  public async triggerMonthStatusRecalc(
+    employeeId: string,
+    date: Date | string,
+  ): Promise<void> {
     try {
       // Use dayjs for robust month/year extraction regardless of input format
       const d = dayjs(date);
@@ -1398,9 +1867,13 @@ export class EmployeeAttendanceService {
       // persistMonthStatus = true ensures it is saved to EmployeeDetails
       // This is the core "DB-Truth" trigger.
       await this.getDashboardStats(employeeId, month, year, true);
-      this.logger.log(`[MONTH_STATUS_TRIGGER] DB-Truth Recalculated for ${employeeId} (${month}/${year})`);
+      this.logger.log(
+        `[MONTH_STATUS_TRIGGER] DB-Truth Recalculated for ${employeeId} (${month}/${year})`,
+      );
     } catch (err) {
-      this.logger.error(`[MONTH_STATUS_TRIGGER] ❌ FAILED for ${employeeId}: ${err.message}`);
+      this.logger.error(
+        `[MONTH_STATUS_TRIGGER] ❌ FAILED for ${employeeId}: ${err.message}`,
+      );
     }
   }
 
@@ -1408,8 +1881,14 @@ export class EmployeeAttendanceService {
     return this.masterHolidayService.findAll();
   }
 
-  async getTrends(employeeId: string, endDateStr: string, startDateStr?: string): Promise<any[]> {
-    this.logger.log(`Fetching trends for employee: ${employeeId}, EndDate: ${endDateStr}`);
+  async getTrends(
+    employeeId: string,
+    endDateStr: string,
+    startDateStr?: string,
+  ): Promise<any[]> {
+    this.logger.log(
+      `Fetching trends for employee: ${employeeId}, EndDate: ${endDateStr}`,
+    );
     try {
       const endInput = new Date(endDateStr);
       let start: Date;
@@ -1422,7 +1901,14 @@ export class EmployeeAttendanceService {
       }
 
       start.setHours(0, 0, 0, 0);
-      const end = new Date(endInput.getFullYear(), endInput.getMonth(), endInput.getDate(), 23, 59, 59);
+      const end = new Date(
+        endInput.getFullYear(),
+        endInput.getMonth(),
+        endInput.getDate(),
+        23,
+        59,
+        59,
+      );
 
       const allHolidays = await this.masterHolidayService.findAll();
 
@@ -1441,14 +1927,30 @@ export class EmployeeAttendanceService {
           employeeId: In(employeeIds),
           workingDate: Between(start, end),
         },
-        order: { workingDate: 'ASC' }
+        order: { workingDate: 'ASC' },
       });
 
-      const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+      const monthNames = [
+        'Jan',
+        'Feb',
+        'Mar',
+        'Apr',
+        'May',
+        'Jun',
+        'Jul',
+        'Aug',
+        'Sep',
+        'Oct',
+        'Nov',
+        'Dec',
+      ];
       const monthlyStatsMap = new Map<string, any>();
 
-      attendances.forEach(record => {
-        const date = typeof record.workingDate === 'string' ? new Date(record.workingDate) : record.workingDate;
+      attendances.forEach((record) => {
+        const date =
+          typeof record.workingDate === 'string'
+            ? new Date(record.workingDate)
+            : record.workingDate;
         const key = `${monthNames[date.getMonth()]} ${date.getFullYear()}`;
 
         if (!monthlyStatsMap.has(key)) {
@@ -1457,7 +1959,7 @@ export class EmployeeAttendanceService {
             year: date.getFullYear(),
             totalLeaves: 0,
             workFromHome: 0,
-            clientVisits: 0
+            clientVisits: 0,
           });
         }
 
@@ -1468,26 +1970,50 @@ export class EmployeeAttendanceService {
 
         const day = date.getDay();
         const isWeekend = day === 0 || day === 6;
-        const isHoliday = allHolidays.some(h => dayjs(h.date || (h as any).holidayDate).format('YYYY-MM-DD') === dateStrLocal);
+        const isHoliday = allHolidays.some(
+          (h) =>
+            dayjs(h.date || h.holidayDate).format('YYYY-MM-DD') ===
+            dateStrLocal,
+        );
 
         // Check for Full Leaves (1.0) and Half Days (0.5), skip Weekends and Holidays
         if (!isWeekend && !isHoliday) {
-          if (status === AttendanceStatus.LEAVE.toLowerCase() || status === AttendanceStatus.ABSENT.toLowerCase()) {
+          if (
+            status === AttendanceStatus.LEAVE.toLowerCase() ||
+            status === AttendanceStatus.ABSENT.toLowerCase()
+          ) {
             stats.totalLeaves += 1;
-          }
-          else if (status === AttendanceStatus.HALF_DAY.toLowerCase()) {
+          } else if (status === AttendanceStatus.HALF_DAY.toLowerCase()) {
             stats.totalLeaves += 0.5;
           }
         }
 
         // Check for WFH in either split
-        if (this.isActivity(record.firstHalf, WorkLocation.WFH.toLowerCase()) || this.isActivity(record.firstHalf, WorkLocation.WORK_FROM_HOME.toLowerCase()) ||
-          this.isActivity(record.secondHalf, WorkLocation.WFH.toLowerCase()) || this.isActivity(record.secondHalf, WorkLocation.WORK_FROM_HOME.toLowerCase())) {
+        if (
+          this.isActivity(record.firstHalf, WorkLocation.WFH.toLowerCase()) ||
+          this.isActivity(
+            record.firstHalf,
+            WorkLocation.WORK_FROM_HOME.toLowerCase(),
+          ) ||
+          this.isActivity(record.secondHalf, WorkLocation.WFH.toLowerCase()) ||
+          this.isActivity(
+            record.secondHalf,
+            WorkLocation.WORK_FROM_HOME.toLowerCase(),
+          )
+        ) {
           stats.workFromHome++;
         }
         // Check for Client Visit in either split
-        else if (this.isActivity(record.firstHalf, WorkLocation.CLIENT_VISIT.toLowerCase()) ||
-          this.isActivity(record.secondHalf, WorkLocation.CLIENT_VISIT.toLowerCase())) {
+        else if (
+          this.isActivity(
+            record.firstHalf,
+            WorkLocation.CLIENT_VISIT.toLowerCase(),
+          ) ||
+          this.isActivity(
+            record.secondHalf,
+            WorkLocation.CLIENT_VISIT.toLowerCase(),
+          )
+        ) {
           stats.clientVisits++;
         }
       });
@@ -1495,17 +2021,25 @@ export class EmployeeAttendanceService {
       // Convert map to sorted array
       return Array.from(monthlyStatsMap.values());
     } catch (error) {
-      this.logger.error(`Error fetching trends for ${employeeId}: ${error.message}`);
+      this.logger.error(
+        `Error fetching trends for ${employeeId}: ${error.message}`,
+      );
       if (error instanceof HttpException) throw error;
       throw new HttpException(
         `Failed to fetch trends: ${error.message}`,
-        HttpStatus.INTERNAL_SERVER_ERROR
+        HttpStatus.INTERNAL_SERVER_ERROR,
       );
     }
   }
 
-  async getTrendsDetailed(employeeId: string, endDateStr: string, startDateStr?: string): Promise<any[]> {
-    this.logger.log(`Fetching detailed trends for employee: ${employeeId}, EndDate: ${endDateStr}`);
+  async getTrendsDetailed(
+    employeeId: string,
+    endDateStr: string,
+    startDateStr?: string,
+  ): Promise<any[]> {
+    this.logger.log(
+      `Fetching detailed trends for employee: ${employeeId}, EndDate: ${endDateStr}`,
+    );
     try {
       const endInput = new Date(endDateStr);
       let start: Date;
@@ -1518,7 +2052,14 @@ export class EmployeeAttendanceService {
       }
 
       start.setHours(0, 0, 0, 0);
-      const end = new Date(endInput.getFullYear(), endInput.getMonth(), endInput.getDate(), 23, 59, 59);
+      const end = new Date(
+        endInput.getFullYear(),
+        endInput.getMonth(),
+        endInput.getDate(),
+        23,
+        59,
+        59,
+      );
 
       const allHolidays = await this.masterHolidayService.findAll();
 
@@ -1536,19 +2077,35 @@ export class EmployeeAttendanceService {
           employeeId: In(employeeIds),
           workingDate: Between(start, end),
         },
-        order: { workingDate: 'ASC' }
+        order: { workingDate: 'ASC' },
       });
 
-      const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+      const monthNames = [
+        'Jan',
+        'Feb',
+        'Mar',
+        'Apr',
+        'May',
+        'Jun',
+        'Jul',
+        'Aug',
+        'Sep',
+        'Oct',
+        'Nov',
+        'Dec',
+      ];
       const monthlyStatsMap = new Map<string, any>();
 
       const processedAttendances = await Promise.all(
-        attendances.map(record => this.applyStatusBusinessRules(record))
+        attendances.map((record) => this.applyStatusBusinessRules(record)),
       );
 
-      processedAttendances.forEach(record => {
+      processedAttendances.forEach((record) => {
         // Use a robust way to get local YYYY-MM from the workingDate
-        const date = record.workingDate instanceof Date ? record.workingDate : new Date(record.workingDate);
+        const date =
+          record.workingDate instanceof Date
+            ? record.workingDate
+            : new Date(record.workingDate);
         const m = date.getMonth();
         const y = date.getFullYear();
         const key = `${monthNames[m]} ${y}`;
@@ -1560,7 +2117,7 @@ export class EmployeeAttendanceService {
             totalLeaves: 0,
             workFromHome: 0,
             clientVisits: 0,
-            office: 0
+            office: 0,
           });
         }
 
@@ -1571,8 +2128,8 @@ export class EmployeeAttendanceService {
 
         const day = date.getDay();
         const isWeekend = day === 0 || day === 6;
-        const isHoliday = allHolidays.some(h => {
-          const hDateStr = dayjs(h.date || (h as any).holidayDate).format('YYYY-MM-DD');
+        const isHoliday = allHolidays.some((h) => {
+          const hDateStr = dayjs(h.date || h.holidayDate).format('YYYY-MM-DD');
           return hDateStr === dateStrLocal;
         });
 
@@ -1580,9 +2137,17 @@ export class EmployeeAttendanceService {
           const processHalf = (half: string | null) => {
             if (!half) return;
             const h = half.toLowerCase();
-            if ((h.includes(AttendanceStatus.LEAVE.toLowerCase()) || h.includes(AttendanceStatus.ABSENT.toLowerCase())) && !isWeekend && !isHoliday) {
+            if (
+              (h.includes(AttendanceStatus.LEAVE.toLowerCase()) ||
+                h.includes(AttendanceStatus.ABSENT.toLowerCase())) &&
+              !isWeekend &&
+              !isHoliday
+            ) {
               stats.totalLeaves += 0.5;
-            } else if (h.includes(WorkLocation.WFH.toLowerCase()) || h.includes(WorkLocation.WORK_FROM_HOME.toLowerCase())) {
+            } else if (
+              h.includes(WorkLocation.WFH.toLowerCase()) ||
+              h.includes(WorkLocation.WORK_FROM_HOME.toLowerCase())
+            ) {
               stats.workFromHome += 0.5;
             } else if (h.includes(WorkLocation.CLIENT_VISIT.toLowerCase())) {
               stats.clientVisits += 0.5;
@@ -1593,12 +2158,16 @@ export class EmployeeAttendanceService {
 
           processHalf(record.firstHalf);
           processHalf(record.secondHalf);
-        }
-        else {
+        } else {
           const status = (record.status || '').toLowerCase();
           const hours = Number(record.totalHours || 0);
 
-          if ((status === AttendanceStatus.LEAVE.toLowerCase() || status === AttendanceStatus.ABSENT.toLowerCase()) && !isWeekend && !isHoliday) {
+          if (
+            (status === AttendanceStatus.LEAVE.toLowerCase() ||
+              status === AttendanceStatus.ABSENT.toLowerCase()) &&
+            !isWeekend &&
+            !isHoliday
+          ) {
             stats.totalLeaves += 1;
           } else if (status === AttendanceStatus.HALF_DAY.toLowerCase()) {
             // If it's a half day but splits are missing, assume 0.5 Leave and 0.5 Office
@@ -1606,41 +2175,63 @@ export class EmployeeAttendanceService {
               stats.totalLeaves += 0.5;
             }
             stats.office += 0.5;
-          } else if (hours === 9 || status.includes(WorkLocation.PRESENT.toLowerCase()) || status.includes(AttendanceStatus.FULL_DAY.toLowerCase().split(' ')[0])) {
+          } else if (
+            hours === 9 ||
+            status.includes(WorkLocation.PRESENT.toLowerCase()) ||
+            status.includes(
+              AttendanceStatus.FULL_DAY.toLowerCase().split(' ')[0],
+            )
+          ) {
             // Default to Office if it's a full day without specific splits
             stats.office += 1;
           } else if (hours > 0) {
             // Any other partial work without splits
-            stats.office += (hours / 9);
+            stats.office += hours / 9;
           }
         }
       });
 
       // Ensure values are rounded to 2 decimal places to avoid floating point issues
-      const results = Array.from(monthlyStatsMap.values()).map(item => ({
+      const results = Array.from(monthlyStatsMap.values()).map((item) => ({
         ...item,
         totalLeaves: Math.round(item.totalLeaves * 10) / 10,
         workFromHome: Math.round(item.workFromHome * 10) / 10,
         clientVisits: Math.round(item.clientVisits * 10) / 10,
-        office: Math.round(item.office * 10) / 10
+        office: Math.round(item.office * 10) / 10,
       }));
 
       return results;
     } catch (error) {
-      this.logger.error(`Error fetching detailed trends for ${employeeId}: ${error.message}`);
+      this.logger.error(
+        `Error fetching detailed trends for ${employeeId}: ${error.message}`,
+      );
       if (error instanceof HttpException) throw error;
       throw new HttpException(
         `Failed to fetch detailed trends: ${error.message}`,
-        HttpStatus.INTERNAL_SERVER_ERROR
+        HttpStatus.INTERNAL_SERVER_ERROR,
       );
     }
   }
 
-  async findAllMonthlyDetails(month: string, year: string, managerName?: string, managerId?: string): Promise<EmployeeAttendance[]> {
-    this.logger.log(`Fetching all monthly details for ${month}/${year}. Filter Manager: ${managerName || 'None'}`);
+  async findAllMonthlyDetails(
+    month: string,
+    year: string,
+    managerName?: string,
+    managerId?: string,
+  ): Promise<EmployeeAttendance[]> {
+    this.logger.log(
+      `Fetching all monthly details for ${month}/${year}. Filter Manager: ${managerName || 'None'}`,
+    );
     try {
       const start = new Date(`${year}-${month.padStart(2, '0')}-01T00:00:00`);
-      const end = new Date(start.getFullYear(), start.getMonth() + 1, 0, 23, 59, 59);
+      const end = new Date(
+        start.getFullYear(),
+        start.getMonth() + 1,
+        0,
+        23,
+        59,
+        59,
+      );
 
       const query = this.employeeAttendanceRepository
         .createQueryBuilder('attendance')
@@ -1649,10 +2240,15 @@ export class EmployeeAttendanceService {
           'ed',
           'ed.employeeId = attendance.employeeId',
         )
-        .where('attendance.workingDate BETWEEN :start AND :end', { start, end });
+        .where('attendance.workingDate BETWEEN :start AND :end', {
+          start,
+          end,
+        });
 
       if (managerName || managerId) {
-        query.andWhere('ed.userStatus = :userStatus', { userStatus: UserStatus.ACTIVE });
+        query.andWhere('ed.userStatus = :userStatus', {
+          userStatus: UserStatus.ACTIVE,
+        });
         query.innerJoin(
           ManagerMapping,
           'mm',
@@ -1665,7 +2261,9 @@ export class EmployeeAttendanceService {
             managerIdQuery: `%${managerId}%`,
           },
         );
-        query.andWhere('mm.status = :mappingStatus', { mappingStatus: ManagerMappingStatus.ACTIVE });
+        query.andWhere('mm.status = :mappingStatus', {
+          mappingStatus: ManagerMappingStatus.ACTIVE,
+        });
       }
 
       query.orderBy('attendance.workingDate', 'ASC');
@@ -1675,24 +2273,34 @@ export class EmployeeAttendanceService {
         records.map((record) => this.applyStatusBusinessRules(record)),
       );
     } catch (error) {
-      this.logger.error(`Error fetching all monthly details for ${month}/${year}: ${error.message}`);
+      this.logger.error(
+        `Error fetching all monthly details for ${month}/${year}: ${error.message}`,
+      );
       if (error instanceof HttpException) throw error;
       throw new HttpException(
         `Failed to fetch all monthly details: ${error.message}`,
-        HttpStatus.INTERNAL_SERVER_ERROR
+        HttpStatus.INTERNAL_SERVER_ERROR,
       );
     }
   }
-  async getDashboardStats(employeeId: string, queryMonth?: string, queryYear?: string, persistMonthStatus: boolean = false) {
+  async getDashboardStats(
+    employeeId: string,
+    queryMonth?: string,
+    queryYear?: string,
+    persistMonthStatus: boolean = false,
+  ) {
     try {
       const today = new Date();
-      const currentMonth = queryMonth ? parseInt(queryMonth) : today.getMonth() + 1;
+      const currentMonth = queryMonth
+        ? parseInt(queryMonth)
+        : today.getMonth() + 1;
       const currentYear = queryYear ? parseInt(queryYear) : today.getFullYear();
 
       // 1. Total Week Hours
       const dayOfWeek = today.getDay(); // 0 (Sun) - 6 (Sat)
       // Adjust to make Monday 0, Sunday 6
-      const diffToMonday = today.getDate() - dayOfWeek + (dayOfWeek === 0 ? -6 : 1);
+      const diffToMonday =
+        today.getDate() - dayOfWeek + (dayOfWeek === 0 ? -6 : 1);
       const weekStart = new Date(today);
       weekStart.setDate(diffToMonday);
       weekStart.setHours(0, 0, 0, 0);
@@ -1717,7 +2325,10 @@ export class EmployeeAttendanceService {
         },
       });
 
-      const totalWeekHours = weekRecords.reduce((acc, curr) => acc + Number(curr.totalHours || 0), 0);
+      const totalWeekHours = weekRecords.reduce(
+        (acc, curr) => acc + Number(curr.totalHours || 0),
+        0,
+      );
 
       // 2. Total Monthly Hours
       const monthStart = new Date(currentYear, currentMonth - 1, 1);
@@ -1730,7 +2341,10 @@ export class EmployeeAttendanceService {
         },
       });
 
-      const totalMonthlyHours = monthRecords.reduce((acc, curr) => acc + Number(curr.totalHours || 0), 0);
+      const totalMonthlyHours = monthRecords.reduce(
+        (acc, curr) => acc + Number(curr.totalHours || 0),
+        0,
+      );
 
       // 3. Pending Updates
       // Count until today inclusive (if current month) or end of month (if past month)
@@ -1774,28 +2388,27 @@ export class EmployeeAttendanceService {
         WorkLocation.PRESENT,
         AttendanceStatus.LEAVE,
         AttendanceStatus.ABSENT,
-        'On Leave'
+        'On Leave',
       ];
 
       const existingAttendanceDates = new Set(
         monthRecords
-          .filter(r => r.status && filledStatuses.includes(r.status))
-          .map(r => toLocalYMD(r.workingDate))
+          .filter((r) => r.status && filledStatuses.includes(r.status))
+          .map((r) => toLocalYMD(r.workingDate)),
       );
 
       // Optimization: Set of Holidays
       const yearHolidays = await this.masterHolidayService.findAll();
       const holidayDates = new Set(
-        yearHolidays.map(h => {
-          const d = h.holidayDate || (h as any).date;
+        yearHolidays.map((h) => {
+          const d = h.holidayDate || h.date;
           return toLocalYMD(d);
-        })
+        }),
       );
 
       // Leaves are now checked via attendance table
 
-
-      let loopDate = new Date(monthStart);
+      const loopDate = new Date(monthStart);
       while (loopDate <= pendingLimitDate) {
         if (loopDate > today) break; // Extra safety
 
@@ -1819,15 +2432,26 @@ export class EmployeeAttendanceService {
       let dbMonthStatus: MonthStatus = MonthStatus.PENDING;
 
       if (persistMonthStatus) {
-        const calculatedStatus: MonthStatus = (!isFutureMonth && pendingUpdates === 0) ? MonthStatus.SUBMITTED : MonthStatus.PENDING;
+        const calculatedStatus: MonthStatus =
+          !isFutureMonth && pendingUpdates === 0
+            ? MonthStatus.SUBMITTED
+            : MonthStatus.PENDING;
         dbMonthStatus = calculatedStatus;
         try {
-          await this.employeeDetailsRepository.update({ employeeId }, { monthStatus: calculatedStatus });
+          await this.employeeDetailsRepository.update(
+            { employeeId },
+            { monthStatus: calculatedStatus },
+          );
         } catch (dbError) {
-          this.logger.warn(`Failed to persist monthStatus for employee ${employeeId}: ${dbError.message}`);
+          this.logger.warn(
+            `Failed to persist monthStatus for employee ${employeeId}: ${dbError.message}`,
+          );
         }
       } else {
-        const emp = await this.employeeDetailsRepository.findOne({ select: ['monthStatus'], where: { employeeId } });
+        const emp = await this.employeeDetailsRepository.findOne({
+          select: ['monthStatus'],
+          where: { employeeId },
+        });
         dbMonthStatus = emp?.monthStatus || MonthStatus.PENDING;
       }
 
@@ -1838,21 +2462,37 @@ export class EmployeeAttendanceService {
         monthStatus: dbMonthStatus,
       };
     } catch (error) {
-      this.logger.error(`Error calculating dashboard stats for employee ${employeeId}:`, error);
-      throw new HttpException('Failed to calculate dashboard statistics', HttpStatus.INTERNAL_SERVER_ERROR);
+      this.logger.error(
+        `Error calculating dashboard stats for employee ${employeeId}:`,
+        error,
+      );
+      throw new HttpException(
+        'Failed to calculate dashboard statistics',
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
     }
   }
 
-  async getAllDashboardStats(queryMonth?: string, queryYear?: string, managerName?: string, managerId?: string) {
-    this.logger.log(`Fetching all dashboard stats. Month: ${queryMonth || 'Current'}, Year: ${queryYear || 'Current'}, Manager: ${managerName || 'None'}`);
+  async getAllDashboardStats(
+    queryMonth?: string,
+    queryYear?: string,
+    managerName?: string,
+    managerId?: string,
+  ) {
+    this.logger.log(
+      `Fetching all dashboard stats. Month: ${queryMonth || 'Current'}, Year: ${queryYear || 'Current'}, Manager: ${managerName || 'None'}`,
+    );
     try {
       const today = new Date();
-      const currentMonth = queryMonth ? parseInt(queryMonth) : today.getMonth() + 1;
+      const currentMonth = queryMonth
+        ? parseInt(queryMonth)
+        : today.getMonth() + 1;
       const currentYear = queryYear ? parseInt(queryYear) : today.getFullYear();
 
       // Range calculations
       const dayOfWeek = today.getDay();
-      const diffToMonday = today.getDate() - dayOfWeek + (dayOfWeek === 0 ? -6 : 1);
+      const diffToMonday =
+        today.getDate() - dayOfWeek + (dayOfWeek === 0 ? -6 : 1);
       const weekStart = new Date(today);
       weekStart.setDate(diffToMonday);
       weekStart.setHours(0, 0, 0, 0);
@@ -1864,8 +2504,10 @@ export class EmployeeAttendanceService {
       const monthStart = new Date(currentYear, currentMonth - 1, 1);
       const monthEnd = new Date(currentYear, currentMonth, 0, 23, 59, 59, 999);
 
-      const fetchStart = weekStart < monthStart ? new Date(weekStart) : new Date(monthStart);
-      const fetchEnd = weekEnd > monthEnd ? new Date(weekEnd) : new Date(monthEnd);
+      const fetchStart =
+        weekStart < monthStart ? new Date(weekStart) : new Date(monthStart);
+      const fetchEnd =
+        weekEnd > monthEnd ? new Date(weekEnd) : new Date(monthEnd);
 
       // Pending limit date logic
       const checkEndDate = new Date(today);
@@ -1878,11 +2520,21 @@ export class EmployeeAttendanceService {
       // 1. Fetch all employees (filtered by manager if provided)
       const query = this.employeeDetailsRepository
         .createQueryBuilder('employee')
-        .select(['employee.employeeId', 'employee.fullName', 'employee.monthStatus']);
+        .select([
+          'employee.employeeId',
+          'employee.fullName',
+          'employee.monthStatus',
+        ]);
 
       if (managerName || managerId) {
-        query.andWhere('employee.userStatus = :userStatus', { userStatus: UserStatus.ACTIVE });
-        query.innerJoin(ManagerMapping, 'mm', 'mm.employeeId = employee.employeeId');
+        query.andWhere('employee.userStatus = :userStatus', {
+          userStatus: UserStatus.ACTIVE,
+        });
+        query.innerJoin(
+          ManagerMapping,
+          'mm',
+          'mm.employeeId = employee.employeeId',
+        );
         query.andWhere(
           '(mm.managerName LIKE :managerNameQuery OR mm.managerName LIKE :managerIdQuery)',
           {
@@ -1890,7 +2542,9 @@ export class EmployeeAttendanceService {
             managerIdQuery: `%${managerId}%`,
           },
         );
-        query.andWhere('mm.status = :status', { status: ManagerMappingStatus.ACTIVE });
+        query.andWhere('mm.status = :status', {
+          status: ManagerMappingStatus.ACTIVE,
+        });
       }
 
       const employees = await query.getMany();
@@ -1904,7 +2558,7 @@ export class EmployeeAttendanceService {
 
       // Group records by employeeId
       const attendanceByEmployee = new Map<string, any[]>();
-      allRecords.forEach(r => {
+      allRecords.forEach((r) => {
         let list = attendanceByEmployee.get(r.employeeId);
         if (!list) {
           list = [];
@@ -1925,12 +2579,12 @@ export class EmployeeAttendanceService {
             LeaveRequestStatus.MODIFICATION_REJECTED,
           ]),
           fromDate: LessThanOrEqual(dayjs(monthEnd).format('YYYY-MM-DD')),
-          toDate: MoreThanOrEqual(dayjs(monthStart).format('YYYY-MM-DD'))
-        }
+          toDate: MoreThanOrEqual(dayjs(monthStart).format('YYYY-MM-DD')),
+        },
       });
 
       const leavesByEmployee = new Map<string, any[]>();
-      allApprovedLeaves.forEach(l => {
+      allApprovedLeaves.forEach((l) => {
         let list = leavesByEmployee.get(l.employeeId);
         if (!list) {
           list = [];
@@ -1944,7 +2598,9 @@ export class EmployeeAttendanceService {
       const toLocalYMD = (dateInput: Date | string) => {
         return dayjs(dateInput).format('YYYY-MM-DD');
       };
-      const holidayDates = new Set(yearHolidays.map(h => toLocalYMD(h.date || (h as any).holidayDate)));
+      const holidayDates = new Set(
+        yearHolidays.map((h) => toLocalYMD(h.date || h.holidayDate)),
+      );
 
       const results = {};
       const isFutureMonth = monthStart.getTime() > today.getTime();
@@ -1956,7 +2612,7 @@ export class EmployeeAttendanceService {
 
         // Week Hours
         const totalWeekHours = empRecords
-          .filter(r => {
+          .filter((r) => {
             const d = new Date(r.workingDate);
             return d >= weekStart && d <= weekEnd;
           })
@@ -1964,7 +2620,7 @@ export class EmployeeAttendanceService {
 
         // Monthly Hours
         const totalMonthlyHours = empRecords
-          .filter(r => {
+          .filter((r) => {
             const d = new Date(r.workingDate);
             return d >= monthStart && d <= monthEnd;
           })
@@ -1980,17 +2636,17 @@ export class EmployeeAttendanceService {
           WorkLocation.PRESENT,
           AttendanceStatus.LEAVE,
           AttendanceStatus.ABSENT,
-          'On Leave'
+          'On Leave',
         ];
 
         const existingAttendanceDates = new Set(
           empRecords
-            .filter(r => r.status && filledStatuses.includes(r.status))
-            .map(r => toLocalYMD(r.workingDate))
+            .filter((r) => r.status && filledStatuses.includes(r.status))
+            .map((r) => toLocalYMD(r.workingDate)),
         );
 
         let pendingUpdates = 0;
-        let loopDate = new Date(monthStart);
+        const loopDate = new Date(monthStart);
 
         while (loopDate <= pendingLimitDate) {
           if (loopDate > today) break;
@@ -1999,7 +2655,7 @@ export class EmployeeAttendanceService {
           const isWeekend = this.masterHolidayService.isWeekend(loopDate);
           const isHoliday = holidayDates.has(dateStr);
           const hasAttendance = existingAttendanceDates.has(dateStr);
-          const hasLeave = empLeaves.some(l => {
+          const hasLeave = empLeaves.some((l) => {
             const lStartStr = toLocalYMD(l.fromDate);
             const lEndStr = toLocalYMD(l.toDate);
             return dateStr >= lStartStr && dateStr <= lEndStr;
@@ -2024,17 +2680,24 @@ export class EmployeeAttendanceService {
       if (error instanceof HttpException) throw error;
       throw new HttpException(
         `Failed to fetch all dashboard statistics: ${error.message}`,
-        HttpStatus.INTERNAL_SERVER_ERROR
+        HttpStatus.INTERNAL_SERVER_ERROR,
       );
     }
   }
-  async generateMonthlyReport(month: number, year: number, managerName?: string, managerId?: string): Promise<Buffer> {
-    this.logger.log(`Generating monthly report for ${month}/${year}. Filter Manager: ${managerName || 'None'}`);
+  async generateMonthlyReport(
+    month: number,
+    year: number,
+    managerName?: string,
+    managerId?: string,
+  ): Promise<Buffer> {
+    this.logger.log(
+      `Generating monthly report for ${month}/${year}. Filter Manager: ${managerName || 'None'}`,
+    );
     try {
       // 1. Fetch employees (filtered by manager if provided)
       // Include ACTIVE and INACTIVE only if inactiveDate is in this month (so Excel shows them as Inactive for that month; from next month they are excluded)
-      const query = this.employeeDetailsRepository
-        .createQueryBuilder('employee');
+      const query =
+        this.employeeDetailsRepository.createQueryBuilder('employee');
 
       const reportStartDate = new Date(year, month - 1, 1);
       query.andWhere(
@@ -2074,14 +2737,14 @@ export class EmployeeAttendanceService {
 
       const holidays = await this.masterHolidayService.findAll();
       const holidayMap = new Map<string, string>(); // Date -> Name
-      holidays.forEach(h => {
-        const d = h.holidayDate || (h as any).date;
+      holidays.forEach((h) => {
+        const d = h.holidayDate || h.date;
         const dateObj = new Date(d);
         const y = dateObj.getFullYear();
         const m = String(dateObj.getMonth() + 1).padStart(2, '0');
         const day = String(dateObj.getDate()).padStart(2, '0');
         const key = `${y}-${m}-${day}`;
-        holidayMap.set(key, (h as any).name || AttendanceStatus.HOLIDAY);
+        holidayMap.set(key, h.name || AttendanceStatus.HOLIDAY);
       });
 
       // 3. Fetch all attendance for the month for the selected employees
@@ -2090,7 +2753,7 @@ export class EmployeeAttendanceService {
 
       const employeeIds: string[] = [];
       const idToMainIdMap = new Map<string, string>();
-      employees.forEach(e => {
+      employees.forEach((e) => {
         if (e.employeeId) {
           employeeIds.push(e.employeeId);
           idToMainIdMap.set(e.employeeId, e.employeeId);
@@ -2101,14 +2764,17 @@ export class EmployeeAttendanceService {
         }
       });
 
-      const attendanceQuery = this.employeeAttendanceRepository.createQueryBuilder('attendance')
+      const attendanceQuery = this.employeeAttendanceRepository
+        .createQueryBuilder('attendance')
         .where('attendance.workingDate BETWEEN :start AND :end', {
           start: new Date(startStr + 'T00:00:00'),
-          end: new Date(endStr + 'T23:59:59')
+          end: new Date(endStr + 'T23:59:59'),
         });
 
       if (employeeIds.length > 0) {
-        attendanceQuery.andWhere('attendance.employeeId IN (:...employeeIds)', { employeeIds });
+        attendanceQuery.andWhere('attendance.employeeId IN (:...employeeIds)', {
+          employeeIds,
+        });
       }
 
       const allAttendance = await attendanceQuery.getMany();
@@ -2125,8 +2791,9 @@ export class EmployeeAttendanceService {
       // Map attendance: EmployeeID -> DateString -> Record
       const attendanceMap = new Map<string, Map<string, EmployeeAttendance>>();
 
-      allAttendance.forEach(record => {
-        const mainEmployeeId = idToMainIdMap.get(record.employeeId) || record.employeeId;
+      allAttendance.forEach((record) => {
+        const mainEmployeeId =
+          idToMainIdMap.get(record.employeeId) || record.employeeId;
         if (!attendanceMap.has(mainEmployeeId)) {
           attendanceMap.set(mainEmployeeId, new Map());
         }
@@ -2149,67 +2816,67 @@ export class EmployeeAttendanceService {
       const headerFill: ExcelJS.Fill = {
         type: 'pattern',
         pattern: 'solid',
-        fgColor: { argb: '92D050' } // Light Green for Headers
+        fgColor: { argb: '92D050' }, // Light Green for Headers
       };
 
       const weekendFill: ExcelJS.Fill = {
         type: 'pattern',
         pattern: 'solid',
-        fgColor: { argb: 'ED3E3E' } // Red for Weekends
+        fgColor: { argb: 'ED3E3E' }, // Red for Weekends
       };
 
       const leaveFill: ExcelJS.Fill = {
         type: 'pattern',
         pattern: 'solid',
-        fgColor: { argb: 'ED3E3E' } // Light Red for Leave
+        fgColor: { argb: 'ED3E3E' }, // Light Red for Leave
       };
 
       const fullDayFill: ExcelJS.Fill = {
         type: 'pattern',
         pattern: 'solid',
-        fgColor: { argb: '90EE90' } // Light Green for Full Day Office
+        fgColor: { argb: '90EE90' }, // Light Green for Full Day Office
       };
 
       const wfhFill: ExcelJS.Fill = {
         type: 'pattern',
         pattern: 'solid',
-        fgColor: { argb: 'ADD8E6' } // Light Blue for WFH
+        fgColor: { argb: 'ADD8E6' }, // Light Blue for WFH
       };
 
       const cvFill: ExcelJS.Fill = {
         type: 'pattern',
         pattern: 'solid',
-        fgColor: { argb: 'FFA07A' } // Orange for Client Visit
+        fgColor: { argb: 'FFA07A' }, // Orange for Client Visit
       };
 
       const halfDayFill: ExcelJS.Fill = {
         type: 'pattern',
         pattern: 'solid',
-        fgColor: { argb: 'FFFFE0' } // Light Yellow for Half Day
+        fgColor: { argb: 'FFFFE0' }, // Light Yellow for Half Day
       };
 
       const absentFill: ExcelJS.Fill = {
         type: 'pattern',
         pattern: 'solid',
-        fgColor: { argb: 'ED3E3E' } // red
+        fgColor: { argb: 'ED3E3E' }, // red
       };
 
       const yellowFill: ExcelJS.Fill = {
         type: 'pattern',
         pattern: 'solid',
-        fgColor: { argb: 'FFFF00' } // Yellow for Not Updated
+        fgColor: { argb: 'FFFF00' }, // Yellow for Not Updated
       };
 
       const blueFill: ExcelJS.Fill = {
         type: 'pattern',
         pattern: 'solid',
-        fgColor: { argb: 'ADD8E6' } // Light Blue for Holiday
+        fgColor: { argb: 'ADD8E6' }, // Light Blue for Holiday
       };
 
       const inactiveFill: ExcelJS.Fill = {
         type: 'pattern',
         pattern: 'solid',
-        fgColor: { argb: 'FFCDD2' } // Light red for Inactive
+        fgColor: { argb: 'FFCDD2' }, // Light red for Inactive
       };
 
       // Construct columns: Name then date columns (no separate Status column; inactive shown in day cells as "Inactive" in light red)
@@ -2228,7 +2895,9 @@ export class EmployeeAttendanceService {
 
         dateKeys.push(dateKey);
 
-        const dayName = dateObj.toLocaleDateString('en-US', { weekday: 'long' });
+        const dayName = dateObj.toLocaleDateString('en-US', {
+          weekday: 'long',
+        });
         const dayNum = `${day}-${dateObj.toLocaleDateString('en-US', { month: 'short' })}`; // e.g., 1-Jan
 
         dateHeaders.push(dayNum);
@@ -2236,16 +2905,22 @@ export class EmployeeAttendanceService {
       }
 
       // Add Header Rows
-      const titleRow = sheet.addRow([`ATTENDANCE - ${new Date(year, month - 1).toLocaleString('default', { month: 'long' })} ${year}`]);
+      const titleRow = sheet.addRow([
+        `ATTENDANCE - ${new Date(year, month - 1).toLocaleString('default', { month: 'long' })} ${year}`,
+      ]);
       sheet.mergeCells(1, 1, 1, daysInMonth + 1);
-      titleRow.getCell(1).alignment = { horizontal: 'center', vertical: 'middle' };
+      titleRow.getCell(1).alignment = {
+        horizontal: 'center',
+        vertical: 'middle',
+      };
       titleRow.getCell(1).font = { bold: true, size: 14 };
       titleRow.getCell(1).fill = headerFill;
 
       const dateRow = sheet.addRow(dateHeaders); // Row 2
       // Style Date Row (Light Green)
       dateRow.eachCell((cell, colNumber) => {
-        if (colNumber > 1) { // Skip "Name" column
+        if (colNumber > 1) {
+          // Skip "Name" column
           cell.fill = headerFill;
           cell.alignment = { horizontal: 'center' };
           cell.font = { bold: true };
@@ -2275,19 +2950,24 @@ export class EmployeeAttendanceService {
             cell.fill = weekendFill;
             cell.font = { color: { argb: 'FFFFFFFF' } }; // White Text
           } else {
-            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFE0' } }; // Light yellow/white
+            cell.fill = {
+              type: 'pattern',
+              pattern: 'solid',
+              fgColor: { argb: 'FFFFE0' },
+            }; // Light yellow/white
           }
           cell.alignment = { horizontal: 'center' };
         }
       });
 
-
       // --- Data Rows ---
       for (const employee of employees) {
-        const employeeName = employee.fullName || employee.employeeId || 'Unknown';
-        const inactiveDateStr = employee.userStatus === UserStatus.INACTIVE && employee.inactiveDate
-          ? dayjs(employee.inactiveDate).format('YYYY-MM-DD')
-          : null;
+        const employeeName =
+          employee.fullName || employee.employeeId || 'Unknown';
+        const inactiveDateStr =
+          employee.userStatus === UserStatus.INACTIVE && employee.inactiveDate
+            ? dayjs(employee.inactiveDate).format('YYYY-MM-DD')
+            : null;
 
         const row = sheet.addRow([employeeName]);
 
@@ -2320,7 +3000,8 @@ export class EmployeeAttendanceService {
           }
 
           // PRIORITY 2: Strict Sunday Rule (Even if worked, Excel shows Weekend as per requirement)
-          if (dateObj.getDay() === 0) { // 0 = Sunday
+          if (dateObj.getDay() === 0) {
+            // 0 = Sunday
             cell.fill = weekendFill;
             cell.value = AttendanceStatus.WEEKEND;
             cell.font = { color: { argb: 'FFFFFFFF' } }; // White text
@@ -2329,9 +3010,11 @@ export class EmployeeAttendanceService {
           }
 
           // PRIORITY 3: Saturday Logic (Show Status ONLY if totalHours > 0)
-          if (dateObj.getDay() === 6) { // 6 = Saturday
+          if (dateObj.getDay() === 6) {
+            // 6 = Saturday
             // Check if valid work
-            const hasWork = record && (record.totalHours !== null && record.totalHours > 0);
+            const hasWork =
+              record && record.totalHours !== null && record.totalHours > 0;
 
             if (!hasWork) {
               // No work on Saturday -> Show Weekend
@@ -2353,11 +3036,21 @@ export class EmployeeAttendanceService {
 
             const getHalfText = (half: string | null): string => {
               if (!half) return AttendanceStatus.ABSENT;
-              if (this.isActivity(half, WorkLocation.CLIENT_VISIT.toLowerCase())) return WorkLocation.CLIENT_VISIT;
-              if (this.isActivity(half, WorkLocation.WFH.toLowerCase()) || this.isActivity(half, WorkLocation.WORK_FROM_HOME.toLowerCase())) return WorkLocation.WFH;
-              if (this.isActivity(half, WorkLocation.OFFICE.toLowerCase())) return WorkLocation.OFFICE;
-              if (half === AttendanceStatus.LEAVE) return AttendanceStatus.LEAVE;
-              if (half === AttendanceStatus.ABSENT) return AttendanceStatus.ABSENT;
+              if (
+                this.isActivity(half, WorkLocation.CLIENT_VISIT.toLowerCase())
+              )
+                return WorkLocation.CLIENT_VISIT;
+              if (
+                this.isActivity(half, WorkLocation.WFH.toLowerCase()) ||
+                this.isActivity(half, WorkLocation.WORK_FROM_HOME.toLowerCase())
+              )
+                return WorkLocation.WFH;
+              if (this.isActivity(half, WorkLocation.OFFICE.toLowerCase()))
+                return WorkLocation.OFFICE;
+              if (half === AttendanceStatus.LEAVE)
+                return AttendanceStatus.LEAVE;
+              if (half === AttendanceStatus.ABSENT)
+                return AttendanceStatus.ABSENT;
               return half;
             };
 
@@ -2398,7 +3091,11 @@ export class EmployeeAttendanceService {
               text = AttendanceStatus.ABSENT;
               cellFill = absentFill;
               fontColor = 'FFFFFF'; // White text on red background
-            } else if (!record.status || record.status === AttendanceStatus.NOT_UPDATED || record.status === AttendanceStatus.PENDING) {
+            } else if (
+              !record.status ||
+              record.status === AttendanceStatus.NOT_UPDATED ||
+              record.status === AttendanceStatus.PENDING
+            ) {
               // Null or not-yet-updated status -> show Not Updated (do not show as Present)
               text = AttendanceStatus.NOT_UPDATED;
               cellFill = yellowFill;
@@ -2439,7 +3136,7 @@ export class EmployeeAttendanceService {
       }
 
       // Auto-fit columns
-      sheet.columns.forEach(column => {
+      sheet.columns.forEach((column) => {
         column.width = 15;
       });
       sheet.getColumn(1).width = 25; // Name column wider
@@ -2447,21 +3144,32 @@ export class EmployeeAttendanceService {
       const buffer = await workbook.xlsx.writeBuffer();
       return Buffer.from(buffer);
     } catch (error) {
-      this.logger.error(`Error generating monthly report for ${month}/${year}: ${error.message}`);
+      this.logger.error(
+        `Error generating monthly report for ${month}/${year}: ${error.message}`,
+      );
       if (error instanceof HttpException) throw error;
       throw new HttpException(
         `Failed to generate monthly report: ${error.message}`,
-        HttpStatus.INTERNAL_SERVER_ERROR
+        HttpStatus.INTERNAL_SERVER_ERROR,
       );
     }
   }
 
-  async generateIndividualPdfReport(employeeId: string, startDate: Date, endDate: Date): Promise<Buffer> {
-    this.logger.log(`Generating individual PDF report for employee: ${employeeId} from ${startDate} to ${endDate}`);
+  async generateIndividualPdfReport(
+    employeeId: string,
+    startDate: Date,
+    endDate: Date,
+  ): Promise<Buffer> {
+    this.logger.log(
+      `Generating individual PDF report for employee: ${employeeId} from ${startDate} to ${endDate}`,
+    );
     try {
       // 1. Fetch Employee Details
-      const employee = await this.employeeDetailsRepository.findOne({ where: { employeeId } });
-      if (!employee) throw new NotFoundException(`Employee with ID ${employeeId} not found`);
+      const employee = await this.employeeDetailsRepository.findOne({
+        where: { employeeId },
+      });
+      if (!employee)
+        throw new NotFoundException(`Employee with ID ${employeeId} not found`);
 
       const employeeIds = [employeeId];
       if (employee?.internId) {
@@ -2482,107 +3190,183 @@ export class EmployeeAttendanceService {
         .orderBy('a.workingDate', 'ASC');
 
       this.logger.log(`PDF SQL: ${qb.getSql()}`);
-      this.logger.log(`PDF Params: employeeIds=${employeeIds.join(', ')}, startStr=${startStr}, endStr=${endStr}`);
+      this.logger.log(
+        `PDF Params: employeeIds=${employeeIds.join(', ')}, startStr=${startStr}, endStr=${endStr}`,
+      );
 
       const attendanceRecords = await qb.getMany();
 
-      this.logger.log(`PDF: querying ${employeeIds.join(', ')} from ${startStr} to ${endStr} → found ${attendanceRecords.length} records`);
+      this.logger.log(
+        `PDF: querying ${employeeIds.join(', ')} from ${startStr} to ${endStr} → found ${attendanceRecords.length} records`,
+      );
       if (attendanceRecords.length > 0) {
-        this.logger.log(`PDF: first record workingDate=${attendanceRecords[0].workingDate}, type=${typeof attendanceRecords[0].workingDate}`);
+        this.logger.log(
+          `PDF: first record workingDate=${attendanceRecords[0].workingDate}, type=${typeof attendanceRecords[0].workingDate}`,
+        );
       }
 
       // 3. Fetch Holidays
       const holidays = await this.masterHolidayService.findAll();
       const holidayMap = new Map<string, string>();
-      holidays.forEach(h => {
-        const d = h.holidayDate || (h as any).date;
+      holidays.forEach((h) => {
+        const d = h.holidayDate || h.date;
         if (d) {
           // Use UTC to match the dateKey in the generation loop
-          const dateKey = d instanceof Date
-            ? d.toISOString().slice(0, 10)
-            : String(d).slice(0, 10);
-          holidayMap.set(dateKey, (h as any).name || (h as any).holidayName || AttendanceStatus.HOLIDAY);
+          const dateKey =
+            d instanceof Date
+              ? d.toISOString().slice(0, 10)
+              : String(d).slice(0, 10);
+          holidayMap.set(
+            dateKey,
+            h.name || h.holidayName || AttendanceStatus.HOLIDAY,
+          );
         }
       });
 
       if (!(startDate instanceof Date) || isNaN(startDate.getTime())) {
-        throw new BadRequestException('Invalid start date provided for PDF report');
+        throw new BadRequestException(
+          'Invalid start date provided for PDF report',
+        );
       }
       if (!(endDate instanceof Date) || isNaN(endDate.getTime())) {
-        throw new BadRequestException('Invalid end date provided for PDF report');
+        throw new BadRequestException(
+          'Invalid end date provided for PDF report',
+        );
       }
 
       // 4. Generate PDF
       return new Promise((resolve, reject) => {
         try {
           this.logger.log(`Starting PDF generation for employee ${employeeId}`);
-          this.logger.log(`Period: ${startDate.toISOString()} to ${endDate.toISOString()}`);
-          this.logger.log(`Found ${attendanceRecords.length} attendance records and ${holidayMap.size} holidays`);
+          this.logger.log(
+            `Period: ${startDate.toISOString()} to ${endDate.toISOString()}`,
+          );
+          this.logger.log(
+            `Found ${attendanceRecords.length} attendance records and ${holidayMap.size} holidays`,
+          );
 
           const doc = new PDFDocument({ margin: 50 });
           const buffers: Buffer[] = [];
 
           doc.on('data', (chunk) => buffers.push(chunk));
           doc.on('end', () => {
-            this.logger.log(`PDF generation stream ended for employee ${employeeId}`);
+            this.logger.log(
+              `PDF generation stream ended for employee ${employeeId}`,
+            );
             resolve(Buffer.concat(buffers));
           });
 
           doc.on('error', (err) => {
-            this.logger.error(`Stream error during PDF generation for ${employeeId}: ${err.message}`, err.stack);
+            this.logger.error(
+              `Stream error during PDF generation for ${employeeId}: ${err.message}`,
+              err.stack,
+            );
             reject(err);
           });
 
-          const blueColor = "#2B3674";
-          const grayColor = "#505050";
-          const lightGrayColor = "#EEEEEE";
-          const borderColor = "#CCCCCC";
+          const blueColor = '#2B3674';
+          const grayColor = '#505050';
+          const lightGrayColor = '#EEEEEE';
+          const borderColor = '#CCCCCC';
 
           // Header Area (Blue Banner)
           doc.fillColor(blueColor).rect(0, 0, 612, 100).fill();
 
-          // Logo or Text Fallback
-          const logoPath = path.join(__dirname, '..', '..', 'assets', 'inventech-logo.jpg');
-          if (fs.existsSync(logoPath)) {
-            doc.image(logoPath, 50, 25, { width: 120 });
-          } else {
-            doc.fillColor('white').fontSize(22).font('Helvetica-Bold').text('INVENTECH', 50, 30);
-            doc.fontSize(10).font('Helvetica').text('Info Solutions Pvt. Ltd.', 50, 60);
-          }
+          // Draw Worksphere Text
+          doc
+            .fillColor('white')
+            .fontSize(22)
+            .font('Helvetica-Bold')
+            .text('WORKSPHERE', 50, 40);
 
           // Report Title
-          doc.fillColor('white').fontSize(16).font('Helvetica-Bold').text('TIMESHEET REPORT', 350, 40, { align: 'right', width: 212 });
+          doc
+            .fillColor('white')
+            .fontSize(16)
+            .font('Helvetica-Bold')
+            .text('TIMESHEET REPORT', 350, 40, { align: 'right', width: 212 });
 
           // Employee Details
-          doc.fillColor(blueColor).fontSize(11).font('Helvetica-Bold').text('EMPLOYEE DETAILS', 50, 120);
-          doc.strokeColor(borderColor).lineWidth(1).moveTo(50, 133).lineTo(562, 133).stroke();
+          doc
+            .fillColor(blueColor)
+            .fontSize(11)
+            .font('Helvetica-Bold')
+            .text('EMPLOYEE DETAILS', 50, 120);
+          doc
+            .strokeColor(borderColor)
+            .lineWidth(1)
+            .moveTo(50, 133)
+            .lineTo(562, 133)
+            .stroke();
 
-          doc.fillColor(grayColor).fontSize(10).font('Helvetica').text('Name:', 50, 150);
-          doc.fillColor(blueColor).font('Helvetica-Bold').text(employee.fullName || 'N/A', 130, 150);
+          doc
+            .fillColor(grayColor)
+            .fontSize(10)
+            .font('Helvetica')
+            .text('Name:', 50, 150);
+          doc
+            .fillColor(blueColor)
+            .font('Helvetica-Bold')
+            .text(employee.fullName || 'N/A', 130, 150);
 
-          doc.fillColor(grayColor).font('Helvetica').text('Department:', 320, 150);
-          doc.fillColor(blueColor).font('Helvetica-Bold').text(employee.department || 'N/A', 410, 150, { width: 160 });
+          doc
+            .fillColor(grayColor)
+            .font('Helvetica')
+            .text('Department:', 320, 150);
+          doc
+            .fillColor(blueColor)
+            .font('Helvetica-Bold')
+            .text(employee.department || 'N/A', 410, 150, { width: 160 });
 
-          doc.fillColor(grayColor).font('Helvetica').text('Employee ID:', 50, 168);
-          doc.fillColor(blueColor).font('Helvetica-Bold').text(employeeId, 130, 168);
+          doc
+            .fillColor(grayColor)
+            .font('Helvetica')
+            .text('Employee ID:', 50, 168);
+          doc
+            .fillColor(blueColor)
+            .font('Helvetica-Bold')
+            .text(employeeId, 130, 168);
 
-          doc.fillColor(grayColor).font('Helvetica').text('Designation:', 320, 168);
-          doc.fillColor(blueColor).font('Helvetica-Bold').text(employee.designation || 'N/A', 410, 168, { width: 160 });
+          doc
+            .fillColor(grayColor)
+            .font('Helvetica')
+            .text('Designation:', 320, 168);
+          doc
+            .fillColor(blueColor)
+            .font('Helvetica-Bold')
+            .text(employee.designation || 'N/A', 410, 168, { width: 160 });
 
-          doc.fillColor(blueColor).fontSize(10).font('Helvetica-Bold').text(`Period: ${startDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })} to ${endDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`, 50, 195);
+          doc
+            .fillColor(blueColor)
+            .fontSize(10)
+            .font('Helvetica-Bold')
+            .text(
+              `Period: ${startDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })} to ${endDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`,
+              50,
+              195,
+            );
 
           let currentY = 220;
           let totalGrandHours = 0;
 
           // Group records by month
-          const months: { month: number, year: number, name: string, days: any[] }[] = [];
-          let tempDate = new Date(startDate);
+          const months: {
+            month: number;
+            year: number;
+            name: string;
+            days: any[];
+          }[] = [];
+          const tempDate = new Date(startDate);
           while (tempDate <= endDate) {
             const m = tempDate.getMonth();
             const y = tempDate.getFullYear();
-            const monthName = tempDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric' }).toUpperCase();
+            const monthName = tempDate
+              .toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
+              .toUpperCase();
 
-            let monthObj = months.find(item => item.month === m && item.year === y);
+            let monthObj = months.find(
+              (item) => item.month === m && item.year === y,
+            );
             if (!monthObj) {
               monthObj = { month: m, year: y, name: monthName, days: [] };
               months.push(monthObj);
@@ -2592,28 +3376,50 @@ export class EmployeeAttendanceService {
             // For the DB record, slice the ISO string (or Date.toISOString) to get YYYY-MM-DD in UTC,
             // which matches exactly what PostgreSQL stores in the 'date' column.
             const dateKey = dayjs.utc(tempDate).format('YYYY-MM-DD');
-            const dayName = tempDate.toLocaleDateString('en-US', { weekday: 'long' });
-            const record = attendanceRecords.find(r => {
+            const dayName = tempDate.toLocaleDateString('en-US', {
+              weekday: 'long',
+            });
+            const record = attendanceRecords.find((r) => {
               // r.workingDate may be a Date object (midnight UTC) or a string like '2026-04-01'
-              const rKey = r.workingDate instanceof Date
-                ? r.workingDate.toISOString().slice(0, 10)
-                : String(r.workingDate).slice(0, 10);
+              const rKey =
+                r.workingDate instanceof Date
+                  ? r.workingDate.toISOString().slice(0, 10)
+                  : String(r.workingDate).slice(0, 10);
               return rKey === dateKey;
             });
             const holiday = holidayMap.get(dateKey);
 
             let status = '';
             let hours = 0;
-            let originalStatus = record?.status;
+            const originalStatus = record?.status;
 
             if (record) {
               const getHalfCode = (half: string | null) => {
                 if (!half) return '';
-                if (this.isActivity(half, WorkLocation.OFFICE.toLowerCase())) return WorkLocation.OFFICE;
-                if (this.isActivity(half, WorkLocation.WFH.toLowerCase()) || this.isActivity(half, WorkLocation.WORK_FROM_HOME.toLowerCase())) return WorkLocation.WFH;
-                if (this.isActivity(half, WorkLocation.CLIENT_VISIT.toLowerCase())) return WorkLocation.CLIENT_VISIT;
-                if (half === AttendanceStatus.LEAVE || half === AttendanceStatus.LEAVE) return AttendanceStatus.LEAVE;
-                if (half === AttendanceStatus.ABSENT || half === AttendanceStatus.ABSENT) return AttendanceStatus.ABSENT;
+                if (this.isActivity(half, WorkLocation.OFFICE.toLowerCase()))
+                  return WorkLocation.OFFICE;
+                if (
+                  this.isActivity(half, WorkLocation.WFH.toLowerCase()) ||
+                  this.isActivity(
+                    half,
+                    WorkLocation.WORK_FROM_HOME.toLowerCase(),
+                  )
+                )
+                  return WorkLocation.WFH;
+                if (
+                  this.isActivity(half, WorkLocation.CLIENT_VISIT.toLowerCase())
+                )
+                  return WorkLocation.CLIENT_VISIT;
+                if (
+                  half === AttendanceStatus.LEAVE ||
+                  half === AttendanceStatus.LEAVE
+                )
+                  return AttendanceStatus.LEAVE;
+                if (
+                  half === AttendanceStatus.ABSENT ||
+                  half === AttendanceStatus.ABSENT
+                )
+                  return AttendanceStatus.ABSENT;
                 return half;
               };
 
@@ -2635,12 +3441,23 @@ export class EmployeeAttendanceService {
                   status = AttendanceStatus.UPCOMING;
                 } else if (totalHrs > 0) {
                   // Employee has logged hours — derive status from hours even if halves are missing
-                  if (s && s !== AttendanceStatus.NOT_UPDATED && s !== AttendanceStatus.PENDING) {
+                  if (
+                    s &&
+                    s !== AttendanceStatus.NOT_UPDATED &&
+                    s !== AttendanceStatus.PENDING
+                  ) {
                     status = s;
                   } else {
-                    status = totalHrs >= 7 ? AttendanceStatus.FULL_DAY : AttendanceStatus.HALF_DAY;
+                    status =
+                      totalHrs >= 7
+                        ? AttendanceStatus.FULL_DAY
+                        : AttendanceStatus.HALF_DAY;
                   }
-                } else if (!s || s === AttendanceStatus.NOT_UPDATED || s === AttendanceStatus.PENDING) {
+                } else if (
+                  !s ||
+                  s === AttendanceStatus.NOT_UPDATED ||
+                  s === AttendanceStatus.PENDING
+                ) {
                   status = AttendanceStatus.NOT_UPDATED.toUpperCase();
                 } else {
                   status = s;
@@ -2659,11 +3476,15 @@ export class EmployeeAttendanceService {
 
             monthObj.days.push({
               date: new Date(tempDate),
-              dateStr: tempDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
+              dateStr: tempDate.toLocaleDateString('en-US', {
+                month: 'short',
+                day: 'numeric',
+                year: 'numeric',
+              }),
               day: dayName,
               hours,
               status,
-              originalStatus
+              originalStatus,
             });
 
             tempDate.setDate(tempDate.getDate() + 1);
@@ -2676,7 +3497,11 @@ export class EmployeeAttendanceService {
               currentY = 50;
             }
 
-            doc.fillColor(blueColor).fontSize(11).font('Helvetica-Bold').text(monthObj.name, 50, currentY);
+            doc
+              .fillColor(blueColor)
+              .fontSize(11)
+              .font('Helvetica-Bold')
+              .text(monthObj.name, 50, currentY);
             currentY += 20;
 
             // Table Header
@@ -2694,33 +3519,59 @@ export class EmployeeAttendanceService {
             let monthlyNotUpdated = 0;
             let monthlyTotalHours = 0;
 
-            monthObj.days.forEach(day => {
+            monthObj.days.forEach((day) => {
               if (currentY > 720) {
                 doc.addPage();
                 currentY = 50;
-                // Redraw Header on new page if within same month? 
+                // Redraw Header on new page if within same month?
                 // For simplicity, just continue
               }
 
               doc.fillColor('#333333').fontSize(9).font('Helvetica');
               doc.text(day.dateStr, 60, currentY);
               doc.text(day.day, 150, currentY);
-              doc.text(day.hours > 0 ? day.hours.toFixed(1) : '--', 270, currentY);
+              doc.text(
+                day.hours > 0 ? day.hours.toFixed(1) : '--',
+                270,
+                currentY,
+              );
               doc.text(day.status, 380, currentY);
 
               // Summarize
               monthlyTotalHours += day.hours;
-              if (day.originalStatus === AttendanceStatus.FULL_DAY || day.status === AttendanceStatus.FULL_DAY) monthlyFullDays++;
-              else if (day.originalStatus === AttendanceStatus.HALF_DAY || day.status === AttendanceStatus.HALF_DAY) monthlyHalfDays++;
-              else if (day.originalStatus === AttendanceStatus.LEAVE || day.status === AttendanceStatus.LEAVE || day.status === AttendanceStatus.HOLIDAY) {
+              if (
+                day.originalStatus === AttendanceStatus.FULL_DAY ||
+                day.status === AttendanceStatus.FULL_DAY
+              )
+                monthlyFullDays++;
+              else if (
+                day.originalStatus === AttendanceStatus.HALF_DAY ||
+                day.status === AttendanceStatus.HALF_DAY
+              )
+                monthlyHalfDays++;
+              else if (
+                day.originalStatus === AttendanceStatus.LEAVE ||
+                day.status === AttendanceStatus.LEAVE ||
+                day.status === AttendanceStatus.HOLIDAY
+              ) {
                 // Option to count holiday as leave? Usually not, but following user logic
               }
 
-              if (day.status === AttendanceStatus.NOT_UPDATED.toUpperCase()) monthlyNotUpdated++;
-              if (day.status === AttendanceStatus.LEAVE || day.originalStatus === AttendanceStatus.LEAVE) monthlyLeaves++;
+              if (day.status === AttendanceStatus.NOT_UPDATED.toUpperCase())
+                monthlyNotUpdated++;
+              if (
+                day.status === AttendanceStatus.LEAVE ||
+                day.originalStatus === AttendanceStatus.LEAVE
+              )
+                monthlyLeaves++;
 
               currentY += 18;
-              doc.strokeColor(lightGrayColor).lineWidth(0.5).moveTo(50, currentY - 2).lineTo(562, currentY - 2).stroke();
+              doc
+                .strokeColor(lightGrayColor)
+                .lineWidth(0.5)
+                .moveTo(50, currentY - 2)
+                .lineTo(562, currentY - 2)
+                .stroke();
             });
 
             totalGrandHours += monthlyTotalHours;
@@ -2733,7 +3584,11 @@ export class EmployeeAttendanceService {
             }
 
             doc.fillColor('#F8F9FA').rect(50, currentY, 512, 25).fill();
-            doc.strokeColor(borderColor).lineWidth(0.5).rect(50, currentY, 512, 25).stroke();
+            doc
+              .strokeColor(borderColor)
+              .lineWidth(0.5)
+              .rect(50, currentY, 512, 25)
+              .stroke();
 
             doc.fillColor(blueColor).fontSize(9).font('Helvetica-Bold');
             const summaryText = `Full Days: ${monthlyFullDays}    Half Days: ${monthlyHalfDays}    Leaves: ${monthlyLeaves}    Not Updated: ${monthlyNotUpdated}    Total Hours: ${monthlyTotalHours.toFixed(1)}`;
@@ -2749,20 +3604,33 @@ export class EmployeeAttendanceService {
           }
 
           doc.fillColor('#F0F2F8').rect(50, currentY, 512, 30).fill();
-          doc.fillColor(blueColor).fontSize(11).font('Helvetica-Bold').text(`GRAND TOTAL HOURS: ${totalGrandHours.toFixed(1)}`, 60, currentY + 10);
+          doc
+            .fillColor(blueColor)
+            .fontSize(11)
+            .font('Helvetica-Bold')
+            .text(
+              `GRAND TOTAL HOURS: ${totalGrandHours.toFixed(1)}`,
+              60,
+              currentY + 10,
+            );
 
           doc.end();
         } catch (err) {
-          this.logger.error(`Synchronous error during PDF setup for employee ${employeeId}: ${err.message}`, err.stack);
+          this.logger.error(
+            `Synchronous error during PDF setup for employee ${employeeId}: ${err.message}`,
+            err.stack,
+          );
           reject(err);
         }
       });
     } catch (error) {
-      this.logger.error(`Error generating individual PDF report for ${employeeId}: ${error.message}`);
+      this.logger.error(
+        `Error generating individual PDF report for ${employeeId}: ${error.message}`,
+      );
       if (error instanceof HttpException) throw error;
       throw new HttpException(
         `Failed to generate individual PDF report: ${error.message}`,
-        HttpStatus.INTERNAL_SERVER_ERROR
+        HttpStatus.INTERNAL_SERVER_ERROR,
       );
     }
   }
