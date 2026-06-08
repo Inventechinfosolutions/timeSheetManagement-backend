@@ -11,8 +11,6 @@ import { UsersModule } from './users/users.module';
 import { EmployeeTimeSheetModule } from './employeeTimeSheet/employeeTimeSheet.module';
 import { MasterModule } from './master/master.module';
 import { ManagerMappingModule } from './managerMapping/managerMapping.module';
-import * as fs from 'fs';
-import * as path from 'path';
 import { ScheduleModule } from '@nestjs/schedule';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AttendanceCronService } from './cron/attendance.cron.service';
@@ -29,18 +27,7 @@ import * as redisStore from 'cache-manager-redis-store';
 import { CachingUtil } from './common/utils/caching.util';
 
 function getEnvFiles(): string[] {
-  const envPath = path.join(process.cwd(), '.env');
-  let profile = 'local'; // default
-  
-  if (fs.existsSync(envPath)) {
-    const envContent = fs.readFileSync(envPath, 'utf8');
-    const profileMatch = envContent.match(/^PROFILE\s*=\s*(.+)$/m);
-    if (profileMatch) {
-      profile = profileMatch[1].trim();
-    }
-  }
-  
-  // Load profile-specific env file first, then .env as fallback
+  const profile = process.env.PROFILE || 'local';
   return [`.env.${profile}`, '.env'];
 }
 
@@ -57,12 +44,18 @@ function getEnvFiles(): string[] {
     MasterModule,
     ManagerMappingModule,
     ScheduleModule.forRoot(),
-    TypeOrmModule.forFeature([EmployeeAttendance, EmployeeDetails, InternDetails, ManagerMapping, LeaveRequest]),
+    TypeOrmModule.forFeature([
+      EmployeeAttendance,
+      EmployeeDetails,
+      InternDetails,
+      ManagerMapping,
+      LeaveRequest,
+    ]),
     MailModule,
     NotificationsModule,
     BullModule.forRootAsync({
       imports: [ConfigModule],
-      useFactory: async (configService: ConfigService) => ({
+      useFactory: (configService: ConfigService) => ({
         redis: {
           host: configService.get<string>('REDIS_HOST') || 'localhost',
           port: configService.get<number>('REDIS_PORT') || 6379,
@@ -74,7 +67,7 @@ function getEnvFiles(): string[] {
     CacheModule.registerAsync({
       isGlobal: true,
       imports: [ConfigModule],
-      useFactory: async (configService: ConfigService) => {
+      useFactory: (configService: ConfigService): any => {
         const redisHost = configService.get<string>('REDIS_HOST');
         if (redisHost && redisHost.trim() !== '') {
           return {
