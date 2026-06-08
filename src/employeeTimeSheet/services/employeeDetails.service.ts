@@ -728,6 +728,7 @@ export class EmployeeDetailsService {
       // Store original values for comparison
       const originalEmployeeId = employee.employeeId;
       const originalEmail = employee.email;
+      const originalFullName = employee.fullName;
       const updatedEmployeeId = updateData.employeeId || originalEmployeeId;
       const updatedEmail = updateData.email || originalEmail;
 
@@ -824,7 +825,7 @@ export class EmployeeDetailsService {
 
       // --- Synchronize related tables if employeeId or fullName changed ---
       const employeeIdChanged = updatedEmployeeId !== originalEmployeeId;
-      const fullNameChanged = updateData.fullName && updateData.fullName !== employee.fullName;
+      const fullNameChanged = updateData.fullName && updateData.fullName !== originalFullName;
 
       if (employeeIdChanged) {
         this.logger.log(`EmployeeId changed from ${originalEmployeeId} to ${updatedEmployeeId}. Synchronizing related tables.`);
@@ -855,6 +856,25 @@ export class EmployeeDetailsService {
 
         // Update ManagerMapping where this employee is a manager
         await this.managerMappingRepository.update({ managerName: employee.fullName }, { managerName: updateData.fullName });
+
+        // Update User aliasLoginName to sync with fullName
+        try {
+          let associatedUser = await this.userRepository.findOne({
+            where: { loginId: originalEmployeeId }
+          });
+          if (!associatedUser) {
+            associatedUser = await this.userRepository.findOne({
+              where: { loginId: originalEmployeeId.toLowerCase() }
+            });
+          }
+          if (associatedUser) {
+            associatedUser.aliasLoginName = updateData.fullName!;
+            await this.userRepository.save(associatedUser);
+            this.logger.log(`Synchronized user.aliasLoginName for loginId: ${associatedUser.loginId}`);
+          }
+        } catch (userSyncError) {
+          this.logger.error(`Failed to synchronize user.aliasLoginName: ${userSyncError.message}`);
+        }
 
         this.logger.log(`Synchronization for fullName ${updateData.fullName} completed.`);
       }

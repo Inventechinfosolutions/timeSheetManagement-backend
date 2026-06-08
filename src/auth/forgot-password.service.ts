@@ -26,19 +26,20 @@ export class ForgotPasswordService {
   // STEP 1
   async forgotPassword(loginId: string, email: string) {
     // 1. Try to find the user in the User table (case-insensitive)
-    let user = await this.userRepo.findOne({ where: { loginId: ILike(loginId) } });
+    let user = await this.userRepo.findOne({
+      where: { loginId: ILike(loginId) },
+    });
 
     // 2. Try to find email in EmployeeDetails
-    const employee = await this.employeeRepo.findOne({ 
-      where: [
-        { employeeId: ILike(loginId) },
-        { email: ILike(email) }
-      ]
+    const employee = await this.employeeRepo.findOne({
+      where: [{ employeeId: ILike(loginId) }, { email: ILike(email) }],
     });
 
     if (!user && employee) {
-        // If not in User table but in EmployeeDetails, find or sync User
-        user = await this.userRepo.findOne({ where: { loginId: ILike(employee.employeeId) } });
+      // If not in User table but in EmployeeDetails, find or sync User
+      user = await this.userRepo.findOne({
+        where: { loginId: ILike(employee.employeeId) },
+      });
     }
 
     if (!user) {
@@ -47,7 +48,10 @@ export class ForgotPasswordService {
 
     // Security: Verify email matches if it's an employee
     if (employee && employee.email.toLowerCase() !== email.toLowerCase()) {
-        throw new HttpException('Provided email does not match our records', HttpStatus.BAD_REQUEST);
+      throw new HttpException(
+        'Provided email does not match our records',
+        HttpStatus.BAD_REQUEST,
+      );
     }
 
     const resetToken = crypto.randomBytes(32).toString('hex');
@@ -78,7 +82,7 @@ export class ForgotPasswordService {
         <p style="color: #d93025; font-size: 14px; font-weight: 500; margin-top: 20px;">Note: This link will expire in 5 minutes.</p>
         <p style="color: #5f6368; font-size: 14px; line-height: 1.5;">If you did not request this, please ignore this email.</p>
         <hr style="border: 0; border-top: 1px solid #eee; margin: 30px 0;">
-        <p style="font-size: 12px; color: #9aa0a6; text-align: center;">This is an automated message from Inventech Info Solutions. Please do not reply.</p>
+        <p style="font-size: 12px; color: #9aa0a6; text-align: center;">This is an automated message from Worksphere. Please do not reply.</p>
       </div>
     `;
 
@@ -87,18 +91,21 @@ export class ForgotPasswordService {
         email,
         'Password Reset request',
         `Reset your password using this link: ${resetLink}. It is valid for 5 minutes.`,
-        htmlContent
+        htmlContent,
       );
     } catch (error) {
       // If email fails, delete the token we just saved to keep state consistent
       await this.tokenRepo.delete({ token: resetToken });
-      throw new HttpException(`Failed to send email: ${error.message}`, HttpStatus.INTERNAL_SERVER_ERROR);
+      throw new HttpException(
+        `Failed to send email: ${error.message}`,
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
     }
 
-    return { 
+    return {
       message: 'Password reset link sent to registered email',
       token: resetToken,
-      resetLink: resetLink
+      resetLink: resetLink,
     };
   }
 
@@ -112,20 +119,20 @@ export class ForgotPasswordService {
     if (!record) {
       throw new HttpException(
         'Invalid or expired reset link. Please request a new password reset link.',
-        HttpStatus.BAD_REQUEST
+        HttpStatus.BAD_REQUEST,
       );
     }
 
     // Check if token has expired - using current time in UTC
     const now = new Date();
     const expiresAt = new Date(record.expiresAt);
-    
+
     if (expiresAt.getTime() < now.getTime()) {
       // Delete expired token
       await this.tokenRepo.delete({ id: record.id });
       throw new HttpException(
         'Session expired. This password reset link has expired. The link is only valid for 5 minutes. Please request a new password reset link.',
-        HttpStatus.BAD_REQUEST
+        HttpStatus.BAD_REQUEST,
       );
     }
 
@@ -135,10 +142,10 @@ export class ForgotPasswordService {
       await this.tokenRepo.save(record);
     }
 
-    return { 
+    return {
       message: 'Link verified successfully',
       valid: true,
-      expiresAt: record.expiresAt
+      expiresAt: record.expiresAt,
     };
   }
 
@@ -148,7 +155,7 @@ export class ForgotPasswordService {
     if (!token) {
       throw new HttpException(
         'Reset token is required. Please use the link from your email.',
-        HttpStatus.BAD_REQUEST
+        HttpStatus.BAD_REQUEST,
       );
     }
 
@@ -161,31 +168,33 @@ export class ForgotPasswordService {
     if (!tokenRecord) {
       throw new HttpException(
         'Invalid reset link. Please request a new password reset link.',
-        HttpStatus.BAD_REQUEST
+        HttpStatus.BAD_REQUEST,
       );
     }
 
     // Check if token has expired - using current time comparison
     const now = new Date();
     const expiresAt = new Date(tokenRecord.expiresAt);
-    
+
     if (expiresAt.getTime() < now.getTime()) {
       // Delete expired token
       await this.tokenRepo.delete({ id: tokenRecord.id });
       throw new HttpException(
         'Session expired. This password reset link has expired. The link is only valid for 5 minutes. Please request a new password reset link.',
-        HttpStatus.BAD_REQUEST
+        HttpStatus.BAD_REQUEST,
       );
     }
 
     // Delete the token after successful use to prevent reuse
     await this.tokenRepo.delete({ id: tokenRecord.id });
 
-    const user = await this.userRepo.findOne({ where: { loginId: ILike(loginId) } });
+    const user = await this.userRepo.findOne({
+      where: { loginId: ILike(loginId) },
+    });
     if (!user) {
       throw new HttpException('User not found', HttpStatus.NOT_FOUND);
     }
-    
+
     user.password = await bcrypt.hash(newPassword, 10);
     user.resetRequired = false; // Also clear the reset flag if it exists
 
