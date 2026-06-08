@@ -7,6 +7,7 @@ import { User } from '../users/entities/user.entity';
 import { PasswordResetToken } from './entities/password-reset-token.entity';
 import { EmailService } from '../email/email.service';
 import { EmployeeDetails } from '../employeeTimeSheet/entities/employeeDetails.entity';
+import { getSimpleEmailTemplate } from '../common/mail/templates/simple-email.template';
 
 @Injectable()
 export class ForgotPasswordService {
@@ -63,24 +64,17 @@ export class ForgotPasswordService {
     const frontendUrl = process.env.FRONTEND_URL;
     const resetLink = `${frontendUrl}/reset-password?token=${resetToken}&loginId=${user.loginId}`;
 
-    const htmlContent = `
-      <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; max-width: 600px; margin: auto; padding: 40px; border: 1px solid #e0e0e0; border-radius: 12px; background-color: #ffffff; box-shadow: 0 4px 10px rgba(0,0,0,0.05);">
-        <div style="text-align: center; margin-bottom: 30px;">
-          <h2 style="color: #1a73e8; margin: 0; font-size: 24px;">Password Reset Request</h2>
-        </div>
-        <p style="color: #5f6368; font-size: 16px; line-height: 1.5;">Hello,</p>
-        <p style="color: #5f6368; font-size: 16px; line-height: 1.5;">We received a request to reset your password. Click the button below to set a new password:</p>
-        <div style="text-align: center; margin: 40px 0;">
-          <a href="${resetLink}" style="background-color: #1a73e8; color: white; padding: 14px 28px; text-decoration: none; border-radius: 6px; font-weight: 600; font-size: 16px; display: inline-block; transition: background-color 0.3s ease;">Reset My Password</a>
-        </div>
-        <p style="color: #5f6368; font-size: 14px; line-height: 1.5;">If the button doesn't work, copy and paste the following link into your browser:</p>
-        <p style="word-break: break-all; color: #1a73e8; font-size: 13px;">${resetLink}</p>
-        <p style="color: #d93025; font-size: 14px; font-weight: 500; margin-top: 20px;">Note: This link will expire in 5 minutes.</p>
-        <p style="color: #5f6368; font-size: 14px; line-height: 1.5;">If you did not request this, please ignore this email.</p>
-        <hr style="border: 0; border-top: 1px solid #eee; margin: 30px 0;">
-        <p style="font-size: 12px; color: #9aa0a6; text-align: center;">This is an automated message from Inventech Info Solutions. Please do not reply.</p>
-      </div>
-    `;
+    const htmlContent = getSimpleEmailTemplate({
+      recipientName: user.loginId,
+      subject: 'Password Reset Request',
+      bodyLines: [
+        'We received a request to reset your password.',
+        'Use the link below to set a new password. This link expires in 5 minutes.',
+        'If you did not request this, please ignore this email.',
+      ],
+      actionLabel: 'Reset my password',
+      actionUrl: resetLink,
+    });
 
     try {
       await this.emailService.sendEmail(

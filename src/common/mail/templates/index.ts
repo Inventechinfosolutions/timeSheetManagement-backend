@@ -1,4 +1,5 @@
 export * from './base.layout';
+export * from './simple-email.template';
 export * from './request-notification.template';
 export * from './status-update.template';
 export * from './cancellation.template';

@@ -1,4 +1,7 @@
-import { baseLayout } from './base.layout';
+import {
+  getPortalUrl,
+  getSimpleEmailTemplate,
+} from './simple-email.template';
 
 export interface GeneralNotificationData {
   recipientName: string;
@@ -7,33 +10,16 @@ export interface GeneralNotificationData {
 }
 
 export const getGeneralNotificationTemplate = (data: GeneralNotificationData) => {
-  const content = `
-    <div style="font-size: 15px; color: #1f2937; line-height: 1.6;">
-      <p>Dear ${data.recipientName},</p>
-      
-      <div style="margin: 25px 0;">
-        ${data.message.replace(/\n/g, '<br>')}
-      </div>
+  const bodyLines = data.message
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
 
-      <table width="100%" border="0" cellspacing="0" cellpadding="0" style="margin-top: 12px;">
-        <tr>
-          <td align="left">
-            <!--[if mso]>
-            <v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w="urn:schemas-microsoft-com:office:word" href="https://worksphere.inventech-developer.in" style="height:35px;v-text-anchor:middle;width:160px;" arcsize="16%" stroke="f" fillcolor="#2563eb">
-              <w:anchorlock/>
-              <center>
-            <![endif]-->
-            <a href="https://worksphere.inventech-developer.in" class="btn" style="background-color:#2563eb;border-radius:8px;color:#ffffff;display:inline-block;font-family:sans-serif;font-size:13px;font-weight:bold;line-height:35px;text-align:left;text-decoration:none;padding:0 14px;-webkit-text-size-adjust:none;">LOGIN TO PORTAL →</a>
-            <!--[if mso]>
-              </center>
-            </v:roundrect>
-            <![endif]-->
-          </td>
-        </tr>
-      </table>
-    </div>
-  `;
-
-  return baseLayout(content, data.title, data.title);
+  return getSimpleEmailTemplate({
+    recipientName: data.recipientName,
+    subject: data.title,
+    bodyLines,
+    actionLabel: 'Login to portal',
+    actionUrl: getPortalUrl(),
+  });
 };
-

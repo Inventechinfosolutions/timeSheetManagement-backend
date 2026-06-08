@@ -1,4 +1,8 @@
 import { baseLayout } from './base.layout';
+import {
+  getPortalUrl,
+  getSimpleEmailTemplate,
+} from './simple-email.template';
 import { WorkLocation } from '../../../employeeTimeSheet/enums/work-location.enum';
 import { LeaveRequestType } from '../../../employeeTimeSheet/enums/leave-request-type.enum';
 import { AttendanceStatus } from '../../../employeeTimeSheet/enums/attendance-status.enum';
@@ -23,11 +27,46 @@ export interface StatusUpdateData {
 
 export const getStatusUpdateTemplate = (data: StatusUpdateData) => {
   const statusLower = data.status.toLowerCase();
-  const isApproved = statusLower.includes('approved') && !statusLower.includes('restored');
+  const isCancellation =
+    data.isCancellation ||
+    (statusLower.includes('cancel') && statusLower !== 'cancelled');
+
+  if (data.isSelf) {
+    const displayStatus =
+      statusLower === 'cancelled'
+        ? isCancellation
+          ? 'Reverted'
+          : 'Cancelled'
+        : data.status;
+    const dateRange =
+      data.fromDate === data.toDate
+        ? data.fromDate
+        : `${data.fromDate} to ${data.toDate}`;
+    const bodyLines = [
+      `Your <strong>${data.requestType}</strong> request for ${dateRange} has been <strong>${displayStatus}</strong>.`,
+      `Subject: ${data.title}`,
+    ];
+    if (data.reviewedBy?.trim()) {
+      bodyLines.push(`Reviewed by: ${data.reviewedBy}`);
+    }
+
+    return getSimpleEmailTemplate({
+      recipientName: data.employeeName,
+      subject: `${data.requestType} Request ${displayStatus}`,
+      bodyLines,
+      actionLabel: 'Login to portal',
+      actionUrl: getPortalUrl(),
+    });
+  }
+
+  const isApproved =
+    statusLower.includes('approved') && !statusLower.includes('restored');
   const isRestored = false; // We are moving these to orange
   const isRejected = statusLower.includes('rejected');
-  const isCancelled = statusLower.includes('cancelled') || statusLower.includes('reverted') || statusLower.includes('restored');
-  const isCancellation = data.isCancellation || (statusLower.includes('cancel') && statusLower !== 'cancelled');
+  const isCancelled =
+    statusLower.includes('cancelled') ||
+    statusLower.includes('reverted') ||
+    statusLower.includes('restored');
 
   const statusColor = isApproved ? '#22c55e' : isRejected ? '#ef4444' : (isCancelled || isRestored || statusLower.includes('requesting') || statusLower.includes('pending')) ? '#f97316' : '#6b7280';
 

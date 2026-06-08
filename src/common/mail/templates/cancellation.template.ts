@@ -1,4 +1,8 @@
 import { baseLayout } from './base.layout';
+import {
+  getPortalUrl,
+  getSimpleEmailTemplate,
+} from './simple-email.template';
 
 export interface CancellationData {
   employeeName: string;
@@ -17,6 +21,36 @@ export interface CancellationData {
 export const getCancellationTemplate = (data: CancellationData) => {
   const isRevert = data.actionType === 'revert';
   const isRevertBack = data.actionType === 'revert_back';
+
+  if (data.isSelf) {
+    const dateRange =
+      data.fromDate === data.toDate
+        ? data.fromDate
+        : `${data.fromDate} to ${data.toDate}`;
+    let summary: string;
+    let subject: string;
+
+    if (isRevertBack) {
+      summary = `Your pending <strong>${data.requestType}</strong> request for ${dateRange} has been cancelled.`;
+      subject = `${data.requestType} Request Cancelled`;
+    } else if (isRevert) {
+      summary = `Your cancellation request for <strong>${data.requestType}</strong> (${dateRange}) has been reverted.`;
+      subject = `${data.requestType} Cancellation Reverted`;
+    } else {
+      summary = `Your cancellation request for <strong>${data.requestType}</strong> (${dateRange}) has been submitted and is pending review.`;
+      subject = `${data.requestType} Cancellation Request Submitted`;
+    }
+
+    const bodyLines = [summary, `Subject: ${data.title}`];
+
+    return getSimpleEmailTemplate({
+      recipientName: data.employeeName,
+      subject,
+      bodyLines,
+      actionLabel: 'Login to portal',
+      actionUrl: getPortalUrl(),
+    });
+  }
 
   let actionText = data.isSelf ? 'have submitted a cancellation request for' : 'has submitted a cancellation request for';
   let statusText = 'Pending';
