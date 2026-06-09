@@ -27,7 +27,7 @@ import * as redisStore from 'cache-manager-redis-store';
 import { CachingUtil } from './common/utils/caching.util';
 
 function getEnvFiles(): string[] {
-  const profile = process.env.PROFILE || 'local';
+  const profile = process.env.PROFILE || 'dev';
   return [`.env.${profile}`, '.env'];
 }
 
