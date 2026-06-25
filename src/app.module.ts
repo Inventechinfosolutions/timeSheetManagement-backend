@@ -25,6 +25,7 @@ import { CacheModule } from '@nestjs/cache-manager';
 import { BullModule } from '@nestjs/bull';
 import * as redisStore from 'cache-manager-redis-store';
 import { CachingUtil } from './common/utils/caching.util';
+import { CommunicationModule } from './python-face-communication/communication.module';
 
 function getEnvFiles(): string[] {
   const profile = process.env.PROFILE || 'dev';
@@ -83,6 +84,7 @@ function getEnvFiles(): string[] {
       inject: [ConfigService],
     }),
     ManagerMappingModule,
+    CommunicationModule,
   ],
   controllers: [AppController],
   providers: [
