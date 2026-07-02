@@ -36,6 +36,12 @@ export class EmployeeAttendance {
   @Column({ name: 'source_request_id', type: 'int', nullable: true })
   sourceRequestId?: number | null;
 
+  @Column({ name:'checking_in_time', type: 'time', nullable: true })
+  checkingInTime: Date | null;
+
+  @Column({ name:'checking_out_time', type: 'time', nullable: true })
+  checkingOutTime: Date | null;
+
   @CreateDateColumn()
   createdAt: Date;
 

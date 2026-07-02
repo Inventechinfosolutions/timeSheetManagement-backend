@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -27,6 +28,10 @@ import { EmployeeDetailsDto } from '../dto/employeeDetails.dto';
 import { ResetPasswordDto } from '../dto/resetPassword.dto';
 import { BulkUploadResultDto } from '../dto/bulk-upload-result.dto';
 import { EmployeeDetailsService } from '../services/employeeDetails.service';
+import { EmployeeFaceService } from '../services/employeeFace.service';
+import { EnrollFaceDto } from '../dto/employee-face-enroll.dto';
+import { CheckinDto } from '../dto/employee-face-checkin.dto';
+import { CheckoutDto } from '../dto/employee-face-checkout.dto';
 import { NO_CACHE_HEADERS } from '../../common/utils/no-cache-headers';
 import {
   ApiBadRequestResponse,
@@ -49,6 +54,7 @@ export class EmployeeDetailsController {
   logger = new Logger('EmployeeDetails');
   constructor(
     private readonly employeeDetailsService: EmployeeDetailsService,
+    private readonly employeeFaceService: EmployeeFaceService,
   ) { }
 
   @Get('departments')
@@ -519,6 +525,86 @@ export class EmployeeDetailsController {
       return await this.employeeDetailsService.removeProfileImage(employee.id);
     } catch (error) {
       this.logger.error(`Error deleting profile image for ${employeeIdStr}: ${error.message}`, error.stack);
+      throw error;
+    }
+  }
+
+  @Post('face/enroll-face/:employeeId')
+  @UseGuards(JwtAuthGuard, ReceptionistReadOnlyGuard)
+  @ApiOperation({ summary: 'Enroll face for employee' })
+  @ApiParam({ name: 'employeeId', type: String, description: 'Employee String ID' })
+  @ApiBody({ type: EnrollFaceDto })
+  @ApiOkResponse({ description: 'Face enrolled successfully' })
+  async enrollFace(@Param('employeeId') employeeId: string, @Body() enrollFaceDto: EnrollFaceDto) {
+    try {
+      if (employeeId !== enrollFaceDto.employeeId) {
+        throw new BadRequestException('Employee ID in URL does not match request body');
+      }
+      this.logger.log(`Enrolling face for employee: ${employeeId}`);
+      return await this.employeeFaceService.enrollFace(enrollFaceDto.employeeId, enrollFaceDto.images);
+    } catch (error) {
+      this.logger.error(`Error enrolling face for ${employeeId}: ${error.message}`, error.stack);
+      throw error;
+    }
+  }
+
+  @Get('face/is-face-enrolled/:employeeId')
+  @UseGuards(JwtAuthGuard, ReceptionistReadOnlyGuard)
+  @ApiOperation({ summary: 'Verify face for employee' })
+  @ApiParam({ name: 'employeeId', type: String, description: 'Employee String ID' })
+  @ApiOkResponse({ description: 'Face enrolled successfully' })
+  async isFaceEnrolled(@Param('employeeId') employeeId: string) {
+    try {
+      this.logger.log(`Checking if face is enrolled for employee: ${employeeId}`);
+      return await this.employeeFaceService.isFaceEnrolled(employeeId);
+    } catch (error) {
+      this.logger.error(`Error checking if face is enrolled for ${employeeId}: ${error.message}`, error.stack);
+      throw error;
+    }
+  }
+
+  @Post('face/checkin/:employeeId')
+  @UseGuards(JwtAuthGuard, ReceptionistReadOnlyGuard)
+  @ApiOperation({ summary: 'Checkin for employee' })
+  @ApiParam({ name: 'employeeId', type: String, description: 'Employee String ID' })
+  @ApiBody({ type: CheckinDto })
+  @ApiOkResponse({ description: 'Checkin successful' })
+  async checkin(@Param('employeeId') employeeId: string, @Body() checkinDto: CheckinDto) {
+    try {
+      if (employeeId !== checkinDto.employeeId) {
+        throw new BadRequestException('Employee ID in URL does not match request body');
+      }
+      this.logger.log(`Checking in for employee: ${employeeId}`);
+      return await this.employeeFaceService.checkin(
+        checkinDto.checkingInTime,
+        checkinDto.employeeId,
+        checkinDto.images,
+      );
+    } catch (error) {
+      this.logger.error(`Error checking in for ${employeeId}: ${error.message}`, error.stack);
+      throw error;
+    }
+  }
+
+  @Post('face/checkout/:employeeId')
+  @UseGuards(JwtAuthGuard, ReceptionistReadOnlyGuard)
+  @ApiOperation({ summary: 'Checkout for employee' })
+  @ApiParam({ name: 'employeeId', type: String, description: 'Employee String ID' })
+  @ApiBody({ type: CheckoutDto })
+  @ApiOkResponse({ description: 'Checkout successful' })
+  async checkout(@Param('employeeId') employeeId: string, @Body() checkoutDto: CheckoutDto) {
+    try {
+      if (employeeId !== checkoutDto.employeeId) {
+        throw new BadRequestException('Employee ID in URL does not match request body');
+      }
+      this.logger.log(`Checking out for employee: ${employeeId}`);
+      return await this.employeeFaceService.checkout(
+        checkoutDto.checkingOutTime,
+        checkoutDto.employeeId,
+        checkoutDto.images,
+      );
+    } catch (error) {
+      this.logger.error(`Error checking out for ${employeeId}: ${error.message}`, error.stack);
       throw error;
     }
   }

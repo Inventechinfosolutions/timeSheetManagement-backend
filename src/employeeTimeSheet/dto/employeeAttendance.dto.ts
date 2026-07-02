@@ -49,4 +49,5 @@ export class EmployeeAttendanceDto {
   @IsString()
   @IsOptional()
   secondHalf: string | null;
+  
 }

@@ -27,6 +27,8 @@ import { LeaveRequestsService } from './services/leave-requests.service';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { FileService } from '../common/core/utils/fileType.utils';
 import { Notification } from '../notifications/entities/notification.entity';
+import { CommunicationModule } from '../python-face-communication/communication.module';
+import { EmployeeFaceService } from './services/employeeFace.service';
 
 @Module({
   imports: [
@@ -48,6 +50,7 @@ import { Notification } from '../notifications/entities/notification.entity';
     DocumentUploaderModule,
     EmailModule,
     NotificationsModule,
+    CommunicationModule,
   ],
   controllers: [
     EmployeeAttendanceController, 
@@ -63,6 +66,7 @@ import { Notification } from '../notifications/entities/notification.entity';
     TimesheetBlockerService,
     LeaveRequestsService,
     FileService,
+    EmployeeFaceService,
   ],
   exports: [EmployeeDetailsService, EmployeeLinkService],
 })

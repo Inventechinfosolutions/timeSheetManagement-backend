@@ -38,6 +38,9 @@ export class EmployeeDetails extends BaseEntity {
   })
   employmentType: EmploymentType | null;
 
+  @Column({ name: 'embedings', type: 'json', nullable: true })
+  embedings: number[] | null;
+  
   @Column({ name: 'email', unique: true, length: 255, nullable: true })
   email: string;
 
