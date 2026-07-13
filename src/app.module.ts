@@ -24,12 +24,25 @@ import { NotificationsModule } from './notifications/notifications.module';
 import { CacheModule } from '@nestjs/cache-manager';
 import { BullModule } from '@nestjs/bull';
 import * as redisStore from 'cache-manager-redis-store';
+import * as fs from 'fs';
+import * as path from 'path';
 import { CachingUtil } from './common/utils/caching.util';
 import { CommunicationModule } from './python-face-communication/communication.module';
 
 function getEnvFiles(): string[] {
-  const profile = process.env.PROFILE || 'dev';
-  return [`.env.${profile}`, '.env'];
+  if (!process.env.PROFILE) {
+    const baseEnvPath = path.resolve(process.cwd(), '.env');
+    if (fs.existsSync(baseEnvPath)) {
+      const baseEnv = fs.readFileSync(baseEnvPath, 'utf8');
+      const profileMatch = baseEnv.match(/^PROFILE=(.+)$/m);
+      process.env.PROFILE = profileMatch?.[1]?.trim();
+    }
+  }
+
+  const profile = process.env.PROFILE || 'local';
+  const envFiles = [`.env.${profile}`, '.env'];
+  console.log(`[Config] Using PROFILE="${profile}" -> env files: ${envFiles.join(', ')}`);
+  return envFiles;
 }
 
 @Module({

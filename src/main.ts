@@ -1,5 +1,5 @@
 import { NestFactory } from '@nestjs/core';
-import { ValidationPipe } from '@nestjs/common';
+import { Logger, ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import cookieParser from 'cookie-parser';
@@ -41,5 +41,20 @@ async function bootstrap() {
   );
   await app.listen(port);
   console.log(`Application is running on: http://localhost:${port}/api`);
+
+  // Log DB connection info last, once the app is fully up.
+  const profile = process.env.PROFILE || 'local';
+  const dbType = (configService.get<string>('DB_TYPE') || 'postgres').toLowerCase();
+  const dbHost = configService.get<string>('DB_HOST') || 'localhost';
+  const dbPort = configService.get<string>('DB_PORT') || '';
+  const dbUser = configService.get<string>('DB_USERNAME') || '';
+  const dbName =
+    configService.get<string>('DB_NAME') ||
+    configService.get<string>('DB_DATABASE') ||
+    'timesheet_db';
+  Logger.log(
+    `Connected to database [profile="${profile}"] -> ${dbType}://${dbUser}@${dbHost}:${dbPort}/${dbName}`,
+    'DatabaseModule',
+  );
 }
 bootstrap();

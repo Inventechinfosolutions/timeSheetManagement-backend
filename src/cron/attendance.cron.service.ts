@@ -11,6 +11,8 @@ import { MasterHolidayService } from '../master/service/master-holiday.service';
 import { NotificationsService } from '../notifications/Services/notifications.service';
 import { UserStatus } from '../users/enums/user-status.enum';
 import { MonthStatus } from '../employeeTimeSheet/enums/month-status.enum';
+import { LeaveRequestsService } from '../employeeTimeSheet/services/leave-requests.service';
+import { LeaveRequest } from '../employeeTimeSheet/entities/leave-request.entity';
 
 @Injectable()
 export class AttendanceCronService {
@@ -26,8 +28,12 @@ export class AttendanceCronService {
     @InjectRepository(ManagerMapping)
     private managerMappingRepo: Repository<ManagerMapping>,
 
+    @InjectRepository(LeaveRequest)
+    private leaveRequestRepo: Repository<LeaveRequest>,
+
     private readonly masterHolidayService: MasterHolidayService,
     private readonly notificationsService: NotificationsService,
+    private readonly leaveRequestsService: LeaveRequestsService,
   ) { }
 
   // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -425,5 +431,14 @@ export class AttendanceCronService {
   async weekendReminder() {
     this.logger.debug('Running Weekend Reminder...');
     await this.notificationsService.sendWeekendReminder();
+  }
+
+  /**
+   * Disabled: clock-only attendance uses half-day status without deducting leave balance.
+   * Employees can use Request Change for past date corrections if needed.
+   */
+  // @Cron('0 12 * * *')
+  async handleMiddayHalfDayLeave() {
+    return;
   }
 }

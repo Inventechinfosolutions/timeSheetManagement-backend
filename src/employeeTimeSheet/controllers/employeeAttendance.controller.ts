@@ -31,6 +31,7 @@ import { DownloadAttendanceDto } from '../dto/download-attendance.dto';
 import { EmployeeAttendanceService } from '../services/employeeAttendance.service';
 import { LeaveRequestsService } from '../services/leave-requests.service';
 import { TimesheetBlockerService } from '../services/timesheetBlocker.service';
+import { AttendanceCorrectionService } from '../services/attendance-correction.service';
 import { NO_CACHE_HEADERS } from '../../common/utils/no-cache-headers';
 import dayjs from 'dayjs';
 
@@ -43,6 +44,7 @@ export class EmployeeAttendanceController {
     private readonly employeeAttendanceService: EmployeeAttendanceService,
     private readonly leaveRequestsService: LeaveRequestsService,
     private readonly timesheetBlockerService: TimesheetBlockerService,
+    private readonly attendanceCorrectionService: AttendanceCorrectionService,
   ) { }
 
   @UseGuards(JwtAuthGuard, ReceptionistReadOnlyGuard)
@@ -412,12 +414,13 @@ export class EmployeeAttendanceController {
         `Fetching consolidated my-timesheet for ${employeeId} (${resolvedMonth}/${resolvedYear})`,
       );
 
-      const [monthlyAttendance, blockers] = await Promise.all([
+      const [monthlyAttendance, blockers, correctionRequests] = await Promise.all([
         this.employeeAttendanceService.findByMonth(resolvedMonth, resolvedYear, employeeId),
         this.timesheetBlockerService.findAllByEmployee(employeeId),
+        this.attendanceCorrectionService.findByEmployee(employeeId, resolvedMonth, resolvedYear),
       ]);
 
-      return { monthlyAttendance, blockers };
+      return { monthlyAttendance, blockers, correctionRequests };
     } catch (error) {
       this.logger.error(
         `Error fetching my-timesheet for ${employeeId}: ${error.message}`,

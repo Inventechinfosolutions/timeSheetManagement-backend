@@ -550,15 +550,15 @@ export class EmployeeDetailsController {
 
   @Get('face/is-face-enrolled/:employeeId')
   @UseGuards(JwtAuthGuard, ReceptionistReadOnlyGuard)
-  @ApiOperation({ summary: 'Verify face for employee' })
+  @ApiOperation({ summary: 'Get face enrollment and today check-in/out status' })
   @ApiParam({ name: 'employeeId', type: String, description: 'Employee String ID' })
-  @ApiOkResponse({ description: 'Face enrolled successfully' })
-  async isFaceEnrolled(@Param('employeeId') employeeId: string) {
+  @ApiOkResponse({ description: 'Face and attendance status for today' })
+  async getFaceAttendanceStatus(@Param('employeeId') employeeId: string) {
     try {
-      this.logger.log(`Checking if face is enrolled for employee: ${employeeId}`);
-      return await this.employeeFaceService.isFaceEnrolled(employeeId);
+      this.logger.log(`Fetching face attendance status for employee: ${employeeId}`);
+      return await this.employeeFaceService.getFaceAttendanceStatus(employeeId);
     } catch (error) {
-      this.logger.error(`Error checking if face is enrolled for ${employeeId}: ${error.message}`, error.stack);
+      this.logger.error(`Error fetching face attendance status for ${employeeId}: ${error.message}`, error.stack);
       throw error;
     }
   }

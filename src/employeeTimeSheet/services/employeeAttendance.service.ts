@@ -37,6 +37,19 @@ import * as fs from 'fs';
 import * as path from 'path';
 import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc';
+import {
+  assertCheckoutAfterCheckIn,
+  assertCorrectionTimesAllowed,
+  classifyDayLeave,
+  computeCheckoutFromHours,
+  computeTotalHoursFromTimes,
+  DayLeaveKind,
+  HALF_DAY_MAX_HOURS,
+  isLeaveHalf,
+  standardCheckInTime,
+  toTimeOnly,
+  whichHalf,
+} from '../utils/attendance-time.util';
 dayjs.extend(utc);
 
 @Injectable()
@@ -150,11 +163,531 @@ export class EmployeeAttendanceService {
     }
   }
 
+  private applyManualTimeBackfill(
+    attendance: EmployeeAttendance,
+    workingDate: Date,
+    totalHours: number | null | undefined,
+  ): void {
+    if (
+      totalHours !== undefined &&
+      totalHours !== null &&
+      Number(totalHours) > 0
+    ) {
+      attendance.checkingInTime = standardCheckInTime(workingDate);
+      attendance.checkingOutTime = computeCheckoutFromHours(
+        Number(totalHours),
+        workingDate,
+      );
+    }
+  }
+
+  private applyClockFullDaySplits(attendance: EmployeeAttendance): void {
+    attendance.firstHalf = WorkLocation.OFFICE;
+    attendance.secondHalf = WorkLocation.OFFICE;
+  }
+
+  private applyClockHalfDaySplits(attendance: EmployeeAttendance): void {
+    attendance.firstHalf = WorkLocation.OFFICE;
+    attendance.secondHalf = AttendanceStatus.ABSENT;
+  }
+
+  /**
+   * Face / clock attendance: refresh halves from hours.
+   * When a half-day leave is linked, preserve the leave half and mark the worked half Office.
+   */
+  private syncClockSplitsFromHours(
+    attendance: EmployeeAttendance,
+    hours: number,
+    isNonWorkingDay: boolean,
+    isSat: boolean,
+  ): void {
+    const leaveKind = classifyDayLeave(
+      attendance.firstHalf,
+      attendance.secondHalf,
+    );
+
+    if (attendance.sourceRequestId && (leaveKind === 'first' || leaveKind === 'second')) {
+      if (leaveKind === 'first') {
+        attendance.secondHalf = WorkLocation.OFFICE;
+      } else {
+        attendance.firstHalf = WorkLocation.OFFICE;
+      }
+      return;
+    }
+
+    if (isNonWorkingDay && hours >= 1 && hours <= 9) {
+      this.applyClockFullDaySplits(attendance);
+      return;
+    }
+    if (isSat && hours > 3) {
+      this.applyClockFullDaySplits(attendance);
+      return;
+    }
+    if (hours > 0 && hours <= HALF_DAY_MAX_HOURS) {
+      this.applyClockHalfDaySplits(attendance);
+      return;
+    }
+    if (
+      hours === 9 ||
+      (isSat && hours > 3 && hours <= HALF_DAY_MAX_HOURS) ||
+      hours > HALF_DAY_MAX_HOURS
+    ) {
+      this.applyClockFullDaySplits(attendance);
+    }
+  }
+
+  private async applyHoursBasedSync(
+    attendance: EmployeeAttendance,
+  ): Promise<void> {
+    const hours = Number(attendance.totalHours || 0);
+    const recDate = new Date(attendance.workingDate);
+    const isSat = recDate.getDay() === 6;
+    const isSun = recDate.getDay() === 0;
+    const recDateStr = dayjs(recDate).format('YYYY-MM-DD');
+    const recHoliday = await this.masterHolidayService.findByDate(recDateStr);
+    const isNonWorkingDay = isSat || isSun || !!recHoliday;
+    const leaveKind = classifyDayLeave(
+      attendance.firstHalf,
+      attendance.secondHalf,
+    );
+
+    if (
+      attendance.sourceRequestId &&
+      (leaveKind === 'first' || leaveKind === 'second')
+    ) {
+      this.syncClockSplitsFromHours(attendance, hours, isNonWorkingDay, isSat);
+      attendance.status = AttendanceStatus.HALF_DAY;
+      return;
+    }
+
+    if (isNonWorkingDay && hours >= 1 && hours <= 9) {
+      attendance.status = AttendanceStatus.FULL_DAY;
+      this.syncClockSplitsFromHours(attendance, hours, isNonWorkingDay, isSat);
+    } else if (isSat && hours > 3) {
+      attendance.status = AttendanceStatus.FULL_DAY;
+      this.syncClockSplitsFromHours(attendance, hours, isNonWorkingDay, isSat);
+    } else if (hours > 0 && hours <= HALF_DAY_MAX_HOURS) {
+      this.syncClockSplitsFromHours(attendance, hours, isNonWorkingDay, isSat);
+      attendance.status = AttendanceStatus.HALF_DAY;
+    } else if (
+      hours === 9 ||
+      (isSat && hours > 3 && hours <= HALF_DAY_MAX_HOURS) ||
+      hours > HALF_DAY_MAX_HOURS
+    ) {
+      this.syncClockSplitsFromHours(attendance, hours, isNonWorkingDay, isSat);
+      attendance.status = AttendanceStatus.FULL_DAY;
+    }
+  }
+
+  async findAttendanceForDate(
+    employeeId: string,
+    workingDate: Date,
+  ): Promise<EmployeeAttendance | null> {
+    const workDate = new Date(workingDate);
+    workDate.setHours(0, 0, 0, 0);
+    const startOfDay = new Date(workDate);
+    startOfDay.setHours(0, 0, 0, 0);
+    const endOfDay = new Date(workDate);
+    endOfDay.setHours(23, 59, 59, 999);
+
+    return this.employeeAttendanceRepository.findOne({
+      where: {
+        employeeId,
+        workingDate: Between(startOfDay, endOfDay),
+      },
+    });
+  }
+
+  getDayLeaveKind(attendance: EmployeeAttendance | null): DayLeaveKind {
+    if (!attendance) return 'none';
+    const fromHalves = classifyDayLeave(
+      attendance.firstHalf,
+      attendance.secondHalf,
+    );
+    if (fromHalves !== 'none') return fromHalves;
+    // Full leave often sets status Leave with both halves leave or null halves
+    if (
+      attendance.sourceRequestId &&
+      (attendance.status === AttendanceStatus.LEAVE ||
+        String(attendance.status || '').toLowerCase() === 'leave')
+    ) {
+      return 'full';
+    }
+    return 'none';
+  }
+
+  /**
+   * System auto-cancel leave for a date when face check-in conflicts or replaces full leave.
+   */
+  async autoCancelLeaveForDate(
+    employeeId: string,
+    workingDate: Date,
+    requestId?: number | null,
+  ): Promise<void> {
+    const dateStr = dayjs(workingDate).format('YYYY-MM-DD');
+    let request: LeaveRequest | null = null;
+
+    if (requestId) {
+      request = await this.leaveRequestRepository.findOne({
+        where: { id: requestId },
+      });
+    }
+
+    if (!request) {
+      const candidates = await this.leaveRequestRepository.find({
+        where: {
+          employeeId,
+          status: In([
+            LeaveRequestStatus.PENDING,
+            LeaveRequestStatus.APPROVED,
+          ]),
+        },
+      });
+      request =
+        candidates.find((r) => {
+          const from = dayjs(r.fromDate).format('YYYY-MM-DD');
+          const to = dayjs(r.toDate).format('YYYY-MM-DD');
+          return dateStr >= from && dateStr <= to;
+        }) ?? null;
+    }
+
+    if (!request) {
+      this.logger.warn(
+        `[FACE_LEAVE] No leave request found to cancel for ${employeeId} on ${dateStr}`,
+      );
+      return;
+    }
+
+    const from = dayjs(request.fromDate).format('YYYY-MM-DD');
+    const to = dayjs(request.toDate).format('YYYY-MM-DD');
+    const isSingleDay = from === to;
+
+    if (
+      request.status === LeaveRequestStatus.PENDING ||
+      (request.status === LeaveRequestStatus.APPROVED && isSingleDay)
+    ) {
+      request.status = LeaveRequestStatus.CANCELLED;
+      request.reviewedBy = 'SYSTEM_FACE_CHECKIN';
+      await this.leaveRequestRepository.save(request);
+      this.logger.log(
+        `[FACE_LEAVE] Cancelled leave request ${request.id} for ${employeeId} on ${dateStr}`,
+      );
+      return;
+    }
+
+    // Multi-day approved: remove this date from availableDates and shrink duration
+    let dates: string[] = [];
+    if (request.availableDates) {
+      try {
+        const parsed = JSON.parse(request.availableDates);
+        if (Array.isArray(parsed)) dates = parsed.map(String);
+      } catch {
+        dates = [];
+      }
+    }
+    if (dates.length === 0) {
+      let cur = dayjs(from);
+      const end = dayjs(to);
+      while (cur.isBefore(end) || cur.isSame(end, 'day')) {
+        dates.push(cur.format('YYYY-MM-DD'));
+        cur = cur.add(1, 'day');
+      }
+    }
+
+    const remaining = dates.filter((d) => d !== dateStr);
+    request.availableDates = JSON.stringify(remaining);
+
+    const factor =
+      isLeaveHalf(request.firstHalf) && isLeaveHalf(request.secondHalf)
+        ? 1
+        : isLeaveHalf(request.firstHalf) || isLeaveHalf(request.secondHalf)
+          ? 0.5
+          : 1;
+    const nextDuration = Math.max(0, Number(request.duration || 0) - factor);
+    request.duration = nextDuration;
+
+    if (remaining.length === 0) {
+      request.status = LeaveRequestStatus.CANCELLED;
+      request.reviewedBy = 'SYSTEM_FACE_CHECKIN';
+    } else {
+      request.fromDate = remaining[0];
+      request.toDate = remaining[remaining.length - 1];
+      request.reviewedBy = 'SYSTEM_FACE_CHECKIN';
+    }
+
+    await this.leaveRequestRepository.save(request);
+    this.logger.log(
+      `[FACE_LEAVE] Removed ${dateStr} from leave request ${request.id}; remaining=${remaining.length}`,
+    );
+  }
+
+  async upsertFaceAttendance(
+    employeeId: string,
+    workingDate: Date,
+    payload: { checkingInTime?: Date; checkingOutTime?: Date },
+  ): Promise<EmployeeAttendance> {
+    const workDate = new Date(workingDate);
+    workDate.setHours(0, 0, 0, 0);
+
+    if (!this.isEditableMonth(workDate)) {
+      throw new BadRequestException('Attendance for this month is locked.');
+    }
+
+    const blocker = await this.blockerService.isBlocked(employeeId, workDate);
+    if (blocker) {
+      throw new BadRequestException(
+        `Timesheet is locked for this date by ${blocker.blockedBy || 'Administrator'}. Please contact them to unlock.`,
+      );
+    }
+
+    const startOfDay = new Date(workDate);
+    startOfDay.setHours(0, 0, 0, 0);
+    const endOfDay = new Date(workDate);
+    endOfDay.setHours(23, 59, 59, 999);
+
+    let record = await this.employeeAttendanceRepository.findOne({
+      where: {
+        employeeId,
+        workingDate: Between(startOfDay, endOfDay),
+      },
+    });
+
+    if (!record) {
+      record = this.employeeAttendanceRepository.create({
+        employeeId,
+        workingDate: startOfDay,
+        workLocation: null,
+      });
+    }
+
+    const punchTime =
+      payload.checkingInTime ??
+      payload.checkingOutTime ??
+      record.checkingInTime ??
+      new Date();
+    let leaveKind = this.getDayLeaveKind(record);
+
+    // Leave may exist without attendance halves yet (pending) — detect via leave requests
+    if (leaveKind === 'none') {
+      const dateStr = dayjs(workDate).format('YYYY-MM-DD');
+      const candidates = await this.leaveRequestRepository.find({
+        where: {
+          employeeId,
+          status: In([
+            LeaveRequestStatus.PENDING,
+            LeaveRequestStatus.APPROVED,
+          ]),
+        },
+      });
+      const covering = candidates.find((r) => {
+        const from = dayjs(r.fromDate).format('YYYY-MM-DD');
+        const to = dayjs(r.toDate).format('YYYY-MM-DD');
+        return dateStr >= from && dateStr <= to;
+      });
+      if (covering) {
+        leaveKind = classifyDayLeave(covering.firstHalf, covering.secondHalf);
+        if (leaveKind === 'none') {
+          leaveKind = 'full';
+        }
+        if (!record.sourceRequestId) {
+          record.sourceRequestId = covering.id;
+        }
+        if (!record.firstHalf && covering.firstHalf) {
+          record.firstHalf = covering.firstHalf as any;
+        }
+        if (!record.secondHalf && covering.secondHalf) {
+          record.secondHalf = covering.secondHalf as any;
+        }
+      }
+    }
+
+    const punchHalf = whichHalf(punchTime, workDate);
+
+    const conflictsWithLeave =
+      leaveKind === 'full' ||
+      (leaveKind === 'first' && punchHalf === 'first') ||
+      (leaveKind === 'second' && punchHalf === 'second');
+
+    const keepHalfLeave =
+      (leaveKind === 'first' && punchHalf === 'second') ||
+      (leaveKind === 'second' && punchHalf === 'first');
+
+    if (conflictsWithLeave) {
+      await this.autoCancelLeaveForDate(
+        employeeId,
+        workDate,
+        record.sourceRequestId,
+      );
+      record.sourceRequestId = null;
+      record.firstHalf = null;
+      record.secondHalf = null;
+      if (record.status === AttendanceStatus.LEAVE) {
+        record.status = null;
+      }
+    } else if (keepHalfLeave) {
+      // Preserve leave half — do not clear sourceRequestId
+      this.logger.log(
+        `[FACE_LEAVE] Keeping ${leaveKind}-half leave for ${employeeId}; working ${punchHalf} half`,
+      );
+    }
+
+    if (payload.checkingInTime) {
+      record.checkingInTime = toTimeOnly(payload.checkingInTime);
+    }
+
+    if (payload.checkingOutTime) {
+      record.checkingOutTime = toTimeOnly(payload.checkingOutTime);
+
+      const checkInTime =
+        record.checkingInTime ?? standardCheckInTime(workDate);
+      if (!record.checkingInTime) {
+        record.checkingInTime = checkInTime;
+      }
+
+      assertCheckoutAfterCheckIn(
+        checkInTime,
+        record.checkingOutTime,
+        workDate,
+      );
+
+      const totalHours = computeTotalHoursFromTimes(
+        checkInTime,
+        record.checkingOutTime,
+        workDate,
+      );
+      record.totalHours = totalHours;
+      record.status = await this.determineStatus(
+        totalHours,
+        workDate,
+        record.firstHalf,
+        record.secondHalf,
+      );
+      await this.applyHoursBasedSync(record);
+    }
+
+    const saved = await this.employeeAttendanceRepository.save(record);
+
+    if (payload.checkingOutTime) {
+      this.triggerMonthStatusRecalc(saved.employeeId, saved.workingDate).catch(
+        () => {},
+      );
+    }
+
+    return saved;
+  }
+
+  async applyApprovedCorrection(
+    employeeId: string,
+    workingDate: Date,
+    checkingInTime: Date,
+    checkingOutTime: Date,
+  ): Promise<EmployeeAttendance> {
+    const workDate = new Date(workingDate);
+    workDate.setHours(0, 0, 0, 0);
+
+    const startOfDay = new Date(workDate);
+    startOfDay.setHours(0, 0, 0, 0);
+    const endOfDay = new Date(workDate);
+    endOfDay.setHours(23, 59, 59, 999);
+
+    let record = await this.employeeAttendanceRepository.findOne({
+      where: {
+        employeeId,
+        workingDate: Between(startOfDay, endOfDay),
+      },
+    });
+
+    if (!record) {
+      record = this.employeeAttendanceRepository.create({
+        employeeId,
+        workingDate: startOfDay,
+        workLocation: null,
+      });
+    }
+
+    const leaveKind = this.getDayLeaveKind(record);
+    assertCorrectionTimesAllowed(
+      leaveKind,
+      checkingInTime,
+      checkingOutTime,
+      workDate,
+    );
+
+    const preservedFirst =
+      leaveKind === 'first' ? record.firstHalf : undefined;
+    const preservedSecond =
+      leaveKind === 'second' ? record.secondHalf : undefined;
+    const preservedSource =
+      leaveKind === 'first' || leaveKind === 'second'
+        ? record.sourceRequestId
+        : null;
+
+    record.checkingInTime = toTimeOnly(checkingInTime);
+    record.checkingOutTime = toTimeOnly(checkingOutTime);
+
+    const totalHours = computeTotalHoursFromTimes(
+      record.checkingInTime,
+      record.checkingOutTime,
+      workDate,
+    );
+    record.totalHours = totalHours;
+
+    if (leaveKind === 'first' || leaveKind === 'second') {
+      record.sourceRequestId = preservedSource;
+      if (leaveKind === 'first') {
+        record.firstHalf = preservedFirst ?? AttendanceStatus.LEAVE;
+        record.secondHalf = WorkLocation.OFFICE;
+      } else {
+        record.firstHalf = WorkLocation.OFFICE;
+        record.secondHalf = preservedSecond ?? AttendanceStatus.LEAVE;
+      }
+      record.status = AttendanceStatus.HALF_DAY;
+    } else {
+      record.status = await this.determineStatus(
+        totalHours,
+        workDate,
+        record.firstHalf,
+        record.secondHalf,
+      );
+      await this.applyHoursBasedSync(record);
+    }
+
+    const saved = await this.employeeAttendanceRepository.save(record);
+    this.triggerMonthStatusRecalc(saved.employeeId, saved.workingDate).catch(
+      () => {},
+    );
+    return saved;
+  }
+
+  private assertEmployeeManualHoursBlocked(
+    dto: Partial<EmployeeAttendanceDto>,
+    isPrivileged: boolean,
+  ): void {
+    if (isPrivileged) return;
+    if (dto.sourceRequestId) return;
+
+    const hasManualHours =
+      dto.totalHours !== undefined && dto.totalHours !== null;
+    const hasManualSplits =
+      dto.firstHalf !== undefined || dto.secondHalf !== undefined;
+
+    if (hasManualHours || hasManualSplits) {
+      throw new BadRequestException(
+        'Manual hour entry is disabled. Use face check-in/out or submit a Request Change for approval.',
+      );
+    }
+  }
+
   async create(
     createEmployeeAttendanceDto: EmployeeAttendanceDto,
     isPrivileged: boolean = false,
   ): Promise<EmployeeAttendance | null> {
     try {
+      this.assertEmployeeManualHoursBlocked(
+        createEmployeeAttendanceDto,
+        isPrivileged,
+      );
+
       if (
         !isPrivileged &&
         !this.isEditableMonth(new Date(createEmployeeAttendanceDto.workingDate))
@@ -347,17 +880,12 @@ export class EmployeeAttendanceService {
         } else if (isSat && hours > 3) {
           existingRecord.status = AttendanceStatus.FULL_DAY;
         } else if (hours > 0 && hours <= 6) {
-          // Relaxed enforcement: Only set defaults if no source request is linked and splits are empty
-          if (
-            !existingRecord.sourceRequestId &&
-            (!existingRecord.firstHalf || !existingRecord.secondHalf)
-          ) {
-            existingRecord.firstHalf = WorkLocation.OFFICE;
-            existingRecord.secondHalf = AttendanceStatus.LEAVE;
-            this.logger.log(
-              `[ATTENDANCE_CREATE] Enforced default Half Day splits for Record ${existingRecord.id}`,
-            );
-          }
+          this.syncClockSplitsFromHours(
+            existingRecord,
+            hours,
+            isNonWorkingDay,
+            isSat,
+          );
           existingRecord.status = AttendanceStatus.HALF_DAY;
           this.logger.log(
             `[ATTENDANCE_CREATE] Synchronized Half Day status (<= 6h)`,
@@ -367,28 +895,12 @@ export class EmployeeAttendanceService {
           (isSat && hours > 3 && hours <= 6) ||
           hours > 6
         ) {
-          // RELAXED ENFORCEMENT: Only set default Office splits if they are currently empty or stationary
-          // and no source request is linked.
-          const currentH1 = (existingRecord.firstHalf || '').toLowerCase();
-          const currentH2 = (existingRecord.secondHalf || '').toLowerCase();
-          const isH1Work =
-            currentH1.includes('wfh') ||
-            currentH1.includes('work from home') ||
-            currentH1.includes('client visit') ||
-            currentH1.includes('office');
-          const isH2Work =
-            currentH2.includes('wfh') ||
-            currentH2.includes('work from home') ||
-            currentH2.includes('client visit') ||
-            currentH2.includes('office');
-
-          if (!existingRecord.sourceRequestId && !isH1Work && !isH2Work) {
-            existingRecord.firstHalf = WorkLocation.OFFICE;
-            existingRecord.secondHalf = WorkLocation.OFFICE;
-            this.logger.log(
-              `[ATTENDANCE_CREATE] Defaulted Full Day splits to Office for Record ${existingRecord.id} (${hours}h)`,
-            );
-          }
+          this.syncClockSplitsFromHours(
+            existingRecord,
+            hours,
+            isNonWorkingDay,
+            isSat,
+          );
           existingRecord.status = AttendanceStatus.FULL_DAY;
           this.logger.log(
             `[ATTENDANCE_SYNC] Synchronized Full Day status for existing record (${hours}h)`,
@@ -449,6 +961,12 @@ export class EmployeeAttendanceService {
             `[ATTENDANCE_CREATE] Synchronized ${isClear ? 'NULL' : '0'} hours status: ${existingRecord.status}`,
           );
         }
+
+        this.applyManualTimeBackfill(
+          existingRecord,
+          workingDateObj,
+          existingRecord.totalHours,
+        );
 
         const saved =
           await this.employeeAttendanceRepository.save(existingRecord);
@@ -524,17 +1042,12 @@ export class EmployeeAttendanceService {
       } else if (isSat && hours > 3) {
         newAttendance.status = AttendanceStatus.FULL_DAY;
       } else if (hours > 0 && hours <= 6) {
-        // Relaxed enforcement: Only set defaults if no source request is linked and splits are empty
-        if (
-          !newAttendance.sourceRequestId &&
-          (!newAttendance.firstHalf || !newAttendance.secondHalf)
-        ) {
-          newAttendance.firstHalf = WorkLocation.OFFICE;
-          newAttendance.secondHalf = AttendanceStatus.LEAVE;
-          this.logger.log(
-            `[ATTENDANCE_CREATE] Enforced default Half Day splits for NEW record`,
-          );
-        }
+        this.syncClockSplitsFromHours(
+          newAttendance,
+          hours,
+          isNonWorkingDay,
+          isSat,
+        );
         newAttendance.status = AttendanceStatus.HALF_DAY;
         this.logger.log(
           `[ATTENDANCE_CREATE] Synchronized Half Day status (<= 6h)`,
@@ -544,27 +1057,12 @@ export class EmployeeAttendanceService {
         (isSat && hours > 3 && hours <= 6) ||
         hours > 6
       ) {
-        // RELAXED ENFORCEMENT: Only set default Office splits if they are currently empty or stationary
-        const currentH1 = (newAttendance.firstHalf || '').toLowerCase();
-        const currentH2 = (newAttendance.secondHalf || '').toLowerCase();
-        const isH1Work =
-          currentH1.includes('wfh') ||
-          currentH1.includes('work from home') ||
-          currentH1.includes('client visit') ||
-          currentH1.includes('office');
-        const isH2Work =
-          currentH2.includes('wfh') ||
-          currentH2.includes('work from home') ||
-          currentH2.includes('client visit') ||
-          currentH2.includes('office');
-
-        if (!newAttendance.sourceRequestId && !isH1Work && !isH2Work) {
-          newAttendance.firstHalf = WorkLocation.OFFICE;
-          newAttendance.secondHalf = WorkLocation.OFFICE;
-          this.logger.log(
-            `[ATTENDANCE_CREATE] Defaulted Full Day splits to Office for NEW record (${hours}h)`,
-          );
-        }
+        this.syncClockSplitsFromHours(
+          newAttendance,
+          hours,
+          isNonWorkingDay,
+          isSat,
+        );
         newAttendance.status = AttendanceStatus.FULL_DAY;
         this.logger.log(
           `[ATTENDANCE_SYNC] Synchronized Full Day status for NEW record (${hours}h)`,
@@ -620,6 +1118,12 @@ export class EmployeeAttendanceService {
           `[ATTENDANCE_CREATE] Synchronized ${isClear ? 'NULL' : '0'} hours status: ${newAttendance.status}`,
         );
       }
+
+      this.applyManualTimeBackfill(
+        newAttendance,
+        workingDateObj,
+        newAttendance.totalHours,
+      );
 
       const saved = await this.employeeAttendanceRepository.save(newAttendance);
       this.logger.log(
@@ -1030,6 +1534,8 @@ export class EmployeeAttendanceService {
     try {
       const attendance = await this.findOne(id);
 
+      this.assertEmployeeManualHoursBlocked(updateDto, isPrivileged);
+
       this.logger.log(`[ATTENDANCE_UPDATE] ===== START UPDATE =====`);
       this.logger.log(
         `[ATTENDANCE_UPDATE] Updating attendance ID: ${id}, EmployeeID: ${attendance.employeeId}`,
@@ -1360,6 +1866,12 @@ export class EmployeeAttendanceService {
           `[ATTENDANCE_UPDATE] Auto-filled missing splits for Full Day: ${attendance.firstHalf}, ${attendance.secondHalf}`,
         );
       }
+
+      this.applyManualTimeBackfill(
+        attendance,
+        workingDateObj,
+        attendance.totalHours,
+      );
 
       const saved = await this.employeeAttendanceRepository.save(attendance);
 

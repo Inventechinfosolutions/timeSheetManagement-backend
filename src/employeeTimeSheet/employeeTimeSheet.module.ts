@@ -29,6 +29,9 @@ import { FileService } from '../common/core/utils/fileType.utils';
 import { Notification } from '../notifications/entities/notification.entity';
 import { CommunicationModule } from '../python-face-communication/communication.module';
 import { EmployeeFaceService } from './services/employeeFace.service';
+import { AttendanceCorrectionRequest } from './entities/attendance-correction-request.entity';
+import { AttendanceCorrectionService } from './services/attendance-correction.service';
+import { AttendanceCorrectionController } from './controllers/attendance-correction.controller';
 
 @Module({
   imports: [
@@ -39,6 +42,7 @@ import { EmployeeFaceService } from './services/employeeFace.service';
       User, 
       TimesheetBlocker,
       LeaveRequest,
+      AttendanceCorrectionRequest,
       DocumentMetaInfo,
       ManagerMapping,
       MasterHolidays,
@@ -58,6 +62,7 @@ import { EmployeeFaceService } from './services/employeeFace.service';
     EmployeeLinkController, 
     TimesheetBlockerController,
     LeaveRequestsController,
+    AttendanceCorrectionController,
   ],
   providers: [
     EmployeeAttendanceService, 
@@ -67,7 +72,8 @@ import { EmployeeFaceService } from './services/employeeFace.service';
     LeaveRequestsService,
     FileService,
     EmployeeFaceService,
+    AttendanceCorrectionService,
   ],
-  exports: [EmployeeDetailsService, EmployeeLinkService],
+  exports: [EmployeeDetailsService, EmployeeLinkService, LeaveRequestsService, EmployeeAttendanceService],
 })
 export class EmployeeTimeSheetModule {}

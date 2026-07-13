@@ -8,7 +8,7 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
       imports: [ConfigModule],
       useFactory: (configService: ConfigService) => {
         const dbType = (configService.get<string>('DB_TYPE', 'postgres') || 'postgres').toLowerCase();
-        const synchronize = false; // Always false - use migrations for schema changes
+        const synchronize = true; // Always false - use migrations for schema changes
         const dbName = configService.get<string>('DB_NAME') || 
                        configService.get<string>('DB_DATABASE') || 
                        'timesheet_db';
