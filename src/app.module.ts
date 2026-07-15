@@ -11,6 +11,7 @@ import { UsersModule } from './users/users.module';
 import { EmployeeTimeSheetModule } from './employeeTimeSheet/employeeTimeSheet.module';
 import { MasterModule } from './master/master.module';
 import { ManagerMappingModule } from './managerMapping/managerMapping.module';
+import { AppraisalModule } from './appraisal/appraisal.module';
 import { ScheduleModule } from '@nestjs/schedule';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AttendanceCronService } from './cron/attendance.cron.service';
@@ -27,7 +28,7 @@ import * as redisStore from 'cache-manager-redis-store';
 import { CachingUtil } from './common/utils/caching.util';
 
 function getEnvFiles(): string[] {
-  const profile = process.env.PROFILE || 'dev';
+  const profile = process.env.PROFILE || 'local';
   return [`.env.${profile}`, '.env'];
 }
 
@@ -43,6 +44,7 @@ function getEnvFiles(): string[] {
     EmployeeTimeSheetModule,
     MasterModule,
     ManagerMappingModule,
+    AppraisalModule,
     ScheduleModule.forRoot(),
     TypeOrmModule.forFeature([
       EmployeeAttendance,
@@ -100,4 +102,4 @@ function getEnvFiles(): string[] {
   ],
 })
 // Registered ManagerMappingModule
-export class AppModule {}
+export class AppModule { }
