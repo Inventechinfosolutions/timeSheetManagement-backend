@@ -16,6 +16,9 @@ export class ManagerMapping extends BaseEntity {
   @Column({ name: 'manager_name' })
   managerName: string;
 
+  @Column({ name: 'manager_id', nullable: true, type: 'varchar' })
+  managerId: string | null;
+
   @Column({ name: 'employee_id' })
   employeeId: string;
 
