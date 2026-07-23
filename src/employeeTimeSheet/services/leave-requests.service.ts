@@ -777,8 +777,8 @@ export class LeaveRequestsService {
       const total = await query.getCount();
 
       const data = await query
-        .orderBy('lr.createdAt', 'DESC')
-        .addOrderBy('lr.updatedAt', 'DESC')
+        .orderBy('lr.submittedDate', 'DESC')
+        .addOrderBy('lr.createdAt', 'DESC')
         .addOrderBy('lr.id', 'DESC')
         .offset((page - 1) * limit)
         .limit(limit)
