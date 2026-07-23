@@ -14,7 +14,7 @@ export class QuarterlyReviewService {
   constructor(
     @InjectRepository(QuarterlyReview)
     private readonly quarterlyReviewRepository: Repository<QuarterlyReview>,
-  ) {}
+  ) { }
 
   getCurrentQuarter(): string {
     const now = new Date();
@@ -46,13 +46,43 @@ export class QuarterlyReviewService {
     return `Q${quarter} FY${fyStartYear}-${String(fyStartYear + 1).slice(2)}`;
   }
 
+  private parseJsonIfNeeded(val: any): any {
+    if (typeof val === 'string') {
+      try {
+        return JSON.parse(val);
+      } catch {
+        return val;
+      }
+    }
+    return val;
+  }
+
+  private normalizeQuarter(q: string): string {
+    if (!q) return '';
+    const trimmed = q.trim();
+    // Convert slug format "Q2-FY2026-27" → "Q2 FY2026-27"
+    if (/^Q\d-FY\d{4}-\d{2}$/i.test(trimmed)) {
+      return trimmed.replace(/^(Q\d)-(FY\d{4}-\d{2})$/i, '$1 $2');
+    }
+    return trimmed;
+  }
+
+  private sanitizeReview(review: QuarterlyReview | null): QuarterlyReview | null {
+    if (!review) return null;
+    review.achievements = this.parseJsonIfNeeded(review.achievements);
+    review.challenges = this.parseJsonIfNeeded(review.challenges);
+    review.learningGoals = this.parseJsonIfNeeded(review.learningGoals);
+    return review;
+  }
+
   async findAllForEmployee(employeeId: string): Promise<QuarterlyReview[]> {
     this.logger.log(`Fetching all quarterly reviews for employee: ${employeeId}`);
     try {
-      return await this.quarterlyReviewRepository.find({
+      const reviews = await this.quarterlyReviewRepository.find({
         where: { employeeId },
         order: { quarter: 'DESC' },
       });
+      return reviews.map((r) => this.sanitizeReview(r)!);
     } catch (error) {
       this.logger.error(`Error fetching quarterly reviews for employee ${employeeId}: ${error.message}`, error.stack);
       if (error instanceof HttpException) throw error;
@@ -64,11 +94,17 @@ export class QuarterlyReviewService {
   }
 
   async findOneByQuarter(employeeId: string, quarter: string): Promise<QuarterlyReview | null> {
-    this.logger.log(`Fetching quarterly review for employee: ${employeeId}, quarter: ${quarter}`);
+    const canonicalQuarter = this.normalizeQuarter(quarter);
+    this.logger.log(`[findOneByQuarter] employeeId='${employeeId}' | raw quarter='${quarter}' | canonical='${canonicalQuarter}'`);
     try {
-      return await this.quarterlyReviewRepository.findOne({
-        where: { employeeId, quarter },
+      const review = await this.quarterlyReviewRepository.findOne({
+        where: [
+          { employeeId, quarter: canonicalQuarter },
+          { employeeId, quarter: quarter.trim() },
+        ],
       });
+      this.logger.log(`[findOneByQuarter] Found: ${review ? `id=${review.id}, quarter='${review.quarter}'` : 'null'}`);
+      return this.sanitizeReview(review);
     } catch (error) {
       this.logger.error(`Error fetching quarterly review for employee ${employeeId}, quarter ${quarter}: ${error.message}`, error.stack);
       if (error instanceof HttpException) throw error;
@@ -80,8 +116,9 @@ export class QuarterlyReviewService {
   }
 
   async saveOrSubmit(employeeId: string, dto: CreateQuarterlyReviewDto, username: string): Promise<QuarterlyReview> {
-    const { quarter, status, overview, achievements, challenges, learningGoals } = dto;
-    this.logger.log(`Saving/submitting quarterly review for employee: ${employeeId}, quarter: ${quarter}, status: ${status}`);
+    const canonicalQuarter = this.normalizeQuarter(dto.quarter);
+    const { status, overview, achievements, challenges, learningGoals } = dto;
+    this.logger.log(`[saveOrSubmit] employeeId='${employeeId}' | raw quarter='${dto.quarter}' | canonical='${canonicalQuarter}' | status='${status}'`);
 
     try {
       // Fetch active manager mapping for the employee
@@ -99,15 +136,19 @@ export class QuarterlyReviewService {
       }
 
       let review = await this.quarterlyReviewRepository.findOne({
-        where: { employeeId, quarter },
+        where: [
+          { employeeId, quarter: canonicalQuarter },
+          { employeeId, quarter: dto.quarter },
+        ],
       });
 
       if (review) {
         if (review.status === ReviewStatus.SUBMITTED) {
-          throw new BadRequestException(`Quarterly review for ${quarter} has already been submitted and cannot be modified.`);
+          throw new BadRequestException(`Quarterly review for ${canonicalQuarter} has already been submitted and cannot be modified.`);
         }
 
         // Update existing draft
+        review.quarter = canonicalQuarter;
         review.overview = overview ?? review.overview;
         review.achievements = achievements ?? review.achievements;
         review.challenges = challenges ?? review.challenges;
@@ -123,7 +164,7 @@ export class QuarterlyReviewService {
         // Create new review
         review = this.quarterlyReviewRepository.create({
           employeeId,
-          quarter,
+          quarter: canonicalQuarter,
           status,
           overview,
           achievements,
@@ -136,9 +177,10 @@ export class QuarterlyReviewService {
         });
       }
 
-      return await this.quarterlyReviewRepository.save(review);
+      const saved = await this.quarterlyReviewRepository.save(review);
+      return this.sanitizeReview(saved)!;
     } catch (error) {
-      this.logger.error(`Error saving/submitting quarterly review for employee ${employeeId}, quarter ${quarter}: ${error.message}`, error.stack);
+      this.logger.error(`Error saving/submitting quarterly review for employee ${employeeId}, quarter ${canonicalQuarter}: ${error.message}`, error.stack);
       if (error instanceof HttpException) throw error;
       throw new HttpException(
         `Failed to save/submit quarterly review: ${error.message}`,
@@ -146,5 +188,6 @@ export class QuarterlyReviewService {
       );
     }
   }
+
 }
 

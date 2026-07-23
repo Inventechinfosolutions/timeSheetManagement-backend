@@ -24,14 +24,14 @@ export class QuarterlyReview extends BaseEntity {
   @Column({ name: 'overview', type: 'text', nullable: true })
   overview: string;
 
-  @Column({ name: 'achievements', type: 'text', nullable: true })
-  achievements: string;
+  @Column({ name: 'achievements', type: 'json', nullable: true })
+  achievements: any;
 
-  @Column({ name: 'challenges', type: 'text', nullable: true })
-  challenges: string;
+  @Column({ name: 'challenges', type: 'json', nullable: true })
+  challenges: any;
 
-  @Column({ name: 'learning_goals', type: 'text', nullable: true })
-  learningGoals: string;
+  @Column({ name: 'learning_goals', type: 'json', nullable: true })
+  learningGoals: any;
 
   @Column({ name: 'submitted_date', type: 'timestamp', nullable: true })
   submittedDate: Date | null;
