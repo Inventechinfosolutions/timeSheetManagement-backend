@@ -32,6 +32,83 @@ export class LeaveRequestsController {
     }
   }
 
+  @Get('request-types')
+  @UseGuards(JwtAuthGuard, ReceptionistReadOnlyGuard)
+  async getRequestTypes() {
+    try {
+      this.logger.log('Fetching distinct leave request types');
+      return await this.leaveRequestsService.getDistinctRequestTypes();
+    } catch (error) {
+      this.logger.error(
+        `Error fetching request types: ${error.message}`,
+        error.stack,
+      );
+      throw error;
+    }
+  }
+
+  @Get('download-excel')
+  @UseGuards(JwtAuthGuard, ReceptionistReadOnlyGuard)
+  async downloadExcel(
+    @Req() req: any,
+    @Res() res: any,
+    @Query('employeeId') employeeId?: string,
+    @Query('department') department?: string,
+    @Query('status') status?: string,
+    @Query('search') search?: string,
+    @Query('month') month: string = 'All',
+    @Query('year') year: string = 'All',
+    @Query('requestType') requestType?: string,
+  ) {
+    try {
+      this.logger.log(
+        `Downloading leave requests Excel - Month: ${month}, Year: ${year}, RequestType: ${requestType}`,
+      );
+      const user = req.user;
+      let managerName: string | undefined;
+      let managerId: string | undefined;
+
+      const roleUpper = (user?.role || '').toUpperCase();
+      if (
+        user &&
+        (user.userType === UserType.MANAGER ||
+          roleUpper.includes('MNG') ||
+          roleUpper.includes(UserType.MANAGER))
+      ) {
+        managerName = user.aliasLoginName;
+        managerId = user.loginId;
+      }
+
+      const buffer = await this.leaveRequestsService.exportRequestsToExcel({
+        employeeId,
+        department,
+        status,
+        search,
+        month,
+        year,
+        requestType,
+        managerName,
+        managerId,
+      });
+
+      const stamp = new Date().toISOString().slice(0, 10);
+      res.set({
+        ...NO_CACHE_HEADERS,
+        'Content-Type':
+          'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        'Content-Disposition': `attachment; filename=Employee_Requests_${stamp}.xlsx`,
+        'Content-Length': buffer.length,
+      });
+      res.send(buffer);
+    } catch (error) {
+      this.logger.error(
+        `Error downloading leave requests Excel: ${error.message}`,
+        error.stack,
+      );
+      throw error;
+    }
+  }
+
   @Post(':employeeId/leave-requests')
   create(@Param('employeeId') employeeId: string, @Body() body: LeaveRequestDto) {
     try {
@@ -65,11 +142,12 @@ export class LeaveRequestsController {
     @Query('search') search?: string,
     @Query('month') month: string = 'All',
     @Query('year') year: string = 'All',
+    @Query('requestType') requestType?: string,
     @Query('page') page: number = 1,
     @Query('limit') limit: number = 10,
   ) {
     try {
-      this.logger.log(`Fetching all leave requests - Month: ${month}, Year: ${year}`);
+      this.logger.log(`Fetching all leave requests - Month: ${month}, Year: ${year}, RequestType: ${requestType}`);
       const user = req.user;
       let managerName: string | undefined;
       let managerId: string | undefined;
@@ -87,6 +165,7 @@ export class LeaveRequestsController {
         search,
         month,
         year,
+        requestType,
         page,
         limit,
         managerName,
