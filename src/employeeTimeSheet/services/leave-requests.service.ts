@@ -4483,6 +4483,7 @@ export class LeaveRequestsService {
         isModified: true,
         modificationCount: (request.modificationCount || 0) + 1,
         lastModifiedDate: new Date(),
+        submittedDate: dayjs().format('YYYY-MM-DD'),
       };
       if (updateData.title !== undefined) updatedData.title = updateData.title;
       if (updateData.description !== undefined)
@@ -4500,6 +4501,7 @@ export class LeaveRequestsService {
           isHalfDay: request.isHalfDay,
           duration: request.duration,
           availableDates: request.availableDates,
+          submittedDate: request.submittedDate,
         };
         updatedData.requestModifiedFrom = `PARENT_ORIGINAL:${JSON.stringify(originalDetails)}`;
       }
@@ -4759,6 +4761,7 @@ export class LeaveRequestsService {
             isHalfDay: request.isHalfDay,
             duration: request.duration,
             availableDates: request.availableDates,
+            submittedDate: request.submittedDate,
           };
           request.requestModifiedFrom = `PARENT_ORIGINAL:${JSON.stringify(originalDetails)}`;
         }
@@ -4778,6 +4781,7 @@ export class LeaveRequestsService {
         request.isModified = true;
         request.modificationCount = (request.modificationCount || 0) + 1;
         request.lastModifiedDate = new Date();
+        request.submittedDate = dayjs().format('YYYY-MM-DD');
         const factor = isHalfDay
           ? this.getDurationFactor(fHalf, sHalf)
           : 1.0;
@@ -4882,6 +4886,7 @@ export class LeaveRequestsService {
             isModified: true,
             modificationCount: 1,
             lastModifiedDate: new Date(),
+            submittedDate: dayjs().format('YYYY-MM-DD'),
           }) as unknown as LeaveRequest;
 
           const savedNew = (await this.leaveRequestRepository.save(
@@ -5396,6 +5401,7 @@ export class LeaveRequestsService {
           if (original.isHalfDay !== undefined) request.isHalfDay = original.isHalfDay;
           if (original.duration !== undefined) request.duration = Number(original.duration);
           if (original.availableDates !== undefined) request.availableDates = original.availableDates;
+          if (original.submittedDate !== undefined) request.submittedDate = original.submittedDate;
         }
       } catch (err) {
         this.logger.error(
