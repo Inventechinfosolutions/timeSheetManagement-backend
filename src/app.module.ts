@@ -47,6 +47,7 @@ function getEnvFiles(): string[] {
   const envFiles = [`.env.${profile}`, '.env'];
   console.log(`[Config] Using PROFILE="${profile}" -> env files: ${envFiles.join(', ')}`);
   return envFiles;
+
 }
  
 @Module({
