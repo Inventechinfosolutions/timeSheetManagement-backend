@@ -44,4 +44,26 @@ export class QuarterlyReview extends BaseEntity {
 
   @Column({ name: 'manager_name', type: 'varchar', length: 150, nullable: true })
   managerName: string | null;
+
+  @Column({ name: 'review_status', type: 'varchar', length: 50, nullable: true })
+  reviewStatus: string | null;
+
+  @Column({ name: 'final_rating', type: 'varchar', length: 100, nullable: true })
+  finalRating: string | null;
+
+  @Column({ name: 'reviewed_on', type: 'timestamp', nullable: true })
+  reviewedOn: Date | null;
+
+  @Column({ name: 'ratings', type: 'json', nullable: true })
+  ratings: any;
+
+  @Column({ name: 'strengths', type: 'text', nullable: true })
+  strengths: string | null;
+
+  @Column({ name: 'improvements', type: 'text', nullable: true })
+  improvements: string | null;
+
+  @Column({ name: 'remarks', type: 'text', nullable: true })
+  remarks: string | null;
 }
+
