@@ -37,8 +37,14 @@ export class FileService {
       'application/x-rar-compressed',
     ];
 
-    // Check if detected file type is in the allowed types
-    if (!detectedFileType || !allowedMimeTypes.includes(detectedFileType.mime)) {
+    // file-type cannot detect text-based formats (.txt, .csv, .rtf) via magic
+    // bytes, so detectedFileType will be undefined for these. Fall back to the
+    // declared MIME type from the multipart header when detection fails.
+    const textBasedMimeTypes = ['text/plain', 'text/csv', 'application/rtf'];
+    const effectiveMime = detectedFileType?.mime
+      ?? (textBasedMimeTypes.includes(file.mimetype) ? file.mimetype : null);
+
+    if (!effectiveMime || !allowedMimeTypes.includes(effectiveMime)) {
       throw new BadRequestException('Invalid file type');
     }
 
@@ -47,7 +53,7 @@ export class FileService {
     const MAX_DOC_SIZE = 5 * 1024 * 1024; // 5 MB
 
     const isImage = ['image/jpeg', 'image/png', 'image/gif', 'image/avif', 'image/webp'].includes(
-      detectedFileType.mime,
+      effectiveMime,
     );
     const effectiveMax = typeof maxSize === 'number' ? maxSize : isImage ? MAX_IMAGE_SIZE : MAX_DOC_SIZE;
 

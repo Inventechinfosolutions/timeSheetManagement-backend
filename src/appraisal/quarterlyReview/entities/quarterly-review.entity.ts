@@ -24,14 +24,20 @@ export class QuarterlyReview extends BaseEntity {
   @Column({ name: 'overview', type: 'text', nullable: true })
   overview: string;
 
-  @Column({ name: 'achievements', type: 'json', nullable: true })
-  achievements: any;
-
-  @Column({ name: 'challenges', type: 'json', nullable: true })
-  challenges: any;
+  @Column({ name: 'projects', type: 'json', nullable: true })
+  projects: any;
 
   @Column({ name: 'learning_goals', type: 'json', nullable: true })
   learningGoals: any;
+
+  @Column({ name: 'self_rating', type: 'json', nullable: true })
+  teamContribution: any;
+
+  @Column({ name: 'average_rating', type: 'decimal', precision: 3, scale: 1, nullable: true })
+  averageRating: number;
+
+  @Column({ name: 'company_environment', type: 'json', nullable: true })
+  companyEnvironment: any;
 
   @Column({ name: 'submitted_date', type: 'timestamp', nullable: true })
   submittedDate: Date | null;

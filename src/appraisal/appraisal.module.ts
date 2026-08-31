@@ -4,6 +4,7 @@ import { QuarterlyReview } from './quarterlyReview/entities/quarterly-review.ent
 import { QuarterlyReviewController } from './quarterlyReview/controllers/quarterly-review.controller';
 import { QuarterlyReviewService } from './quarterlyReview/services/quarterly-review.service';
 import { ManagerQuarterlyReviewModule } from './ManagerQuaterlyReview/manager-quarterly-review.module';
+import { FileService } from '../common/core/utils/fileType.utils';
 
 @Module({
   imports: [
@@ -11,7 +12,7 @@ import { ManagerQuarterlyReviewModule } from './ManagerQuaterlyReview/manager-qu
     ManagerQuarterlyReviewModule,
   ],
   controllers: [QuarterlyReviewController],
-  providers: [QuarterlyReviewService],
+  providers: [QuarterlyReviewService, FileService],
   exports: [QuarterlyReviewService, TypeOrmModule],
 })
 export class AppraisalModule {}

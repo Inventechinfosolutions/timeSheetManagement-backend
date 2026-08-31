@@ -5,199 +5,235 @@ import { S3ClientService } from 'src/common/s3-client/s3-client.service';
 import { Repository } from 'typeorm';
 import { DocumentDetailsDto } from '../dto/documentdetails.dto';
 import {
-  DocumentMetaInfo,
-  EntityType,
-  ReferenceType,
+    DocumentMetaInfo,
+    EntityType,
+    ReferenceType,
 } from '../models/documentmetainfo.model';
 
 @Injectable()
 export class DocumentUploaderService {
-  private readonly logger = new Logger(DocumentUploaderService.name);
+    private readonly logger = new Logger(DocumentUploaderService.name);
 
-  constructor(
-    private s3ClientService: S3ClientService,
-    @InjectRepository(DocumentMetaInfo)
-    private readonly documentRepo: Repository<DocumentMetaInfo>,
-  ) {}
+    constructor(
+        private s3ClientService: S3ClientService,
+        @InjectRepository(DocumentMetaInfo)
+        private readonly documentRepo: Repository<DocumentMetaInfo>,
+    ) { }
 
-  async uploadImage(
-    image: BufferedFile,
-    details: DocumentMetaInfo,
-  ): Promise<{
-    image_url: string;
-    message: string;
-    key: string;
-    fileName: string;
-  }> {
-    this.logger.log(
-      `Uploading image for entity ${details.entityType} with ID ${details.entityId}`,
-    );
-    const uploaded_image = await this.s3ClientService.upload(image, details);
-    this.logger.debug(
-      `Image uploaded successfully with URL: ${uploaded_image.url}`,
-    );
-    return {
-      image_url: uploaded_image.url,
-      key: uploaded_image.key,
-      fileName: uploaded_image.fileName,
-      message: 'Image upload successful',
-    };
-  }
+    async uploadImage(
+        image: BufferedFile,
+        details: DocumentMetaInfo,
+    ) {
+        const mimeType = image.mimetype || 'application/octet-stream';
+        const fileType = this.detectFileType(mimeType, image.originalname);
+        const fileTypeLabel = fileType.charAt(0).toUpperCase() + fileType.slice(1);
 
-  async downloadFile(key: string) {
-    this.logger.log(`Downloading file with key: ${key}`);
-    return await this.s3ClientService.downloadFile(key);
-  }
-
-  async getMetaData(key: string) {
-    this.logger.debug(`Getting metadata for key: ${key}`);
-    return await this.s3ClientService.getMetaData(key);
-  }
-
-  async deleteMinioDoc(key: string) {
-    try {
-      this.logger.log(`Attempting to delete document with key: ${key}`);
-      let isImageExists = false;
-      try {
-        const metadata = await this.s3ClientService.getMetaData(key);
-        isImageExists = !!metadata;
-      } catch (error) {
-        // If metadata fetch fails (likely 404), it means image is already gone
-        this.logger.warn(`Image already missing from storage for key: ${key}. Proceeding with database cleanup.`);
-        return { message: 'Image already missing, cleaning up record' };
-      }
-      
-      if (!isImageExists) {
-        return { message: 'Image already missing, cleaning up record' };
-      }
-      await this.s3ClientService.delete(key);
-      this.logger.debug(`Successfully deleted image with key: ${key}`);
-
-      return {
-        message: 'Image deleted successfully',
-      };
-    } catch (error) {
-      this.logger.error(
-        `Failed to delete image with key ${key}: ${error.message}`,
-      );
-      throw new HttpException(
-        'Failed to delete image',
-        HttpStatus.INTERNAL_SERVER_ERROR,
-      );
-    }
-  }
-
-  async getAllDocs(
-    entityType: EntityType,
-    entityId: number,
-    referenceType?: ReferenceType,
-    referenceId?: number,
-  ) {
-    try {
-      this.logger.log(
-        `Getting all documents for entity ${entityType} with ID ${entityId}, refId ${referenceId}`,
-      );
-      const query = this.documentRepo
-        .createQueryBuilder('doc')
-        .where('doc.entityType = :entityType', { entityType });
-
-      // Strict Filtering Logic:
-      // 1. Filter by entityId (Employee ID) to maintain security boundaries, allowing 0 as fallback for improperly linked docs.
-      // 2. Filter by refId (Request ID) if it's explicitly provided (including 0).
-      query.andWhere('doc.entityId = :entityId', {
-        entityId,
-      });
-
-      if (referenceId != null) {
-        query.andWhere('doc.refId = :referenceId', { referenceId });
-      }
-
-      if (referenceType) {
-        query.andWhere('doc.refType = :referenceType', { referenceType });
-      }
-
-      const objects = await query.getMany();
-      this.logger.debug(`Found ${objects.length} documents`);
-
-      const docs: DocumentDetailsDto[] = [];
-      for (const e of objects) {
-        try {
-          const s3Key = e.s3Key || e.id;
-          const metadata = await this.getMetaData(s3Key);
-          const docDetails = new DocumentDetailsDto();
-          docDetails.entityType = e.entityType;
-          docDetails.entityId = e.entityId;
-          docDetails.refType = e.refType;
-          docDetails.refId = e.refId;
-          docDetails.name = metadata.filename;
-          docDetails.key = metadata.id;
-          docDetails.createdAt = e.createdAt;
-          docs.push(docDetails);
-        } catch (error) {
-          if (
-            error instanceof HttpException &&
-            error.getStatus() === HttpStatus.SERVICE_UNAVAILABLE
-          ) {
-            throw error;
-          }
-          this.logger.error('Error processing document metadata:', {
-            documentId: e.id,
-            error: error.message,
-          });
-          // When S3 is unreachable (e.g. ETIMEDOUT), still add doc from DB so caller can try download and return 503 instead of 404
-          const fallback = new DocumentDetailsDto();
-          fallback.key = e.s3Key || e.id;
-          fallback.name = e.id;
-          fallback.entityType = e.entityType;
-          fallback.entityId = e.entityId;
-          fallback.refType = e.refType;
-          fallback.refId = e.refId;
-          fallback.createdAt = e.createdAt;
-          docs.push(fallback);
-        }
-      }
-
-      return docs;
-    } catch (error) {
-      this.logger.error('Error fetching documents:', {
-        entityType,
-        entityId,
-        referenceType,
-        referenceId,
-        error: error.message,
-      });
-      return [];
-    }
-  }
-
-  async deleteDoc(key: string) {
-    try {
-      this.logger.log(`Attempting to delete document with key: ${key}`);
-      const doc = await this.documentRepo.findOne({
-        where: { id: key },
-      });
-
-      if (!doc) {
-        this.logger.warn(`Document not found with key: ${key}`);
-        throw new HttpException(
-          `Document with ID ${key} not found`,
-          HttpStatus.NOT_FOUND,
+        this.logger.log(
+            `Uploading ${fileType} file for entity ${details.entityType} with ID ${details.entityId}`,
         );
-      }
+        const uploaded = await this.s3ClientService.upload(image, details);
+        this.logger.debug(
+            `${fileTypeLabel} uploaded successfully with URL: ${uploaded.url}`,
+        );
 
-      await this.deleteMinioDoc(key);
-      await this.documentRepo.delete(key);
+        const result: Record<string, any> = {
+            url: uploaded.url,
+            file_url: uploaded.url,
+            key: uploaded.key,
+            fileName: uploaded.fileName,
+            fileType,
+            mimeType,
+            message: `${fileTypeLabel} upload successful`,
+        };
 
-      this.logger.debug(`Successfully deleted document with key: ${key}`);
-      return;
-    } catch (error) {
-      this.logger.error(
-        `Failed to delete document with key ${key}: ${error.message}`,
-      );
-      throw new HttpException(
-        `Document with ID ${key} not found`,
-        HttpStatus.NOT_FOUND,
-      );
+        // Only include image_url for actual image files
+        if (fileType === 'image') {
+            result.image_url = uploaded.url;
+        }
+
+        return result;
     }
-  }
+
+    private detectFileType(mimeType: string, fileName?: string): string {
+        if (mimeType === 'application/pdf') return 'pdf';
+        if (mimeType.startsWith('image/')) return 'image';
+        if (
+            mimeType === 'application/msword' ||
+            mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+        ) return 'document';
+        if (
+            mimeType === 'application/vnd.ms-excel' ||
+            mimeType === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        ) return 'spreadsheet';
+        if (mimeType === 'text/plain') return 'text';
+
+        // Fallback: check file extension
+        if (fileName) {
+            const ext = fileName.substring(fileName.lastIndexOf('.')).toLowerCase();
+            if (ext === '.pdf') return 'pdf';
+            if (['.png', '.jpg', '.jpeg', '.gif', '.webp'].includes(ext)) return 'image';
+            if (['.doc', '.docx'].includes(ext)) return 'document';
+            if (['.xls', '.xlsx'].includes(ext)) return 'spreadsheet';
+            if (ext === '.txt') return 'text';
+        }
+
+        return 'file';
+    }
+
+    async downloadFile(key: string) {
+        this.logger.log(`Downloading file with key: ${key}`);
+        return await this.s3ClientService.downloadFile(key);
+    }
+
+    async getMetaData(key: string) {
+        this.logger.debug(`Getting metadata for key: ${key}`);
+        return await this.s3ClientService.getMetaData(key);
+    }
+
+    async deleteMinioDoc(key: string) {
+        try {
+            this.logger.log(`Attempting to delete document with key: ${key}`);
+            let isImageExists = false;
+            try {
+                const metadata = await this.s3ClientService.getMetaData(key);
+                isImageExists = !!metadata;
+            } catch (error) {
+                // If metadata fetch fails (likely 404), it means image is already gone
+                this.logger.warn(`Image already missing from storage for key: ${key}. Proceeding with database cleanup.`);
+                return { message: 'Image already missing, cleaning up record' };
+            }
+
+            if (!isImageExists) {
+                return { message: 'Image already missing, cleaning up record' };
+            }
+            await this.s3ClientService.delete(key);
+            this.logger.debug(`Successfully deleted image with key: ${key}`);
+
+            return {
+                message: 'Image deleted successfully',
+            };
+        } catch (error) {
+            this.logger.error(
+                `Failed to delete image with key ${key}: ${error.message}`,
+            );
+            throw new HttpException(
+                'Failed to delete image',
+                HttpStatus.INTERNAL_SERVER_ERROR,
+            );
+        }
+    }
+
+    async getAllDocs(
+        entityType: EntityType,
+        entityId: number,
+        referenceType?: ReferenceType,
+        referenceId?: number,
+    ) {
+        try {
+            this.logger.log(
+                `Getting all documents for entity ${entityType} with ID ${entityId}, refId ${referenceId}`,
+            );
+            const query = this.documentRepo
+                .createQueryBuilder('doc')
+                .where('doc.entityType = :entityType', { entityType });
+
+            // Strict Filtering Logic:
+            // 1. Filter by entityId (Employee ID) to maintain security boundaries, allowing 0 as fallback for improperly linked docs.
+            // 2. Filter by refId (Request ID) if it's explicitly provided (including 0).
+            query.andWhere('doc.entityId = :entityId', {
+                entityId,
+            });
+
+            if (referenceId != null) {
+                query.andWhere('doc.refId = :referenceId', { referenceId });
+            }
+
+            if (referenceType) {
+                query.andWhere('doc.refType = :referenceType', { referenceType });
+            }
+
+            const objects = await query.getMany();
+            this.logger.debug(`Found ${objects.length} documents`);
+
+            const docs: DocumentDetailsDto[] = [];
+            for (const e of objects) {
+                try {
+                    const s3Key = e.s3Key || e.id;
+                    const metadata = await this.getMetaData(s3Key);
+                    const docDetails = new DocumentDetailsDto();
+                    docDetails.entityType = e.entityType;
+                    docDetails.entityId = e.entityId;
+                    docDetails.refType = e.refType;
+                    docDetails.refId = e.refId;
+                    docDetails.name = metadata.filename;
+                    docDetails.key = metadata.id;
+                    docDetails.createdAt = e.createdAt;
+                    docs.push(docDetails);
+                } catch (error) {
+                    if (
+                        error instanceof HttpException &&
+                        error.getStatus() === HttpStatus.SERVICE_UNAVAILABLE
+                    ) {
+                        throw error;
+                    }
+                    this.logger.error('Error processing document metadata:', {
+                        documentId: e.id,
+                        error: error.message,
+                    });
+                    // When S3 is unreachable (e.g. ETIMEDOUT), still add doc from DB so caller can try download and return 503 instead of 404
+                    const fallback = new DocumentDetailsDto();
+                    fallback.key = e.s3Key || e.id;
+                    fallback.name = e.id;
+                    fallback.entityType = e.entityType;
+                    fallback.entityId = e.entityId;
+                    fallback.refType = e.refType;
+                    fallback.refId = e.refId;
+                    fallback.createdAt = e.createdAt;
+                    docs.push(fallback);
+                }
+            }
+
+            return docs;
+        } catch (error) {
+            this.logger.error('Error fetching documents:', {
+                entityType,
+                entityId,
+                referenceType,
+                referenceId,
+                error: error.message,
+            });
+            return [];
+        }
+    }
+
+    async deleteDoc(key: string) {
+        try {
+            this.logger.log(`Attempting to delete document with key: ${key}`);
+            const doc = await this.documentRepo.findOne({
+                where: { id: key },
+            });
+
+            if (!doc) {
+                this.logger.warn(`Document not found with key: ${key}`);
+                throw new HttpException(
+                    `Document with ID ${key} not found`,
+                    HttpStatus.NOT_FOUND,
+                );
+            }
+
+            await this.deleteMinioDoc(key);
+            await this.documentRepo.delete(key);
+
+            this.logger.debug(`Successfully deleted document with key: ${key}`);
+            return;
+        } catch (error) {
+            this.logger.error(
+                `Failed to delete document with key ${key}: ${error.message}`,
+            );
+            throw new HttpException(
+                `Document with ID ${key} not found`,
+                HttpStatus.NOT_FOUND,
+            );
+        }
+    }
 }
