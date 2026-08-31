@@ -53,7 +53,7 @@ export class ManagerMappingService {
           .leftJoin('employee_details', 'manager', 'managerMapping.managerName = manager.full_name') // Using leftJoin instead of join to avoid issues with missing details for some mappings
           .leftJoin('users', 'user', 'manager.employee_id = user.loginId')
           .andWhere(
-            '(managerMapping.managerName = :managerName OR user.loginId = :managerName OR manager.employee_id = :managerName)',
+            '(managerMapping.managerName = :managerName OR managerMapping.managerId = :managerName OR user.loginId = :managerName OR manager.employee_id = :managerName)',
             { managerName },
           )
           .andWhere('user.status = :activeStatus', { activeStatus: UserStatus.ACTIVE });
@@ -120,10 +120,19 @@ export class ManagerMappingService {
       const rawItems = await Promise.all(
         paginatedResult.items.map(async (entity) => {
           const dto = ManagerMappingMapper.fromEntityToDTO(entity);
-          if (dto && managerName) {
-            dto.managerId = managerName;
-          }
           if (dto) {
+            if (!dto.managerId) {
+              const managerDetails = await this.userRepository.manager.connection
+                .getRepository(EmployeeDetails)
+                .findOne({ where: { fullName: entity.managerName } });
+              if (managerDetails) {
+                dto.managerId = managerDetails.employeeId;
+              } else if (managerName && (managerName.startsWith('EMP') || /^\d+$/.test(managerName))) {
+                dto.managerId = managerName;
+              } else {
+                dto.managerId = entity.managerName;
+              }
+            }
             // Attach user status from raw query results if available, else fetch
             // Since we joined e_user early, we can use the count/select approach or a quick fetch
             const user = await this.userRepository.findOne({
@@ -206,6 +215,15 @@ export class ManagerMappingService {
         }
       }
 
+      if (!dto.managerId && dto.managerName) {
+        const managerDetails = await this.userRepository.manager.connection
+          .getRepository(EmployeeDetails)
+          .findOne({ where: { fullName: dto.managerName } });
+        if (managerDetails) {
+          dto.managerId = managerDetails.employeeId;
+        }
+      }
+
       const entity = ManagerMappingMapper.fromDTOtoEntity(dto);
       if (!entity) {
         throw new HttpException('Failed to convert DTO to entity', HttpStatus.INTERNAL_SERVER_ERROR);
@@ -240,6 +258,15 @@ export class ManagerMappingService {
         throw new NotFoundException(`ManagerMapping with id ${id} not found`);
       }
 
+      if (!dto.managerId && dto.managerName) {
+        const managerDetails = await this.userRepository.manager.connection
+          .getRepository(EmployeeDetails)
+          .findOne({ where: { fullName: dto.managerName } });
+        if (managerDetails) {
+          dto.managerId = managerDetails.employeeId;
+        }
+      }
+
       Object.assign(entity, dto);
 
       const updated = await this.managerMappingRepository.save(entity);
@@ -266,6 +293,15 @@ export class ManagerMappingService {
       }
 
       Object.assign(entity, updateData);
+
+      if (!entity.managerId && entity.managerName) {
+        const managerDetails = await this.userRepository.manager.connection
+          .getRepository(EmployeeDetails)
+          .findOne({ where: { fullName: entity.managerName } });
+        if (managerDetails) {
+          entity.managerId = managerDetails.employeeId;
+        }
+      }
 
       // Track who updated
       (entity as any).updatedBy = loginId;

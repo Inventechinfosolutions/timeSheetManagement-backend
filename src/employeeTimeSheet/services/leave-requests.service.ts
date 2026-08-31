@@ -57,6 +57,7 @@ import { User } from '../../users/entities/user.entity';
 import { NotificationsService } from '../../notifications/Services/notifications.service';
 import { MasterHolidays } from '../../master/models/master-holidays.entity';
 import { LeaveRequestDto } from '../dto/leave-request.dto';
+import * as ExcelJS from 'exceljs';
 
 @Injectable()
 export class LeaveRequestsService {
@@ -622,6 +623,103 @@ export class LeaveRequestsService {
     ];
   }
 
+  /** Same labels as the Employee Requests table (including combined types). */
+  getTableRequestTypeLabel(req: {
+    requestType?: string;
+    firstHalf?: string;
+    secondHalf?: string;
+    isHalfDay?: boolean | number | string;
+  }): string {
+    const normalize = (type: string): string => {
+      const t = (type || '').trim();
+      if (t === LeaveRequestType.APPLY_LEAVE || t === LeaveRequestType.LEAVE)
+        return 'Leave';
+      if (
+        t === WorkLocation.WORK_FROM_HOME ||
+        t === 'WFH' ||
+        t.toLowerCase() === 'work from home'
+      )
+        return 'Work From Home';
+      if (t === WorkLocation.CLIENT_VISIT) return 'Client Visit';
+      if (t === WorkLocation.OFFICE) return 'Office';
+      // Always show one label for half-day leave (never bare "Half Day")
+      if (
+        t === AttendanceStatus.HALF_DAY ||
+        t === LeaveRequestType.HALF_DAY ||
+        t.toLowerCase() === 'half day leave'
+      )
+        return 'Half Day Leave';
+      return t;
+    };
+
+    const isHalf =
+      req.isHalfDay === true || req.isHalfDay === 1 || req.isHalfDay === '1';
+    if (isHalf && req.firstHalf && req.secondHalf) {
+      let first = normalize(req.firstHalf);
+      let second = normalize(req.secondHalf);
+      if (first === 'Leave') first = 'Half Day Leave';
+      if (second === 'Leave') second = 'Half Day Leave';
+      if (first === second) return first;
+      return `${first} + ${second}`;
+    }
+
+    const raw = (req.requestType || '').trim();
+    if (!raw) return '';
+    if (raw === LeaveRequestType.APPLY_LEAVE || raw === LeaveRequestType.LEAVE)
+      return 'Leave';
+    if (
+      raw === AttendanceStatus.HALF_DAY ||
+      raw === LeaveRequestType.HALF_DAY ||
+      raw.toLowerCase() === 'half day'
+    )
+      return 'Half Day Leave';
+    return normalize(raw) !== raw ? normalize(raw) : raw;
+  }
+
+  async getDistinctRequestTypes(): Promise<string[]> {
+    this.logger.log('[FETCH] Getting distinct request types for filter');
+    try {
+      const rows = await this.leaveRequestRepository
+        .createQueryBuilder('lr')
+        .select([
+          'lr.requestType AS requestType',
+          'lr.firstHalf AS firstHalf',
+          'lr.secondHalf AS secondHalf',
+          'lr.isHalfDay AS isHalfDay',
+        ])
+        .getRawMany();
+
+      const labels = new Set<string>();
+      // Base apply types (single Half Day Leave — not both Half Day + Half Day Leave)
+      labels.add('Leave');
+      labels.add('Work From Home');
+      labels.add('Client Visit');
+      labels.add('Half Day Leave');
+
+      for (const row of rows) {
+        let label = this.getTableRequestTypeLabel(row);
+        if (!label) continue;
+        // Collapse legacy "Half Day" into "Half Day Leave"
+        if (label.toLowerCase() === 'half day') label = 'Half Day Leave';
+        labels.add(label);
+      }
+
+      // Ensure bare "Half Day" never appears in the dropdown
+      labels.delete('Half Day');
+
+      return Array.from(labels).sort((a, b) => a.localeCompare(b));
+    } catch (error) {
+      this.logger.error(
+        `[FETCH] Failed to get distinct request types: ${error.message}`,
+        error.stack,
+      );
+      throw new HttpException(
+        `Failed to fetch request types: ${error.message}`,
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
+  }
+
   async findUnifiedRequests(filters: {
     employeeId?: string;
     department?: string;
@@ -629,10 +727,12 @@ export class LeaveRequestsService {
     search?: string;
     month?: string;
     year?: string;
+    requestType?: string;
     page?: number;
     limit?: number;
     managerName?: string;
     managerId?: string;
+    forExport?: boolean;
   }) {
     this.logger.log(
       `[FETCH] Starting unified request fetch. Filters: ${JSON.stringify(filters)}`,
@@ -645,10 +745,12 @@ export class LeaveRequestsService {
         search,
         month = 'All',
         year = 'All',
+        requestType,
         page = 1,
         limit = 10,
         managerName,
         managerId,
+        forExport = false,
       } = filters;
 
       const query = this.leaveRequestRepository
@@ -673,6 +775,10 @@ export class LeaveRequestsService {
           'lr.secondHalf AS secondHalf',
           'lr.isHalfDay AS isHalfDay',
           'lr.ccEmails AS ccEmails',
+          'lr.availableDates AS availableDates',
+          'lr.reviewedBy AS reviewedBy',
+          'lr.isModified AS isModified',
+          'lr.modificationCount AS modificationCount',
           'ed.department AS department',
           'ed.fullName AS fullName',
           'ed.internId AS internId',
@@ -725,6 +831,180 @@ export class LeaveRequestsService {
         query.andWhere('lr.status = :status', { status });
       }
 
+      // 4b. Request Type Filter
+      if (requestType && requestType !== 'All') {
+        const rt = requestType.trim().toLowerCase();
+        const isBaseLeave = rt === 'leave' || rt === 'apply leave';
+        const isBaseWfh = rt === 'work from home' || rt === 'wfh';
+        const isBaseCv = rt === 'client visit';
+        const isBaseHalf =
+          rt === 'half day' || rt === 'half day leave';
+
+        if (isBaseLeave) {
+          query
+            .andWhere(
+              new Brackets((qb) => {
+                qb.where('LOWER(lr.requestType) = :leaveExact', {
+                  leaveExact: 'leave',
+                }).orWhere('LOWER(lr.requestType) = :applyLeaveExact', {
+                  applyLeaveExact: 'apply leave',
+                });
+              }),
+            )
+            .andWhere('LOWER(lr.requestType) NOT LIKE :plusSignLeave', {
+              plusSignLeave: '%+%',
+            })
+            .andWhere(
+              new Brackets((qb) => {
+                qb.where(
+                  'lr.isHalfDay = false OR lr.isHalfDay = 0 OR lr.isHalfDay IS NULL',
+                )
+                  .orWhere('lr.firstHalf IS NULL')
+                  .orWhere('lr.secondHalf IS NULL')
+                  .orWhere('LOWER(lr.firstHalf) = LOWER(lr.secondHalf)');
+              }),
+            );
+        } else if (isBaseWfh) {
+          query
+            .andWhere(
+              new Brackets((qb) => {
+                qb.where('LOWER(lr.requestType) = :wfhExact', {
+                  wfhExact: 'work from home',
+                }).orWhere('LOWER(lr.requestType) = :wfhShort', {
+                  wfhShort: 'wfh',
+                });
+              }),
+            )
+            .andWhere('LOWER(lr.requestType) NOT LIKE :plusSignWfh', {
+              plusSignWfh: '%+%',
+            })
+            .andWhere(
+              new Brackets((qb) => {
+                qb.where(
+                  'lr.isHalfDay = false OR lr.isHalfDay = 0 OR lr.isHalfDay IS NULL',
+                )
+                  .orWhere('lr.firstHalf IS NULL')
+                  .orWhere('lr.secondHalf IS NULL')
+                  .orWhere('LOWER(lr.firstHalf) = LOWER(lr.secondHalf)');
+              }),
+            );
+        } else if (isBaseCv) {
+          query
+            .andWhere(
+              new Brackets((qb) => {
+                qb.where('LOWER(lr.requestType) = :cvExact', {
+                  cvExact: 'client visit',
+                });
+              }),
+            )
+            .andWhere('LOWER(lr.requestType) NOT LIKE :plusSignCv', {
+              plusSignCv: '%+%',
+            })
+            .andWhere(
+              new Brackets((qb) => {
+                qb.where(
+                  'lr.isHalfDay = false OR lr.isHalfDay = 0 OR lr.isHalfDay IS NULL',
+                )
+                  .orWhere('lr.firstHalf IS NULL')
+                  .orWhere('lr.secondHalf IS NULL')
+                  .orWhere('LOWER(lr.firstHalf) = LOWER(lr.secondHalf)');
+              }),
+            );
+        } else if (isBaseHalf) {
+          // Only true half-day leave (not WFH/CV half-day splits)
+          query
+            .andWhere(
+              new Brackets((qb) => {
+                qb.where('LOWER(lr.requestType) IN (:...halfTypes)', {
+                  halfTypes: ['half day', 'half day leave'],
+                }).orWhere(
+                  new Brackets((qb2) => {
+                    qb2
+                      .where('(lr.isHalfDay = true OR lr.isHalfDay = 1)')
+                      .andWhere(
+                        'LOWER(lr.firstHalf) IN (:...leaveHalfA)',
+                        {
+                          leaveHalfA: [
+                            'leave',
+                            'apply leave',
+                            'half day leave',
+                          ],
+                        },
+                      )
+                      .andWhere(
+                        'LOWER(lr.secondHalf) IN (:...leaveHalfB)',
+                        {
+                          leaveHalfB: [
+                            'leave',
+                            'apply leave',
+                            'half day leave',
+                          ],
+                        },
+                      );
+                  }),
+                );
+              }),
+            )
+            .andWhere('LOWER(lr.requestType) NOT LIKE :plusSignHalf', {
+              plusSignHalf: '%+%',
+            });
+        } else {
+          // Combined / exact table labels e.g. "Work From Home + Leave"
+          query.andWhere(
+            new Brackets((qb) => {
+              qb.where('lr.requestType = :exactRequestType', {
+                exactRequestType: requestType.trim(),
+              }).orWhere('LOWER(lr.requestType) = :exactRequestTypeLower', {
+                exactRequestTypeLower: rt,
+              });
+
+              if (requestType.includes('+')) {
+                const parts = requestType.split('+').map((p) => p.trim());
+                if (parts.length === 2) {
+                  const mapPart = (label: string): string[] => {
+                    const l = label.toLowerCase();
+                    if (l === 'half day leave' || l === 'leave') {
+                      return ['Leave', 'Apply Leave', 'Half Day Leave'];
+                    }
+                    if (l === 'wfh' || l === 'work from home') {
+                      return ['Work From Home', 'WFH'];
+                    }
+                    if (l === 'client visit') return ['Client Visit'];
+                    if (l === 'office') return ['Office'];
+                    return [label];
+                  };
+                  const aOpts = mapPart(parts[0]);
+                  const bOpts = mapPart(parts[1]);
+                  qb.orWhere(
+                    new Brackets((qb2) => {
+                      qb2
+                        .where('lr.isHalfDay = true')
+                        .andWhere('lr.firstHalf IN (:...rtAOpts)', {
+                          rtAOpts: aOpts,
+                        })
+                        .andWhere('lr.secondHalf IN (:...rtBOpts)', {
+                          rtBOpts: bOpts,
+                        });
+                    }),
+                  ).orWhere(
+                    new Brackets((qb2) => {
+                      qb2
+                        .where('lr.isHalfDay = true')
+                        .andWhere('lr.firstHalf IN (:...rtBOpts2)', {
+                          rtBOpts2: bOpts,
+                        })
+                        .andWhere('lr.secondHalf IN (:...rtAOpts2)', {
+                          rtAOpts2: aOpts,
+                        });
+                    }),
+                  );
+                }
+              }
+            }),
+          );
+        }
+      }
+
       // 5. Search Filter
       if (search && search.trim() !== '') {
         query.andWhere(
@@ -774,12 +1054,26 @@ export class LeaveRequestsService {
         }
       }
 
+      query
+        .orderBy('lr.submittedDate', 'DESC')
+        .addOrderBy('lr.createdAt', 'DESC')
+        .addOrderBy('lr.id', 'DESC');
+
+      if (forExport) {
+        const data = await query.getRawMany();
+        this.logger.log(`[FETCH] Export retrieved ${data.length} requests`);
+        return {
+          data,
+          total: data.length,
+          page: 1,
+          limit: data.length,
+          totalPages: 1,
+        };
+      }
+
       const total = await query.getCount();
 
       const data = await query
-        .orderBy('lr.createdAt', 'DESC')
-        .addOrderBy('lr.updatedAt', 'DESC')
-        .addOrderBy('lr.id', 'DESC')
         .offset((page - 1) * limit)
         .limit(limit)
         .getRawMany();
@@ -802,6 +1096,225 @@ export class LeaveRequestsService {
       if (error instanceof HttpException) throw error;
       throw new HttpException(
         `Failed to fetch requests: ${error.message}`,
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
+  }
+
+  private formatCcEmails(ccEmails: string | null | undefined): string {
+    if (!ccEmails) return '';
+    try {
+      const parsed = typeof ccEmails === 'string' ? JSON.parse(ccEmails) : ccEmails;
+      if (Array.isArray(parsed)) return parsed.join(', ');
+      return String(ccEmails);
+    } catch {
+      return String(ccEmails);
+    }
+  }
+
+  private formatAvailableDates(availableDates: string | null | undefined): string {
+    return this.parseAvailableDatesArray(availableDates).join(', ');
+  }
+
+  private parseAvailableDatesArray(
+    availableDates: string | null | undefined,
+  ): string[] {
+    if (!availableDates) return [];
+    try {
+      const parsed =
+        typeof availableDates === 'string'
+          ? JSON.parse(availableDates)
+          : availableDates;
+      if (Array.isArray(parsed)) {
+        return parsed
+          .map((d) => String(d).trim())
+          .filter(Boolean);
+      }
+      return [];
+    } catch {
+      return [];
+    }
+  }
+
+  /** Prefer DB duration; if 0/missing, count working days from availableDates. */
+  private resolveExportDuration(req: {
+    duration?: string | number | null;
+    availableDates?: string | null;
+    isHalfDay?: boolean | number | string;
+    firstHalf?: string | null;
+    secondHalf?: string | null;
+    fromDate?: string;
+    toDate?: string;
+  }): number {
+    const stored = Number(req.duration);
+    if (!Number.isNaN(stored) && stored > 0) {
+      return stored;
+    }
+
+    const dates = this.parseAvailableDatesArray(req.availableDates);
+    if (dates.length > 0) {
+      const isHalf =
+        req.isHalfDay === true ||
+        req.isHalfDay === 1 ||
+        req.isHalfDay === '1';
+      if (isHalf) {
+        return (
+          dates.length *
+          this.getDurationFactor(
+            (req.firstHalf as string) || null,
+            (req.secondHalf as string) || null,
+          )
+        );
+      }
+      return dates.length;
+    }
+
+    // Last fallback: count weekdays between from/to
+    if (req.fromDate && req.toDate) {
+      let count = 0;
+      let current = dayjs(req.fromDate);
+      const end = dayjs(req.toDate);
+      while (current.isBefore(end) || current.isSame(end, 'day')) {
+        const day = current.day();
+        if (day !== 0 && day !== 6) count += 1;
+        current = current.add(1, 'day');
+      }
+      const isHalf =
+        req.isHalfDay === true ||
+        req.isHalfDay === 1 ||
+        req.isHalfDay === '1';
+      if (isHalf) {
+        return (
+          count *
+          this.getDurationFactor(
+            (req.firstHalf as string) || null,
+            (req.secondHalf as string) || null,
+          )
+        );
+      }
+      return count;
+    }
+
+    return 0;
+  }
+
+  private normalizeRequestTypeLabel(req: {
+    requestType?: string;
+    firstHalf?: string;
+    secondHalf?: string;
+    isHalfDay?: boolean | number | string;
+  }): string {
+    return this.getTableRequestTypeLabel(req);
+  }
+
+  async exportRequestsToExcel(filters: {
+    employeeId?: string;
+    department?: string;
+    status?: string;
+    search?: string;
+    month?: string;
+    year?: string;
+    requestType?: string;
+    managerName?: string;
+    managerId?: string;
+  }): Promise<Buffer> {
+    this.logger.log(
+      `[EXPORT] Generating Excel for leave requests. Filters: ${JSON.stringify(filters)}`,
+    );
+    try {
+      const result = await this.findUnifiedRequests({
+        ...filters,
+        forExport: true,
+      });
+      const rows = result.data || [];
+
+      const workbook = new ExcelJS.Workbook();
+      workbook.creator = 'Timesheet Management';
+      workbook.created = new Date();
+      const sheet = workbook.addWorksheet('Employee Requests');
+
+      sheet.columns = [
+        { header: 'Employee ID', key: 'employeeId', width: 16 },
+        { header: 'Employee Name', key: 'fullName', width: 24 },
+        { header: 'Department', key: 'department', width: 22 },
+        { header: 'Request Type', key: 'requestType', width: 22 },
+        { header: 'Duration Type', key: 'durationType', width: 14 },
+        { header: 'First Half', key: 'firstHalf', width: 18 },
+        { header: 'Second Half', key: 'secondHalf', width: 18 },
+        { header: 'From Date', key: 'fromDate', width: 14 },
+        { header: 'To Date', key: 'toDate', width: 14 },
+        { header: 'Duration (Days)', key: 'duration', width: 14 },
+        { header: 'Subject / Title', key: 'title', width: 28 },
+        { header: 'Description', key: 'description', width: 40 },
+        { header: 'CC Emails', key: 'ccEmails', width: 28 },
+        { header: 'Status', key: 'status', width: 22 },
+        { header: 'Submitted Date', key: 'submittedDate', width: 14 },
+        { header: 'Reviewed By', key: 'reviewedBy', width: 18 },
+        { header: 'Modified', key: 'isModified', width: 10 },
+        { header: 'Modification Count', key: 'modificationCount', width: 16 },
+      ];
+
+      const headerRow = sheet.getRow(1);
+      headerRow.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+      headerRow.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FF4318FF' },
+      };
+      headerRow.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
+      headerRow.height = 22;
+
+      for (const req of rows) {
+        const isHalf =
+          req.isHalfDay === true ||
+          req.isHalfDay === 1 ||
+          req.isHalfDay === '1';
+        sheet.addRow({
+          employeeId: req.employeeId || '',
+          fullName: req.fullName || '',
+          department: req.department || '',
+          requestType: this.normalizeRequestTypeLabel(req),
+          durationType: isHalf ? 'Half Day' : 'Full Day',
+          firstHalf: req.firstHalf || '',
+          secondHalf: req.secondHalf || '',
+          fromDate: req.fromDate
+            ? dayjs(req.fromDate).format('YYYY-MM-DD')
+            : '',
+          toDate: req.toDate ? dayjs(req.toDate).format('YYYY-MM-DD') : '',
+          duration: this.resolveExportDuration(req),
+          title: req.title || '',
+          description: req.description || '',
+          ccEmails: this.formatCcEmails(req.ccEmails),
+          status: req.status || '',
+          submittedDate: req.submittedDate
+            ? dayjs(req.submittedDate).format('YYYY-MM-DD')
+            : '',
+          reviewedBy: req.reviewedBy || '',
+          isModified:
+            req.isModified === true ||
+            req.isModified === 1 ||
+            req.isModified === '1'
+              ? 'Yes'
+              : 'No',
+          modificationCount: req.modificationCount ?? 0,
+        });
+      }
+
+      sheet.eachRow((row, rowNumber) => {
+        if (rowNumber === 1) return;
+        row.alignment = { vertical: 'middle', wrapText: true };
+      });
+
+      const buffer = await workbook.xlsx.writeBuffer();
+      return Buffer.from(buffer);
+    } catch (error) {
+      this.logger.error(
+        `[EXPORT] Excel generation failed: ${error.message}`,
+        error.stack,
+      );
+      if (error instanceof HttpException) throw error;
+      throw new HttpException(
+        `Failed to export requests: ${error.message}`,
         HttpStatus.INTERNAL_SERVER_ERROR,
       );
     }
@@ -3970,6 +4483,7 @@ export class LeaveRequestsService {
         isModified: true,
         modificationCount: (request.modificationCount || 0) + 1,
         lastModifiedDate: new Date(),
+        submittedDate: dayjs().format('YYYY-MM-DD'),
       };
       if (updateData.title !== undefined) updatedData.title = updateData.title;
       if (updateData.description !== undefined)
@@ -3987,6 +4501,7 @@ export class LeaveRequestsService {
           isHalfDay: request.isHalfDay,
           duration: request.duration,
           availableDates: request.availableDates,
+          submittedDate: request.submittedDate,
         };
         updatedData.requestModifiedFrom = `PARENT_ORIGINAL:${JSON.stringify(originalDetails)}`;
       }
@@ -4246,6 +4761,7 @@ export class LeaveRequestsService {
             isHalfDay: request.isHalfDay,
             duration: request.duration,
             availableDates: request.availableDates,
+            submittedDate: request.submittedDate,
           };
           request.requestModifiedFrom = `PARENT_ORIGINAL:${JSON.stringify(originalDetails)}`;
         }
@@ -4265,6 +4781,7 @@ export class LeaveRequestsService {
         request.isModified = true;
         request.modificationCount = (request.modificationCount || 0) + 1;
         request.lastModifiedDate = new Date();
+        request.submittedDate = dayjs().format('YYYY-MM-DD');
         const factor = isHalfDay
           ? this.getDurationFactor(fHalf, sHalf)
           : 1.0;
@@ -4369,6 +4886,7 @@ export class LeaveRequestsService {
             isModified: true,
             modificationCount: 1,
             lastModifiedDate: new Date(),
+            submittedDate: dayjs().format('YYYY-MM-DD'),
           }) as unknown as LeaveRequest;
 
           const savedNew = (await this.leaveRequestRepository.save(
@@ -4883,6 +5401,7 @@ export class LeaveRequestsService {
           if (original.isHalfDay !== undefined) request.isHalfDay = original.isHalfDay;
           if (original.duration !== undefined) request.duration = Number(original.duration);
           if (original.availableDates !== undefined) request.availableDates = original.availableDates;
+          if (original.submittedDate !== undefined) request.submittedDate = original.submittedDate;
         }
       } catch (err) {
         this.logger.error(

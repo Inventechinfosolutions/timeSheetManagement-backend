@@ -22,6 +22,7 @@ import { MonthStatus } from '../enums/month-status.enum';
 import { WorkLocation } from '../enums/work-location.enum';
 import { LeaveRequestType } from '../enums/leave-request-type.enum';
 import { UserStatus } from '../../users/enums/user-status.enum';
+import { User } from '../../users/entities/user.entity';
 import { LeaveRequest } from '../entities/leave-request.entity';
 import { EmployeeAttendanceDto } from '../dto/employeeAttendance.dto';
 import { MasterHolidayService } from '../../master/service/master-holiday.service';
@@ -2695,17 +2696,33 @@ export class EmployeeAttendanceService {
     );
     try {
       // 1. Fetch employees (filtered by manager if provided)
-      // Include ACTIVE and INACTIVE only if inactiveDate is in this month (so Excel shows them as Inactive for that month; from next month they are excluded)
-      const query =
-        this.employeeDetailsRepository.createQueryBuilder('employee');
+      // Include ACTIVE and INACTIVE only if inactiveDate is in this month
+      // (Excel shows them for that month; from next month they are excluded)
+      const query = this.employeeDetailsRepository
+        .createQueryBuilder('employee')
+        .leftJoin(User, 'user_filter', 'user_filter.loginId = employee.employeeId');
 
-      const reportStartDate = new Date(year, month - 1, 1);
+      const reportMonthStart = `${year}-${String(month).padStart(2, '0')}-01`;
+      const reportNextMonthStart =
+        month === 12
+          ? `${year + 1}-01-01`
+          : `${year}-${String(month + 1).padStart(2, '0')}-01`;
+
       query.andWhere(
-        '(employee.userStatus = :activeStatus OR (employee.userStatus = :inactiveStatus AND employee.inactiveDate IS NOT NULL AND employee.inactiveDate >= :monthStart))',
+        '(' +
+          'employee.userStatus = :activeStatus AND (user_filter.status IS NULL OR user_filter.status != :inactiveStatus)' +
+          ' OR (' +
+          '(employee.userStatus = :inactiveStatus OR user_filter.status = :inactiveStatus)' +
+          ' AND employee.inactiveDate IS NOT NULL' +
+          ' AND employee.inactiveDate >= :reportMonthStart' +
+          ' AND employee.inactiveDate < :reportNextMonthStart' +
+          ')' +
+          ')',
         {
           activeStatus: UserStatus.ACTIVE,
           inactiveStatus: UserStatus.INACTIVE,
-          monthStart: reportStartDate,
+          reportMonthStart,
+          reportNextMonthStart,
         },
       );
 
@@ -2964,10 +2981,9 @@ export class EmployeeAttendanceService {
       for (const employee of employees) {
         const employeeName =
           employee.fullName || employee.employeeId || 'Unknown';
-        const inactiveDateStr =
-          employee.userStatus === UserStatus.INACTIVE && employee.inactiveDate
-            ? dayjs(employee.inactiveDate).format('YYYY-MM-DD')
-            : null;
+        const inactiveDateStr = employee.inactiveDate
+          ? dayjs(employee.inactiveDate).format('YYYY-MM-DD')
+          : null;
 
         const row = sheet.addRow([employeeName]);
 
@@ -2986,6 +3002,15 @@ export class EmployeeAttendanceService {
           const isHoliday = !!holidayName;
 
           const cell = row.getCell(i + 2); // +2: col 1=Name, 2+=days
+
+          // On/after inactive date → always "Inactive" (light red), ignore timesheet updates
+          if (inactiveDateStr && dateKey >= inactiveDateStr) {
+            cell.value = 'Inactive';
+            cell.fill = inactiveFill;
+            cell.font = { color: { argb: 'B71C1C' }, size: 10 };
+            cell.alignment = { horizontal: 'center' };
+            continue;
+          }
 
           const empAttendanceMap = attendanceMap.get(employee.employeeId);
           const record = empAttendanceMap?.get(dateKey);
@@ -3112,16 +3137,10 @@ export class EmployeeAttendanceService {
             continue;
           }
 
-          // PRIORITY 4: Future / Past Logic - for weekdays with no record
+          // PRIORITY 5: Future / Past Logic - for weekdays with no record
           const today = dayjs().format('YYYY-MM-DD');
 
-          if (inactiveDateStr && dateKey >= inactiveDateStr) {
-            // On or after inactive date -> show "Inactive" in light red (instead of Not Updated)
-            cell.value = 'Inactive';
-            cell.fill = inactiveFill;
-            cell.font = { color: { argb: 'B71C1C' }, size: 10 }; // Dark red text, slightly smaller
-            cell.alignment = { horizontal: 'center' };
-          } else if (dateKey > today) {
+          if (dateKey > today) {
             // Future -> "Upcoming"
             cell.value = AttendanceStatus.UPCOMING;
             cell.font = { italic: true, color: { argb: '808080' } }; // Grey

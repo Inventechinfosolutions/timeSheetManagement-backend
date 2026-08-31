@@ -11,6 +11,7 @@ export class ManagerMappingMapper {
     dto.id = entity.id;
 
     dto.managerName = entity.managerName;
+    dto.managerId = entity.managerId || undefined;
     dto.employeeId = entity.employeeId;
     dto.employeeName = entity.employeeName;
     dto.status = entity.status ? String(entity.status) : undefined;
@@ -30,6 +31,7 @@ export class ManagerMappingMapper {
     }
 
     entity.managerName = dto.managerName;
+    entity.managerId = dto.managerId ?? null;
     entity.employeeId = dto.employeeId;
     entity.employeeName = dto.employeeName;
     entity.status = dto.status as ManagerMappingStatus;

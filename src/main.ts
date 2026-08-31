@@ -1,5 +1,5 @@
 import { NestFactory } from '@nestjs/core';
-import { ValidationPipe } from '@nestjs/common';
+import { Logger, ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import cookieParser from 'cookie-parser';
 import { AppModule } from './app.module';
@@ -11,10 +11,9 @@ async function bootstrap() {
   app.use(cookieParser());
 
   // Enable CORS
-  const corsOrigin =
-    configService.get<string>('CORS_ORIGIN') ||
-    configService.get<string>('CORS_ORIGIN_URL') ||
-    '*';
+  const corsOrigin = configService.get<string>('CORS_ORIGIN') ||
+                     configService.get<string>('CORS_ORIGIN_URL') ||
+                     '*';
   app.enableCors({
     origin: corsOrigin.split(',').map((origin) => origin.trim()),
     credentials: true,
@@ -38,5 +37,20 @@ async function bootstrap() {
   await app.listen(port, '0.0.0.0');
   console.log(`Application is running on: http://0.0.0.0:${port}/api`);
   console.log(`Application is running on: http://localhost:${port}/api`);
+
+  // Log DB connection info last, once the app is fully up.
+  const profile = process.env.PROFILE || 'local';
+  const dbType = (configService.get<string>('DB_TYPE') || 'postgres').toLowerCase();
+  const dbHost = configService.get<string>('DB_HOST') || 'localhost';
+  const dbPort = configService.get<string>('DB_PORT') || '';
+  const dbUser = configService.get<string>('DB_USERNAME') || '';
+  const dbName =
+    configService.get<string>('DB_NAME') ||
+    configService.get<string>('DB_DATABASE') ||
+    'timesheet_db';
+  Logger.log(
+    `Connected to database [profile="${profile}"] -> ${dbType}://${dbUser}@${dbHost}:${dbPort}/${dbName}`,
+    'DatabaseModule',
+  );
 }
 bootstrap();

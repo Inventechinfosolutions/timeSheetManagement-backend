@@ -25,13 +25,26 @@ import { NotificationsModule } from './notifications/notifications.module';
 import { CacheModule } from '@nestjs/cache-manager';
 import { BullModule } from '@nestjs/bull';
 import * as redisStore from 'cache-manager-redis-store';
+import * as fs from 'fs';
+import * as path from 'path';
 import { CachingUtil } from './common/utils/caching.util';
-
+ 
 function getEnvFiles(): string[] {
+  if (!process.env.PROFILE) {
+    const baseEnvPath = path.resolve(process.cwd(), '.env');
+    if (fs.existsSync(baseEnvPath)) {
+      const baseEnv = fs.readFileSync(baseEnvPath, 'utf8');
+      const profileMatch = baseEnv.match(/^PROFILE=(.+)$/m);
+      process.env.PROFILE = profileMatch?.[1]?.trim();
+    }
+  }
+ 
   const profile = process.env.PROFILE || 'local';
-  return [`.env.${profile}`, '.env'];
+  const envFiles = [`.env.${profile}`, '.env'];
+  console.log(`[Config] Using PROFILE="${profile}" -> env files: ${envFiles.join(', ')}`);
+  return envFiles;
 }
-
+ 
 @Module({
   imports: [
     ConfigModule.forRoot({
@@ -102,4 +115,4 @@ function getEnvFiles(): string[] {
   ],
 })
 // Registered ManagerMappingModule
-export class AppModule { }
+export class AppModule {}

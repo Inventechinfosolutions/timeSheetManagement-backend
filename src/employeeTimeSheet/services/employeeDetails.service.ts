@@ -467,68 +467,91 @@ export class EmployeeDetailsService {
         query.andWhere('employee.department = :department', { department });
       }
 
-      // When viewing a specific month: show ACTIVE or INACTIVE only if inactiveDate is in that month (from next month onwards they disappear from list)
+      // When viewing a specific month: show ACTIVE, or INACTIVE only if inactiveDate falls in that same month
+      // (from the next month onwards they must not appear in the timesheet list)
+      // Treat as inactive if either employee_details OR users table says INACTIVE (keeps list in sync with login block)
       const hasMonthYear = month != null && year != null && !Number.isNaN(Number(month)) && !Number.isNaN(Number(year));
+      const tsYearNum = Number(year);
+      const tsMonthNum = Number(month);
+      const tsMonthStart = hasMonthYear
+        ? `${tsYearNum}-${String(tsMonthNum).padStart(2, '0')}-01`
+        : null;
+      const tsNextMonthStart = hasMonthYear
+        ? tsMonthNum === 12
+          ? `${tsYearNum + 1}-01-01`
+          : `${tsYearNum}-${String(tsMonthNum + 1).padStart(2, '0')}-01`
+        : null;
+      const inactiveInMonthClause =
+        '(' +
+        'employee.userStatus = :activeStatus AND (user_filter.status IS NULL OR user_filter.status != :inactiveStatus)' +
+        ' OR (' +
+        '(employee.userStatus = :inactiveStatus OR user_filter.status = :inactiveStatus)' +
+        ' AND employee.inactiveDate IS NOT NULL' +
+        ' AND employee.inactiveDate >= :tsMonthStart' +
+        ' AND employee.inactiveDate < :tsNextMonthStart' +
+        ')' +
+        ')';
 
       // Filter by Manager if provided
       if (managerName || managerId) {
         if (hasMonthYear) {
-          const tsMonthStart = new Date(Number(year), Number(month) - 1, 1);
-          query.andWhere(
-            '(employee.userStatus = :activeStatus OR (employee.userStatus = :inactiveStatus AND employee.inactiveDate IS NOT NULL AND employee.inactiveDate >= :tsMonthStart))',
-            {
-              activeStatus: UserStatus.ACTIVE,
-              inactiveStatus: UserStatus.INACTIVE,
-              tsMonthStart: tsMonthStart,
-            },
-          );
+          query.andWhere(inactiveInMonthClause, {
+            activeStatus: UserStatus.ACTIVE,
+            inactiveStatus: UserStatus.INACTIVE,
+            tsMonthStart,
+            tsNextMonthStart,
+          });
         } else {
           // No month/year: only show ACTIVE employees (e.g. "All" or default list)
-          query.andWhere('user_filter.status = :activeStatus', { activeStatus: UserStatus.ACTIVE });
+          query.andWhere(
+            'employee.userStatus = :activeStatus AND (user_filter.status IS NULL OR user_filter.status = :activeStatus)',
+            { activeStatus: UserStatus.ACTIVE },
+          );
         }
 
         if (includeSelf && managerId) {
           // Include the manager themselves OR those mapped to them
-          // Use LEFT JOIN because the manager might not be in ManagerMapping table as a subordinate
           query.leftJoin(ManagerMapping, 'mm', 'mm.employeeId = employee.employeeId');
-
           query.andWhere(
-            '( ( (mm.managerName LIKE :managerNameQuery OR mm.managerName LIKE :managerIdQuery) AND mm.status = :activeMappingStatus ) OR employee.employeeId = :exactManagerId )',
+            `( 
+              (mm.managerName LIKE :managerNameQuery OR mm.managerName LIKE :managerIdQuery) 
+              AND mm.status = :activeMappingStatus 
+            ) OR (
+              employee.employeeId = :exactManagerId
+              AND (:searchEmpty = 1 OR employee.fullName LIKE :search OR employee.employeeId LIKE :search)
+            )`,
             {
               managerNameQuery: `%${managerName}%`,
               managerIdQuery: `%${managerId}%`,
               activeMappingStatus: ManagerMappingStatus.ACTIVE,
-              exactManagerId: managerId
+              exactManagerId: managerId,
+              searchEmpty: search ? 0 : 1,
+              search: `%${search}%`,
             }
           );
         } else {
-          // Exclude the manager themselves from their own list (Standard for timesheets)
+          // Exclude the manager themselves from their own list (standard for timesheets)
           if (managerId) {
+            query.leftJoin(ManagerMapping, 'mm', 'mm.employeeId = employee.employeeId');
+            query.andWhere(
+              '(mm.managerName LIKE :managerNameQuery OR mm.managerName LIKE :managerIdQuery)',
+              {
+                managerNameQuery: `%${managerName}%`,
+                managerIdQuery: `%${managerId}%`
+              }
+            );
+            query.andWhere('mm.status = :status', { status: ManagerMappingStatus.ACTIVE });
             query.andWhere('employee.employeeId != :excludeManagerId', { excludeManagerId: managerId });
           }
-
-          query.innerJoin(ManagerMapping, 'mm', 'mm.employeeId = employee.employeeId');
-          query.andWhere(
-            '(mm.managerName LIKE :managerNameQuery OR mm.managerName LIKE :managerIdQuery)',
-            {
-              managerNameQuery: `%${managerName}%`,
-              managerIdQuery: `%${managerId}%`
-            }
-          );
-          // Ensure only active mappings are considered
-          query.andWhere('mm.status = :status', { status: ManagerMappingStatus.ACTIVE });
         }
       } else if (hasMonthYear) {
         // Admin view with specific month: same rule – hide inactive from next month onwards
-        const tsMonthStart = new Date(Number(year), Number(month) - 1, 1);
-        query.andWhere(
-          '(employee.userStatus = :activeStatus OR (employee.userStatus = :inactiveStatus AND employee.inactiveDate IS NOT NULL AND employee.inactiveDate >= :tsMonthStart))',
-          {
-            activeStatus: UserStatus.ACTIVE,
-            inactiveStatus: UserStatus.INACTIVE,
-            tsMonthStart: tsMonthStart,
-          },
-        );
+        query.andWhere(inactiveInMonthClause, {
+          activeStatus: UserStatus.ACTIVE,
+          inactiveStatus: UserStatus.INACTIVE,
+          tsMonthStart,
+          tsNextMonthStart,
+        });
       }
 
       const isStatusFilterActive = status && status !== 'All' && status !== 'All Status';
@@ -1045,7 +1068,9 @@ export class EmployeeDetailsService {
     // Update EmployeeDetails status fields
     employee.userStatus = newStatus;
     if (newStatus === UserStatus.INACTIVE) {
-      employee.inactiveDate = new Date();
+      // Store as date-only (local Y-M-D) so month filtering is stable across timezones
+      const now = new Date();
+      employee.inactiveDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     } else if (newStatus === UserStatus.ACTIVE) {
       employee.inactiveDate = null;
     }
