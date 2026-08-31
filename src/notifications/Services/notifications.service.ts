@@ -28,18 +28,18 @@ export class NotificationsService {
     try {
       const employees = await this.employeeRepo.find();
       let count = 0;
-
+ 
       for (const emp of employees) {
         if (emp.email) {
-          const title = 'Weekly Attendance Reminder';
+          const title = 'Weekly Reminder.';
           const message =
-            'Please make sure to update your timesheets for the current week.\n\nRegards,\nAdmin Team';
+            'Please log your hours for this week.\n\nRegards,\nAdmin Team';
           const html = getGeneralNotificationTemplate({
             recipientName: emp.fullName || 'Employee',
             title: title,
             message: message,
           });
-
+ 
           await this.mailService.sendMailAsync(emp.email, title, message, html);
           count++;
           // Create Notification
@@ -47,13 +47,13 @@ export class NotificationsService {
             employeeId: emp.employeeId,
             title: title,
             message:
-              'Please make sure to update your timesheets for the current week.',
+              'Please log your hours for this week.',
             type: 'alert',
           });
-
+ 
         }
       }
-
+ 
       this.logger.log(`Weekly reminders sent to ${count} employees.`);
       return count;
     } catch (error) {
@@ -61,24 +61,24 @@ export class NotificationsService {
       throw new Error(`Weekly reminder failed: ${error.message}`);
     }
   }
-
+ 
   async sendWeekendReminder(): Promise<number> {
     this.logger.log('Starting Weekend Attendance Reminder broadcast...');
     try {
       const employees = await this.employeeRepo.find();
       let count = 0;
-
+ 
       for (const emp of employees) {
         if (emp.email) {
-          const title = 'Weekend Attendance Reminder';
+          const title = 'Weekend Reminder';
           const message =
-            'Please make sure to fill in your Friday attendance and any pending work from the week before the weekend starts.\n\nRegards,\nAdmin Team';
+            'Please complete your Friday and pending logs for the week.\n\nRegards,\nAdmin Team';
           const html = getGeneralNotificationTemplate({
             recipientName: emp.fullName || 'Employee',
             title: title,
             message: message,
           });
-
+ 
           await this.mailService.sendMailAsync(emp.email, title, message, html);
           count++;
           // Create Notification
@@ -86,13 +86,13 @@ export class NotificationsService {
             employeeId: emp.employeeId,
             title: title,
             message:
-              'Please make sure to fill in your Friday attendance and any pending work from the week.',
+              'Please complete your Friday and pending logs for the week.',
             type: 'alert',
           });
-
+ 
         }
       }
-
+ 
       this.logger.log(`Weekend reminders sent to ${count} employees.`);
       return count;
     } catch (error) {

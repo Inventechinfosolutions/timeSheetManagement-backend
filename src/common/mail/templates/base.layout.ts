@@ -1,7 +1,7 @@
 export const baseLayout = (
   content: string,
   title: string,
-  headerCardTitle?: string
+  headerCardTitle?: string,
 ) => {
   return `
 <!DOCTYPE html>
@@ -159,28 +159,32 @@ export const baseLayout = (
           <!-- Header -->
           <table width="100%" border="0" cellspacing="0" cellpadding="0" style="background: linear-gradient(90deg, #2563eb, #1e40af); background-color: #2563eb; border-radius: 18px 18px 0 0;">
             <tr>
-              <td style="padding: 35px 40px;">
+              <td style="padding: 24px 40px 35px 40px;">
                 <table width="100%" border="0" cellspacing="0" cellpadding="0">
                   <tr>
-                    <td align="left">
-                      <h1 class="company-name" style="margin: 0; color: #ffffff; font-size: 22px; font-weight: 800;">INVENTECH</h1>
-                      <p class="company-sub" style="margin: 4px 0 0; color: #ffffff; font-size: 11px; text-transform: uppercase;">INFO SOLUTIONS PVT. LTD.</p>
+                    <td width="40" style="vertical-align: middle;">&nbsp;</td>
+                    <td align="center" style="vertical-align: middle;">
+                      <span style="font-family: 'Georgia', 'Times New Roman', serif; font-size: 30px; font-weight: bold; color: #ffffff; line-height: 1;">WORKSPHERE</span>
                     </td>
-                    <td align="right" width="40">
+                    <td align="right" width="40" style="vertical-align: middle;">
                       <span style="font-size: 26px;">🔔</span>
                     </td>
                   </tr>
                 </table>
 
-                ${headerCardTitle ? `
-                  <table width="100%" border="0" cellspacing="0" cellpadding="0" style="margin-top: 25px;">
+                ${
+                  headerCardTitle
+                    ? `
+                  <table width="100%" border="0" cellspacing="0" cellpadding="0" style="margin-top: 18px;">
                     <tr>
-                      <td style="background-color: rgba(255,255,255,0.15); border: 1px solid rgba(255,255,255,0.25); border-radius: 14px; padding: 14px 20px; text-align: center;">
-                        <h2 style="margin: 0; font-size: 18px; font-weight: 800; text-transform: uppercase; letter-spacing: 1px; color: #ffffff;">${headerCardTitle}</h2>
+                      <td style="background-color: rgba(255,255,255,0.15); border: 1px solid rgba(255,255,255,0.25); border-radius: 8px; padding: 8px 16px; text-align: center;">
+                        <h2 style="margin: 0; font-size: 13px; font-weight: 800; text-transform: uppercase; letter-spacing: 1px; color: #ffffff;">${headerCardTitle}</h2>
                       </td>
                     </tr>
                   </table>
-                ` : ""}
+                `
+                    : ''
+                }
               </td>
             </tr>
           </table>
@@ -225,4 +229,3 @@ export const baseLayout = (
 </html>
 `;
 };
-

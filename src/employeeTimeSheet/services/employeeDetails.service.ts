@@ -10,6 +10,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Not, Repository } from 'typeorm';
 import * as bcrypt from 'bcrypt';
 import { EmployeeDetails } from '../entities/employeeDetails.entity';
+import { InternDetails } from '../entities/internDetails.entity';
 import { EmployeeDetailsDto } from '../dto/employeeDetails.dto';
 import { Department } from '../enums/department.enum';
 import { EmploymentType } from '../enums/employment-type.enum';
@@ -42,6 +43,8 @@ export class EmployeeDetailsService {
   constructor(
     @InjectRepository(EmployeeDetails)
     private readonly employeeDetailsRepository: Repository<EmployeeDetails>,
+    @InjectRepository(InternDetails)
+    private readonly internDetailsRepository: Repository<InternDetails>,
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
     @InjectRepository(ManagerMapping)
@@ -102,10 +105,14 @@ export class EmployeeDetailsService {
       // Remove confirmPassword as it's not in the entity
       const { confirmPassword, ...employeeData } = createEmployeeDetailsDto;
 
+      const isIntern = employeeData.employmentType === EmploymentType.INTERN ||
+        (employeeData.designation && employeeData.designation.toLowerCase().includes('intern'));
+
       const employee = this.employeeDetailsRepository.create({
         ...(employeeData as any),
         department: employeeData.department as Department,
         role: employeeData.role as UserType,
+        internId: isIntern ? employeeData.employeeId : null,
       }) as unknown as EmployeeDetails;
       const result = await this.employeeDetailsRepository.save(employee) as unknown as EmployeeDetails;
 
@@ -118,10 +125,35 @@ export class EmployeeDetailsService {
           userType: createEmployeeDetailsDto.role ? (createEmployeeDetailsDto.role as UserType) : UserType.EMPLOYEE,
           status: UserStatus.DRAFT,
           resetRequired: true,
+          internId: result.internId,
         });
         this.logger.log(`Associated user record created for employee: ${result.employeeId} in DRAFT state`);
       } catch (userError) {
         this.logger.error(`Failed to create associated user record: ${userError.message}`);
+      }
+
+      // Create InternDetails if this employee is an intern
+      if (isIntern) {
+        try {
+          const existingIntern = await this.internDetailsRepository.findOne({ where: { internId: result.employeeId } });
+          if (!existingIntern) {
+            const newIntern = this.internDetailsRepository.create({
+              fullName: result.fullName,
+              internId: result.employeeId,
+              department: result.department,
+              designation: result.designation,
+              email: result.email,
+              joiningDate: result.joiningDate,
+              gender: result.gender,
+              role: result.role,
+              userStatus: result.userStatus,
+            });
+            await this.internDetailsRepository.save(newIntern);
+            this.logger.log(`Created new intern details record: ${result.employeeId}`);
+          }
+        } catch (internError) {
+          this.logger.error(`Failed to create associated intern details record: ${internError.message}`);
+        }
       }
 
       // NO LONGER generating activation link immediately.
@@ -435,24 +467,46 @@ export class EmployeeDetailsService {
         query.andWhere('employee.department = :department', { department });
       }
 
-      // When viewing a specific month: show ACTIVE or INACTIVE only if inactiveDate is in that month (from next month onwards they disappear from list)
+      // When viewing a specific month: show ACTIVE, or INACTIVE only if inactiveDate falls in that same month
+      // (from the next month onwards they must not appear in the timesheet list)
+      // Treat as inactive if either employee_details OR users table says INACTIVE (keeps list in sync with login block)
       const hasMonthYear = month != null && year != null && !Number.isNaN(Number(month)) && !Number.isNaN(Number(year));
+      const tsYearNum = Number(year);
+      const tsMonthNum = Number(month);
+      const tsMonthStart = hasMonthYear
+        ? `${tsYearNum}-${String(tsMonthNum).padStart(2, '0')}-01`
+        : null;
+      const tsNextMonthStart = hasMonthYear
+        ? tsMonthNum === 12
+          ? `${tsYearNum + 1}-01-01`
+          : `${tsYearNum}-${String(tsMonthNum + 1).padStart(2, '0')}-01`
+        : null;
+      const inactiveInMonthClause =
+        '(' +
+        'employee.userStatus = :activeStatus AND (user_filter.status IS NULL OR user_filter.status != :inactiveStatus)' +
+        ' OR (' +
+        '(employee.userStatus = :inactiveStatus OR user_filter.status = :inactiveStatus)' +
+        ' AND employee.inactiveDate IS NOT NULL' +
+        ' AND employee.inactiveDate >= :tsMonthStart' +
+        ' AND employee.inactiveDate < :tsNextMonthStart' +
+        ')' +
+        ')';
 
       // Filter by Manager if provided
       if (managerName || managerId) {
         if (hasMonthYear) {
-          const tsMonthStart = new Date(Number(year), Number(month) - 1, 1);
-          query.andWhere(
-            '(employee.userStatus = :activeStatus OR (employee.userStatus = :inactiveStatus AND employee.inactiveDate IS NOT NULL AND employee.inactiveDate >= :tsMonthStart))',
-            {
-              activeStatus: UserStatus.ACTIVE,
-              inactiveStatus: UserStatus.INACTIVE,
-              tsMonthStart: tsMonthStart,
-            },
-          );
+          query.andWhere(inactiveInMonthClause, {
+            activeStatus: UserStatus.ACTIVE,
+            inactiveStatus: UserStatus.INACTIVE,
+            tsMonthStart,
+            tsNextMonthStart,
+          });
         } else {
           // No month/year: only show ACTIVE employees (e.g. "All" or default list)
-          query.andWhere('user_filter.status = :activeStatus', { activeStatus: UserStatus.ACTIVE });
+          query.andWhere(
+            'employee.userStatus = :activeStatus AND (user_filter.status IS NULL OR user_filter.status = :activeStatus)',
+            { activeStatus: UserStatus.ACTIVE },
+          );
         }
 
         if (includeSelf && managerId) {
@@ -492,15 +546,12 @@ export class EmployeeDetailsService {
         }
       } else if (hasMonthYear) {
         // Admin view with specific month: same rule – hide inactive from next month onwards
-        const tsMonthStart = new Date(Number(year), Number(month) - 1, 1);
-        query.andWhere(
-          '(employee.userStatus = :activeStatus OR (employee.userStatus = :inactiveStatus AND employee.inactiveDate IS NOT NULL AND employee.inactiveDate >= :tsMonthStart))',
-          {
-            activeStatus: UserStatus.ACTIVE,
-            inactiveStatus: UserStatus.INACTIVE,
-            tsMonthStart: tsMonthStart,
-          },
-        );
+        query.andWhere(inactiveInMonthClause, {
+          activeStatus: UserStatus.ACTIVE,
+          inactiveStatus: UserStatus.INACTIVE,
+          tsMonthStart,
+          tsNextMonthStart,
+        });
       }
 
       const isStatusFilterActive = status && status !== 'All' && status !== 'All Status';
@@ -682,9 +733,25 @@ export class EmployeeDetailsService {
       );
       const employee = await this.getEmployeeById(id);
 
+      // Enforce validation: if employmentType is being edited, employeeId and designation must be edited too
+      if (
+        updateData.employmentType &&
+        updateData.employmentType !== employee.employmentType
+      ) {
+        if (
+          !updateData.employeeId || updateData.employeeId === employee.employeeId ||
+          !updateData.designation || updateData.designation === employee.designation
+        ) {
+          throw new BadRequestException(
+            'When changing the Employment Type, you must also change the Employee ID and the Designation.',
+          );
+        }
+      }
+
       // Store original values for comparison
       const originalEmployeeId = employee.employeeId;
       const originalEmail = employee.email;
+      const originalFullName = employee.fullName;
       const updatedEmployeeId = updateData.employeeId || originalEmployeeId;
       const updatedEmail = updateData.email || originalEmail;
 
@@ -732,13 +799,20 @@ export class EmployeeDetailsService {
         await this.syncUserStatus(employee, updateFields.userStatus as UserStatus);
       }
 
-      // Handle intern to full-timer conversion automatic date stamping
-      if (
-        updateFields.employmentType === EmploymentType.FULL_TIMER &&
-        employee.employmentType === EmploymentType.INTERN &&
-        !employee.conversionDate
-      ) {
-        employee.conversionDate = new Date();
+      // Handle intern to full-timer conversion automatic date stamping & historical intern snapshot
+      const isConverting = updateFields.employmentType === EmploymentType.FULL_TIMER && employee.employmentType === EmploymentType.INTERN;
+      if (isConverting) {
+        if (!employee.internId) {
+          employee.internId = originalEmployeeId;
+        }
+
+        if (!employee.conversionDate) {
+          employee.conversionDate = new Date();
+        }
+
+        // Save/Sync a snapshot of the current intern profile in intern_details before converting them to full-timer
+        await this.syncInternRecord(employee);
+
         this.logger.log(`Employee ${employee.employeeId} converted to Full-Timer. Setting conversionDate to ${employee.conversionDate}`);
       }
 
@@ -749,9 +823,32 @@ export class EmployeeDetailsService {
       });
       const result = await this.employeeDetailsRepository.save(employee);
 
+      // If they are currently an intern, sync their details to the intern_details table
+      if (result.employmentType === EmploymentType.INTERN) {
+        if (!result.internId) {
+          result.internId = result.employeeId;
+          await this.employeeDetailsRepository.save(result);
+        }
+        await this.syncInternRecord(result);
+      }
+
+      // Ensure User.internId is in sync
+      try {
+        const associatedUser = await this.userRepository.findOne({
+          where: { loginId: result.employeeId }
+        });
+        if (associatedUser && associatedUser.internId !== result.internId) {
+          associatedUser.internId = result.internId;
+          await this.userRepository.save(associatedUser);
+          this.logger.log(`Synchronized user.internId for loginId: ${result.employeeId}`);
+        }
+      } catch (userSyncError) {
+        this.logger.error(`Failed to synchronize user.internId: ${userSyncError.message}`);
+      }
+
       // --- Synchronize related tables if employeeId or fullName changed ---
       const employeeIdChanged = updatedEmployeeId !== originalEmployeeId;
-      const fullNameChanged = updateData.fullName && updateData.fullName !== employee.fullName;
+      const fullNameChanged = updateData.fullName && updateData.fullName !== originalFullName;
 
       if (employeeIdChanged) {
         this.logger.log(`EmployeeId changed from ${originalEmployeeId} to ${updatedEmployeeId}. Synchronizing related tables.`);
@@ -782,6 +879,25 @@ export class EmployeeDetailsService {
 
         // Update ManagerMapping where this employee is a manager
         await this.managerMappingRepository.update({ managerName: employee.fullName }, { managerName: updateData.fullName });
+
+        // Update User aliasLoginName to sync with fullName
+        try {
+          let associatedUser = await this.userRepository.findOne({
+            where: { loginId: originalEmployeeId }
+          });
+          if (!associatedUser) {
+            associatedUser = await this.userRepository.findOne({
+              where: { loginId: originalEmployeeId.toLowerCase() }
+            });
+          }
+          if (associatedUser) {
+            associatedUser.aliasLoginName = updateData.fullName!;
+            await this.userRepository.save(associatedUser);
+            this.logger.log(`Synchronized user.aliasLoginName for loginId: ${associatedUser.loginId}`);
+          }
+        } catch (userSyncError) {
+          this.logger.error(`Failed to synchronize user.aliasLoginName: ${userSyncError.message}`);
+        }
 
         this.logger.log(`Synchronization for fullName ${updateData.fullName} completed.`);
       }
@@ -952,7 +1068,9 @@ export class EmployeeDetailsService {
     // Update EmployeeDetails status fields
     employee.userStatus = newStatus;
     if (newStatus === UserStatus.INACTIVE) {
-      employee.inactiveDate = new Date();
+      // Store as date-only (local Y-M-D) so month filtering is stable across timezones
+      const now = new Date();
+      employee.inactiveDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     } else if (newStatus === UserStatus.ACTIVE) {
       employee.inactiveDate = null;
     }
@@ -965,6 +1083,29 @@ export class EmployeeDetailsService {
       user.status = newStatus;
       await this.userRepository.save(user);
       this.logger.log(`User status synchronized for: ${employee.employeeId}`);
+    }
+  }
+
+  private async syncInternRecord(employee: EmployeeDetails): Promise<void> {
+    try {
+      const internId = employee.internId || employee.employeeId;
+      let intern = await this.internDetailsRepository.findOne({ where: { internId } });
+      if (!intern) {
+        intern = this.internDetailsRepository.create({ internId });
+      }
+      intern.fullName = employee.fullName;
+      intern.department = employee.department;
+      intern.designation = employee.designation;
+      intern.email = employee.email;
+      intern.joiningDate = employee.joiningDate;
+      intern.conversionDate = employee.conversionDate;
+      intern.gender = employee.gender;
+      intern.role = employee.role;
+      intern.userStatus = employee.userStatus;
+      await this.internDetailsRepository.save(intern);
+      this.logger.log(`Synchronized intern_details record for: ${internId}`);
+    } catch (error) {
+      this.logger.error(`Failed to sync intern record: ${error.message}`);
     }
   }
 
@@ -1405,6 +1546,9 @@ export class EmployeeDetailsService {
           const joiningDateParsed = this.parseExcelDate(joiningDateRaw);
           const conversionDateParsed = this.parseExcelDate(conversionDateRaw);
 
+          const isIntern = (employmentTypeVal && Object.values(EmploymentType).includes(employmentTypeVal) ? employmentTypeVal : null) === EmploymentType.INTERN ||
+            (rowData.designation && String(rowData.designation).toLowerCase().includes('intern'));
+
           const employee = this.employeeDetailsRepository.create({
             fullName: String(rowData.fullName).trim(),
             employeeId: employeeId,
@@ -1418,6 +1562,7 @@ export class EmployeeDetailsService {
             userStatus: Object.values(UserStatus).includes(userStatusVal) ? userStatusVal : UserStatus.DRAFT,
             gender: genderVal && Object.values(Gender).includes(genderVal) ? genderVal : undefined,
             role: roleVal && Object.values(UserType).includes(roleVal) ? roleVal : undefined,
+            internId: isIntern ? employeeId : null,
           });
 
           const savedEmployee = await this.employeeDetailsRepository.save(employee);
@@ -1431,9 +1576,34 @@ export class EmployeeDetailsService {
               userType: UserType.EMPLOYEE,
               status: UserStatus.DRAFT,
               resetRequired: true,
+              internId: savedEmployee.internId || undefined,
             });
           } catch (userError) {
             this.logger.warn(`Failed to create user for employee ${savedEmployee.employeeId}: ${userError.message}`);
+          }
+
+          // Create InternDetails if this employee is an intern
+          if (isIntern) {
+            try {
+              const existingIntern = await this.internDetailsRepository.findOne({ where: { internId: savedEmployee.employeeId } });
+              if (!existingIntern) {
+                const newIntern = this.internDetailsRepository.create({
+                  fullName: savedEmployee.fullName,
+                  internId: savedEmployee.employeeId,
+                  department: savedEmployee.department,
+                  designation: savedEmployee.designation,
+                  email: savedEmployee.email,
+                  joiningDate: savedEmployee.joiningDate,
+                  gender: savedEmployee.gender,
+                  role: savedEmployee.role,
+                  userStatus: savedEmployee.userStatus,
+                });
+                await this.internDetailsRepository.save(newIntern);
+                this.logger.log(`Created historical intern details record via bulk upload: ${savedEmployee.employeeId}`);
+              }
+            } catch (internError) {
+              this.logger.error(`Failed to create bulk uploaded intern details record: ${internError.message}`);
+            }
           }
 
           // NO LONGER generating activation link during bulk upload.
@@ -1509,6 +1679,38 @@ export class EmployeeDetailsService {
     } catch (error) {
       this.logger.error(`Error generating bulk upload template: ${error.message}`, error.stack);
       throw new HttpException('Failed to generate template', HttpStatus.INTERNAL_SERVER_ERROR);
+    }
+  }
+
+  async getInterns(): Promise<any[]> {
+    try {
+      this.logger.log('Fetching all interns from history');
+      const interns = await this.internDetailsRepository.find({
+        order: { id: 'DESC' }
+      });
+
+      const result = await Promise.all(interns.map(async (intern) => {
+        const fullTimer = await this.employeeDetailsRepository.findOne({
+          where: {
+            internId: intern.internId,
+            employmentType: EmploymentType.FULL_TIMER
+          }
+        });
+
+        return {
+          ...intern,
+          isConverted: !!fullTimer,
+          convertedEmployeeId: fullTimer ? fullTimer.employeeId : null,
+          conversionDate: fullTimer ? fullTimer.conversionDate : null,
+          currentDesignation: fullTimer ? fullTimer.designation : intern.designation,
+          currentStatus: fullTimer ? fullTimer.userStatus : intern.userStatus,
+        };
+      }));
+
+      return result;
+    } catch (error) {
+      this.logger.error(`Error in getInterns: ${error.message}`, error.stack);
+      throw new HttpException('Failed to fetch interns list', HttpStatus.INTERNAL_SERVER_ERROR);
     }
   }
 }

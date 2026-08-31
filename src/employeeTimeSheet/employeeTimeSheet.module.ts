@@ -8,6 +8,7 @@ import { EmployeeLinkController } from './controllers/employeeLink.controller';
 import { EmployeeDetailsService } from './services/employeeDetails.service';
 import { EmployeeLinkService } from './services/employeeLink.service';
 import { EmployeeDetails } from './entities/employeeDetails.entity';
+import { InternDetails } from './entities/internDetails.entity';
 import { User } from '../users/entities/user.entity';
 import { ManagerMapping } from '../managerMapping/entities/managerMapping.entity';
 import { UsersModule } from '../users/users.module';
@@ -32,6 +33,7 @@ import { Notification } from '../notifications/entities/notification.entity';
     TypeOrmModule.forFeature([
       EmployeeAttendance, 
       EmployeeDetails, 
+      InternDetails,
       User, 
       TimesheetBlocker,
       LeaveRequest,

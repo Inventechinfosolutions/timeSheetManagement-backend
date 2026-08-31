@@ -11,13 +11,12 @@ import { UsersModule } from './users/users.module';
 import { EmployeeTimeSheetModule } from './employeeTimeSheet/employeeTimeSheet.module';
 import { MasterModule } from './master/master.module';
 import { ManagerMappingModule } from './managerMapping/managerMapping.module';
-import * as fs from 'fs';
-import * as path from 'path';
 import { ScheduleModule } from '@nestjs/schedule';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AttendanceCronService } from './cron/attendance.cron.service';
 import { EmployeeAttendance } from './employeeTimeSheet/entities/employeeAttendance.entity';
 import { EmployeeDetails } from './employeeTimeSheet/entities/employeeDetails.entity';
+import { InternDetails } from './employeeTimeSheet/entities/internDetails.entity';
 import { ManagerMapping } from './managerMapping/entities/managerMapping.entity';
 import { LeaveRequest } from './employeeTimeSheet/entities/leave-request.entity';
 import { MailModule } from './common/mail/mail.module';
@@ -25,24 +24,26 @@ import { NotificationsModule } from './notifications/notifications.module';
 import { CacheModule } from '@nestjs/cache-manager';
 import { BullModule } from '@nestjs/bull';
 import * as redisStore from 'cache-manager-redis-store';
+import * as fs from 'fs';
+import * as path from 'path';
 import { CachingUtil } from './common/utils/caching.util';
-
+ 
 function getEnvFiles(): string[] {
-  const envPath = path.join(process.cwd(), '.env');
-  let profile = 'local'; // default
-  
-  if (fs.existsSync(envPath)) {
-    const envContent = fs.readFileSync(envPath, 'utf8');
-    const profileMatch = envContent.match(/^PROFILE\s*=\s*(.+)$/m);
-    if (profileMatch) {
-      profile = profileMatch[1].trim();
+  if (!process.env.PROFILE) {
+    const baseEnvPath = path.resolve(process.cwd(), '.env');
+    if (fs.existsSync(baseEnvPath)) {
+      const baseEnv = fs.readFileSync(baseEnvPath, 'utf8');
+      const profileMatch = baseEnv.match(/^PROFILE=(.+)$/m);
+      process.env.PROFILE = profileMatch?.[1]?.trim();
     }
   }
-  
-  // Load profile-specific env file first, then .env as fallback
-  return [`.env.${profile}`, '.env'];
+ 
+  const profile = process.env.PROFILE || 'local';
+  const envFiles = [`.env.${profile}`, '.env'];
+  console.log(`[Config] Using PROFILE="${profile}" -> env files: ${envFiles.join(', ')}`);
+  return envFiles;
 }
-
+ 
 @Module({
   imports: [
     ConfigModule.forRoot({
@@ -56,12 +57,18 @@ function getEnvFiles(): string[] {
     MasterModule,
     ManagerMappingModule,
     ScheduleModule.forRoot(),
-    TypeOrmModule.forFeature([EmployeeAttendance, EmployeeDetails, ManagerMapping, LeaveRequest]),
+    TypeOrmModule.forFeature([
+      EmployeeAttendance,
+      EmployeeDetails,
+      InternDetails,
+      ManagerMapping,
+      LeaveRequest,
+    ]),
     MailModule,
     NotificationsModule,
     BullModule.forRootAsync({
       imports: [ConfigModule],
-      useFactory: async (configService: ConfigService) => ({
+      useFactory: (configService: ConfigService) => ({
         redis: {
           host: configService.get<string>('REDIS_HOST') || 'localhost',
           port: configService.get<number>('REDIS_PORT') || 6379,
@@ -73,7 +80,7 @@ function getEnvFiles(): string[] {
     CacheModule.registerAsync({
       isGlobal: true,
       imports: [ConfigModule],
-      useFactory: async (configService: ConfigService) => {
+      useFactory: (configService: ConfigService): any => {
         const redisHost = configService.get<string>('REDIS_HOST');
         if (redisHost && redisHost.trim() !== '') {
           return {

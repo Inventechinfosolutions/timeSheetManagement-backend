@@ -57,6 +57,7 @@ import { User } from '../../users/entities/user.entity';
 import { NotificationsService } from '../../notifications/Services/notifications.service';
 import { MasterHolidays } from '../../master/models/master-holidays.entity';
 import { LeaveRequestDto } from '../dto/leave-request.dto';
+import * as ExcelJS from 'exceljs';
 
 @Injectable()
 export class LeaveRequestsService {
@@ -622,6 +623,103 @@ export class LeaveRequestsService {
     ];
   }
 
+  /** Same labels as the Employee Requests table (including combined types). */
+  getTableRequestTypeLabel(req: {
+    requestType?: string;
+    firstHalf?: string;
+    secondHalf?: string;
+    isHalfDay?: boolean | number | string;
+  }): string {
+    const normalize = (type: string): string => {
+      const t = (type || '').trim();
+      if (t === LeaveRequestType.APPLY_LEAVE || t === LeaveRequestType.LEAVE)
+        return 'Leave';
+      if (
+        t === WorkLocation.WORK_FROM_HOME ||
+        t === 'WFH' ||
+        t.toLowerCase() === 'work from home'
+      )
+        return 'Work From Home';
+      if (t === WorkLocation.CLIENT_VISIT) return 'Client Visit';
+      if (t === WorkLocation.OFFICE) return 'Office';
+      // Always show one label for half-day leave (never bare "Half Day")
+      if (
+        t === AttendanceStatus.HALF_DAY ||
+        t === LeaveRequestType.HALF_DAY ||
+        t.toLowerCase() === 'half day leave'
+      )
+        return 'Half Day Leave';
+      return t;
+    };
+
+    const isHalf =
+      req.isHalfDay === true || req.isHalfDay === 1 || req.isHalfDay === '1';
+    if (isHalf && req.firstHalf && req.secondHalf) {
+      let first = normalize(req.firstHalf);
+      let second = normalize(req.secondHalf);
+      if (first === 'Leave') first = 'Half Day Leave';
+      if (second === 'Leave') second = 'Half Day Leave';
+      if (first === second) return first;
+      return `${first} + ${second}`;
+    }
+
+    const raw = (req.requestType || '').trim();
+    if (!raw) return '';
+    if (raw === LeaveRequestType.APPLY_LEAVE || raw === LeaveRequestType.LEAVE)
+      return 'Leave';
+    if (
+      raw === AttendanceStatus.HALF_DAY ||
+      raw === LeaveRequestType.HALF_DAY ||
+      raw.toLowerCase() === 'half day'
+    )
+      return 'Half Day Leave';
+    return normalize(raw) !== raw ? normalize(raw) : raw;
+  }
+
+  async getDistinctRequestTypes(): Promise<string[]> {
+    this.logger.log('[FETCH] Getting distinct request types for filter');
+    try {
+      const rows = await this.leaveRequestRepository
+        .createQueryBuilder('lr')
+        .select([
+          'lr.requestType AS requestType',
+          'lr.firstHalf AS firstHalf',
+          'lr.secondHalf AS secondHalf',
+          'lr.isHalfDay AS isHalfDay',
+        ])
+        .getRawMany();
+
+      const labels = new Set<string>();
+      // Base apply types (single Half Day Leave — not both Half Day + Half Day Leave)
+      labels.add('Leave');
+      labels.add('Work From Home');
+      labels.add('Client Visit');
+      labels.add('Half Day Leave');
+
+      for (const row of rows) {
+        let label = this.getTableRequestTypeLabel(row);
+        if (!label) continue;
+        // Collapse legacy "Half Day" into "Half Day Leave"
+        if (label.toLowerCase() === 'half day') label = 'Half Day Leave';
+        labels.add(label);
+      }
+
+      // Ensure bare "Half Day" never appears in the dropdown
+      labels.delete('Half Day');
+
+      return Array.from(labels).sort((a, b) => a.localeCompare(b));
+    } catch (error) {
+      this.logger.error(
+        `[FETCH] Failed to get distinct request types: ${error.message}`,
+        error.stack,
+      );
+      throw new HttpException(
+        `Failed to fetch request types: ${error.message}`,
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
+  }
+
   async findUnifiedRequests(filters: {
     employeeId?: string;
     department?: string;
@@ -629,10 +727,12 @@ export class LeaveRequestsService {
     search?: string;
     month?: string;
     year?: string;
+    requestType?: string;
     page?: number;
     limit?: number;
     managerName?: string;
     managerId?: string;
+    forExport?: boolean;
   }) {
     this.logger.log(
       `[FETCH] Starting unified request fetch. Filters: ${JSON.stringify(filters)}`,
@@ -645,10 +745,12 @@ export class LeaveRequestsService {
         search,
         month = 'All',
         year = 'All',
+        requestType,
         page = 1,
         limit = 10,
         managerName,
         managerId,
+        forExport = false,
       } = filters;
 
       const query = this.leaveRequestRepository
@@ -673,13 +775,27 @@ export class LeaveRequestsService {
           'lr.secondHalf AS secondHalf',
           'lr.isHalfDay AS isHalfDay',
           'lr.ccEmails AS ccEmails',
+          'lr.availableDates AS availableDates',
+          'lr.reviewedBy AS reviewedBy',
+          'lr.isModified AS isModified',
+          'lr.modificationCount AS modificationCount',
           'ed.department AS department',
           'ed.fullName AS fullName',
+          'ed.internId AS internId',
+          'ed.conversionDate AS conversionDate',
         ]);
 
       // 1. Employee Filter
       if (employeeId) {
-        query.andWhere('lr.employeeId = :employeeId', { employeeId });
+        const employee = await this.employeeDetailsRepository.findOne({
+          where: { employeeId },
+          select: ['employeeId', 'internId'],
+        });
+        const employeeIds = [employeeId];
+        if (employee?.internId) {
+          employeeIds.push(employee.internId);
+        }
+        query.andWhere('lr.employeeId IN (:...employeeIds)', { employeeIds });
       }
 
       // 2. Manager Filter (from Upstream)
@@ -713,6 +829,180 @@ export class LeaveRequestsService {
       // 4. Status Filter
       if (status && status !== 'All') {
         query.andWhere('lr.status = :status', { status });
+      }
+
+      // 4b. Request Type Filter
+      if (requestType && requestType !== 'All') {
+        const rt = requestType.trim().toLowerCase();
+        const isBaseLeave = rt === 'leave' || rt === 'apply leave';
+        const isBaseWfh = rt === 'work from home' || rt === 'wfh';
+        const isBaseCv = rt === 'client visit';
+        const isBaseHalf =
+          rt === 'half day' || rt === 'half day leave';
+
+        if (isBaseLeave) {
+          query
+            .andWhere(
+              new Brackets((qb) => {
+                qb.where('LOWER(lr.requestType) = :leaveExact', {
+                  leaveExact: 'leave',
+                }).orWhere('LOWER(lr.requestType) = :applyLeaveExact', {
+                  applyLeaveExact: 'apply leave',
+                });
+              }),
+            )
+            .andWhere('LOWER(lr.requestType) NOT LIKE :plusSignLeave', {
+              plusSignLeave: '%+%',
+            })
+            .andWhere(
+              new Brackets((qb) => {
+                qb.where(
+                  'lr.isHalfDay = false OR lr.isHalfDay = 0 OR lr.isHalfDay IS NULL',
+                )
+                  .orWhere('lr.firstHalf IS NULL')
+                  .orWhere('lr.secondHalf IS NULL')
+                  .orWhere('LOWER(lr.firstHalf) = LOWER(lr.secondHalf)');
+              }),
+            );
+        } else if (isBaseWfh) {
+          query
+            .andWhere(
+              new Brackets((qb) => {
+                qb.where('LOWER(lr.requestType) = :wfhExact', {
+                  wfhExact: 'work from home',
+                }).orWhere('LOWER(lr.requestType) = :wfhShort', {
+                  wfhShort: 'wfh',
+                });
+              }),
+            )
+            .andWhere('LOWER(lr.requestType) NOT LIKE :plusSignWfh', {
+              plusSignWfh: '%+%',
+            })
+            .andWhere(
+              new Brackets((qb) => {
+                qb.where(
+                  'lr.isHalfDay = false OR lr.isHalfDay = 0 OR lr.isHalfDay IS NULL',
+                )
+                  .orWhere('lr.firstHalf IS NULL')
+                  .orWhere('lr.secondHalf IS NULL')
+                  .orWhere('LOWER(lr.firstHalf) = LOWER(lr.secondHalf)');
+              }),
+            );
+        } else if (isBaseCv) {
+          query
+            .andWhere(
+              new Brackets((qb) => {
+                qb.where('LOWER(lr.requestType) = :cvExact', {
+                  cvExact: 'client visit',
+                });
+              }),
+            )
+            .andWhere('LOWER(lr.requestType) NOT LIKE :plusSignCv', {
+              plusSignCv: '%+%',
+            })
+            .andWhere(
+              new Brackets((qb) => {
+                qb.where(
+                  'lr.isHalfDay = false OR lr.isHalfDay = 0 OR lr.isHalfDay IS NULL',
+                )
+                  .orWhere('lr.firstHalf IS NULL')
+                  .orWhere('lr.secondHalf IS NULL')
+                  .orWhere('LOWER(lr.firstHalf) = LOWER(lr.secondHalf)');
+              }),
+            );
+        } else if (isBaseHalf) {
+          // Only true half-day leave (not WFH/CV half-day splits)
+          query
+            .andWhere(
+              new Brackets((qb) => {
+                qb.where('LOWER(lr.requestType) IN (:...halfTypes)', {
+                  halfTypes: ['half day', 'half day leave'],
+                }).orWhere(
+                  new Brackets((qb2) => {
+                    qb2
+                      .where('(lr.isHalfDay = true OR lr.isHalfDay = 1)')
+                      .andWhere(
+                        'LOWER(lr.firstHalf) IN (:...leaveHalfA)',
+                        {
+                          leaveHalfA: [
+                            'leave',
+                            'apply leave',
+                            'half day leave',
+                          ],
+                        },
+                      )
+                      .andWhere(
+                        'LOWER(lr.secondHalf) IN (:...leaveHalfB)',
+                        {
+                          leaveHalfB: [
+                            'leave',
+                            'apply leave',
+                            'half day leave',
+                          ],
+                        },
+                      );
+                  }),
+                );
+              }),
+            )
+            .andWhere('LOWER(lr.requestType) NOT LIKE :plusSignHalf', {
+              plusSignHalf: '%+%',
+            });
+        } else {
+          // Combined / exact table labels e.g. "Work From Home + Leave"
+          query.andWhere(
+            new Brackets((qb) => {
+              qb.where('lr.requestType = :exactRequestType', {
+                exactRequestType: requestType.trim(),
+              }).orWhere('LOWER(lr.requestType) = :exactRequestTypeLower', {
+                exactRequestTypeLower: rt,
+              });
+
+              if (requestType.includes('+')) {
+                const parts = requestType.split('+').map((p) => p.trim());
+                if (parts.length === 2) {
+                  const mapPart = (label: string): string[] => {
+                    const l = label.toLowerCase();
+                    if (l === 'half day leave' || l === 'leave') {
+                      return ['Leave', 'Apply Leave', 'Half Day Leave'];
+                    }
+                    if (l === 'wfh' || l === 'work from home') {
+                      return ['Work From Home', 'WFH'];
+                    }
+                    if (l === 'client visit') return ['Client Visit'];
+                    if (l === 'office') return ['Office'];
+                    return [label];
+                  };
+                  const aOpts = mapPart(parts[0]);
+                  const bOpts = mapPart(parts[1]);
+                  qb.orWhere(
+                    new Brackets((qb2) => {
+                      qb2
+                        .where('lr.isHalfDay = true')
+                        .andWhere('lr.firstHalf IN (:...rtAOpts)', {
+                          rtAOpts: aOpts,
+                        })
+                        .andWhere('lr.secondHalf IN (:...rtBOpts)', {
+                          rtBOpts: bOpts,
+                        });
+                    }),
+                  ).orWhere(
+                    new Brackets((qb2) => {
+                      qb2
+                        .where('lr.isHalfDay = true')
+                        .andWhere('lr.firstHalf IN (:...rtBOpts2)', {
+                          rtBOpts2: bOpts,
+                        })
+                        .andWhere('lr.secondHalf IN (:...rtAOpts2)', {
+                          rtAOpts2: aOpts,
+                        });
+                    }),
+                  );
+                }
+              }
+            }),
+          );
+        }
       }
 
       // 5. Search Filter
@@ -764,12 +1054,26 @@ export class LeaveRequestsService {
         }
       }
 
+      query
+        .orderBy('lr.submittedDate', 'DESC')
+        .addOrderBy('lr.createdAt', 'DESC')
+        .addOrderBy('lr.id', 'DESC');
+
+      if (forExport) {
+        const data = await query.getRawMany();
+        this.logger.log(`[FETCH] Export retrieved ${data.length} requests`);
+        return {
+          data,
+          total: data.length,
+          page: 1,
+          limit: data.length,
+          totalPages: 1,
+        };
+      }
+
       const total = await query.getCount();
 
       const data = await query
-        .orderBy('lr.createdAt', 'DESC')
-        .addOrderBy('lr.updatedAt', 'DESC')
-        .addOrderBy('lr.id', 'DESC')
         .offset((page - 1) * limit)
         .limit(limit)
         .getRawMany();
@@ -792,6 +1096,225 @@ export class LeaveRequestsService {
       if (error instanceof HttpException) throw error;
       throw new HttpException(
         `Failed to fetch requests: ${error.message}`,
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
+  }
+
+  private formatCcEmails(ccEmails: string | null | undefined): string {
+    if (!ccEmails) return '';
+    try {
+      const parsed = typeof ccEmails === 'string' ? JSON.parse(ccEmails) : ccEmails;
+      if (Array.isArray(parsed)) return parsed.join(', ');
+      return String(ccEmails);
+    } catch {
+      return String(ccEmails);
+    }
+  }
+
+  private formatAvailableDates(availableDates: string | null | undefined): string {
+    return this.parseAvailableDatesArray(availableDates).join(', ');
+  }
+
+  private parseAvailableDatesArray(
+    availableDates: string | null | undefined,
+  ): string[] {
+    if (!availableDates) return [];
+    try {
+      const parsed =
+        typeof availableDates === 'string'
+          ? JSON.parse(availableDates)
+          : availableDates;
+      if (Array.isArray(parsed)) {
+        return parsed
+          .map((d) => String(d).trim())
+          .filter(Boolean);
+      }
+      return [];
+    } catch {
+      return [];
+    }
+  }
+
+  /** Prefer DB duration; if 0/missing, count working days from availableDates. */
+  private resolveExportDuration(req: {
+    duration?: string | number | null;
+    availableDates?: string | null;
+    isHalfDay?: boolean | number | string;
+    firstHalf?: string | null;
+    secondHalf?: string | null;
+    fromDate?: string;
+    toDate?: string;
+  }): number {
+    const stored = Number(req.duration);
+    if (!Number.isNaN(stored) && stored > 0) {
+      return stored;
+    }
+
+    const dates = this.parseAvailableDatesArray(req.availableDates);
+    if (dates.length > 0) {
+      const isHalf =
+        req.isHalfDay === true ||
+        req.isHalfDay === 1 ||
+        req.isHalfDay === '1';
+      if (isHalf) {
+        return (
+          dates.length *
+          this.getDurationFactor(
+            (req.firstHalf as string) || null,
+            (req.secondHalf as string) || null,
+          )
+        );
+      }
+      return dates.length;
+    }
+
+    // Last fallback: count weekdays between from/to
+    if (req.fromDate && req.toDate) {
+      let count = 0;
+      let current = dayjs(req.fromDate);
+      const end = dayjs(req.toDate);
+      while (current.isBefore(end) || current.isSame(end, 'day')) {
+        const day = current.day();
+        if (day !== 0 && day !== 6) count += 1;
+        current = current.add(1, 'day');
+      }
+      const isHalf =
+        req.isHalfDay === true ||
+        req.isHalfDay === 1 ||
+        req.isHalfDay === '1';
+      if (isHalf) {
+        return (
+          count *
+          this.getDurationFactor(
+            (req.firstHalf as string) || null,
+            (req.secondHalf as string) || null,
+          )
+        );
+      }
+      return count;
+    }
+
+    return 0;
+  }
+
+  private normalizeRequestTypeLabel(req: {
+    requestType?: string;
+    firstHalf?: string;
+    secondHalf?: string;
+    isHalfDay?: boolean | number | string;
+  }): string {
+    return this.getTableRequestTypeLabel(req);
+  }
+
+  async exportRequestsToExcel(filters: {
+    employeeId?: string;
+    department?: string;
+    status?: string;
+    search?: string;
+    month?: string;
+    year?: string;
+    requestType?: string;
+    managerName?: string;
+    managerId?: string;
+  }): Promise<Buffer> {
+    this.logger.log(
+      `[EXPORT] Generating Excel for leave requests. Filters: ${JSON.stringify(filters)}`,
+    );
+    try {
+      const result = await this.findUnifiedRequests({
+        ...filters,
+        forExport: true,
+      });
+      const rows = result.data || [];
+
+      const workbook = new ExcelJS.Workbook();
+      workbook.creator = 'Timesheet Management';
+      workbook.created = new Date();
+      const sheet = workbook.addWorksheet('Employee Requests');
+
+      sheet.columns = [
+        { header: 'Employee ID', key: 'employeeId', width: 16 },
+        { header: 'Employee Name', key: 'fullName', width: 24 },
+        { header: 'Department', key: 'department', width: 22 },
+        { header: 'Request Type', key: 'requestType', width: 22 },
+        { header: 'Duration Type', key: 'durationType', width: 14 },
+        { header: 'First Half', key: 'firstHalf', width: 18 },
+        { header: 'Second Half', key: 'secondHalf', width: 18 },
+        { header: 'From Date', key: 'fromDate', width: 14 },
+        { header: 'To Date', key: 'toDate', width: 14 },
+        { header: 'Duration (Days)', key: 'duration', width: 14 },
+        { header: 'Subject / Title', key: 'title', width: 28 },
+        { header: 'Description', key: 'description', width: 40 },
+        { header: 'CC Emails', key: 'ccEmails', width: 28 },
+        { header: 'Status', key: 'status', width: 22 },
+        { header: 'Submitted Date', key: 'submittedDate', width: 14 },
+        { header: 'Reviewed By', key: 'reviewedBy', width: 18 },
+        { header: 'Modified', key: 'isModified', width: 10 },
+        { header: 'Modification Count', key: 'modificationCount', width: 16 },
+      ];
+
+      const headerRow = sheet.getRow(1);
+      headerRow.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+      headerRow.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FF4318FF' },
+      };
+      headerRow.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
+      headerRow.height = 22;
+
+      for (const req of rows) {
+        const isHalf =
+          req.isHalfDay === true ||
+          req.isHalfDay === 1 ||
+          req.isHalfDay === '1';
+        sheet.addRow({
+          employeeId: req.employeeId || '',
+          fullName: req.fullName || '',
+          department: req.department || '',
+          requestType: this.normalizeRequestTypeLabel(req),
+          durationType: isHalf ? 'Half Day' : 'Full Day',
+          firstHalf: req.firstHalf || '',
+          secondHalf: req.secondHalf || '',
+          fromDate: req.fromDate
+            ? dayjs(req.fromDate).format('YYYY-MM-DD')
+            : '',
+          toDate: req.toDate ? dayjs(req.toDate).format('YYYY-MM-DD') : '',
+          duration: this.resolveExportDuration(req),
+          title: req.title || '',
+          description: req.description || '',
+          ccEmails: this.formatCcEmails(req.ccEmails),
+          status: req.status || '',
+          submittedDate: req.submittedDate
+            ? dayjs(req.submittedDate).format('YYYY-MM-DD')
+            : '',
+          reviewedBy: req.reviewedBy || '',
+          isModified:
+            req.isModified === true ||
+            req.isModified === 1 ||
+            req.isModified === '1'
+              ? 'Yes'
+              : 'No',
+          modificationCount: req.modificationCount ?? 0,
+        });
+      }
+
+      sheet.eachRow((row, rowNumber) => {
+        if (rowNumber === 1) return;
+        row.alignment = { vertical: 'middle', wrapText: true };
+      });
+
+      const buffer = await workbook.xlsx.writeBuffer();
+      return Buffer.from(buffer);
+    } catch (error) {
+      this.logger.error(
+        `[EXPORT] Excel generation failed: ${error.message}`,
+        error.stack,
+      );
+      if (error instanceof HttpException) throw error;
+      throw new HttpException(
+        `Failed to export requests: ${error.message}`,
         HttpStatus.INTERNAL_SERVER_ERROR,
       );
     }
@@ -880,6 +1403,8 @@ export class LeaveRequestsService {
           'lr.ccEmails AS ccEmails',
           'ed.department AS department',
           'ed.fullName AS fullName',
+          'ed.internId AS internId',
+          'ed.conversionDate AS conversionDate',
         ])
         .getRawOne();
 
@@ -1471,7 +1996,58 @@ export class LeaveRequestsService {
     }
   }
 
-  /** Leave balance: entitlement (18 full timer / 12 intern), used (approved leave in year), pending, balance */
+  /** FULL_TIMER takes precedence over intern-like designations (e.g. Trainee Intern). */
+  private resolveBaseInternStatus(employee: {
+    employmentType?: EmploymentType | null;
+    designation?: string | null;
+  }): boolean {
+    if (employee.employmentType === EmploymentType.FULL_TIMER) {
+      return false;
+    }
+    if (employee.employmentType === EmploymentType.INTERN) {
+      return true;
+    }
+    return (employee.designation || '')
+      .toLowerCase()
+      .includes(EmploymentType.INTERN.toLowerCase());
+  }
+
+  /** Month-aware intern status including intern-to-full-timer conversion date. */
+  private isInternForMonth(
+    employee: {
+      employmentType?: EmploymentType | null;
+      designation?: string | null;
+      conversionDate?: Date | null;
+    },
+    year: number,
+    month: number,
+  ): boolean {
+    let isInternThisMonth = this.resolveBaseInternStatus(employee);
+    const convDate = employee.conversionDate
+      ? dayjs(employee.conversionDate)
+      : null;
+
+    if (convDate?.isValid()) {
+      const convYear = convDate.year();
+      const convMonth = convDate.month() + 1;
+
+      if (year > convYear || (year === convYear && month >= convMonth)) {
+        isInternThisMonth = false;
+        if (
+          year === convYear &&
+          month === convMonth &&
+          convDate.date() > 10
+        ) {
+          isInternThisMonth = true;
+        }
+      } else {
+        isInternThisMonth = true;
+      }
+    }
+
+    return isInternThisMonth;
+  }
+
   /** Leave balance: entitlement (18 full timer / 12 intern), used (approved leave in year), pending, balance */
   async getLeaveBalance(employeeId: string, year: string) {
     this.logger.log(
@@ -1494,6 +2070,7 @@ export class LeaveRequestsService {
           'employmentType',
           'joiningDate',
           'conversionDate',
+          'internId',
         ],
       });
       if (!employee) {
@@ -1501,21 +2078,15 @@ export class LeaveRequestsService {
         throw new NotFoundException(`Employee ${employeeId} not found`);
       }
 
-      // Explicit employment type: FULL_TIMER = 18, INTERN = 12. Else infer from designation (contains "intern").
-      const isIntern =
-        employee.employmentType === EmploymentType.INTERN ||
-        (employee.designation || '')
-          .toLowerCase()
-          .includes(EmploymentType.INTERN.toLowerCase());
+      const employeeIds = [employee.employeeId];
+      if (employee.internId) {
+        employeeIds.push(employee.internId);
+      }
 
       // Prorate entitlement for the year based on status and conversion date
       const joinDate = dayjs(employee.joiningDate);
       const joinMonth = joinDate.isValid() ? joinDate.month() + 1 : 1;
       const joinYear = joinDate.isValid() ? joinDate.year() : yearNum;
-
-      const convDate = (employee as any).conversionDate
-        ? dayjs((employee as any).conversionDate)
-        : null;
 
       let entitlement = 0;
 
@@ -1525,21 +2096,8 @@ export class LeaveRequestsService {
         for (let m = 1; m <= 12; m++) {
           if (yearNum === joinYear && m < joinMonth) continue;
 
-          let monthlyAccrual = isIntern ? 1.0 : 1.5;
-
-          if (convDate && convDate.isValid()) {
-            const cMonth = convDate.month() + 1;
-            const cYear = convDate.year();
-
-            if (yearNum > cYear || (yearNum === cYear && m >= cMonth)) {
-              monthlyAccrual = 1.5;
-              if (yearNum === cYear && m === cMonth && convDate.date() > 10) {
-                monthlyAccrual = 1.0;
-              }
-            } else {
-              monthlyAccrual = 1.0;
-            }
-          }
+          const isInternThisMonth = this.isInternForMonth(employee, yearNum, m);
+          let monthlyAccrual = isInternThisMonth ? 1.0 : 1.5;
 
           if (yearNum === joinYear && m === joinMonth && joinDate.date() > 10) {
             monthlyAccrual = 0;
@@ -1554,7 +2112,7 @@ export class LeaveRequestsService {
       const usedResult = await this.leaveRequestRepository
         .createQueryBuilder('lr')
         .select('SUM(lr.duration)', 'total')
-        .where('lr.employeeId = :employeeId', { employeeId })
+        .where('lr.employeeId IN (:...employeeIds)', { employeeIds })
         .andWhere(
           new Brackets((qb) => {
             qb.where('lr.requestType IN (:...leaveTypes)', { leaveTypes })
@@ -1578,7 +2136,7 @@ export class LeaveRequestsService {
       const pendingResult = await this.leaveRequestRepository
         .createQueryBuilder('lr')
         .select('SUM(lr.duration)', 'total')
-        .where('lr.employeeId = :employeeId', { employeeId })
+        .where('lr.employeeId IN (:...employeeIds)', { employeeIds })
         .andWhere(
           new Brackets((qb) => {
             qb.where('lr.requestType IN (:...leaveTypes)', { leaveTypes })
@@ -1624,8 +2182,17 @@ export class LeaveRequestsService {
       `[STATS] getStats: Employee=${employeeId}, Month=${month}, Year=${year}`,
     );
     try {
-      const requests = await this.leaveRequestRepository.find({
+      const employee = await this.employeeDetailsRepository.findOne({
         where: { employeeId },
+        select: ['employeeId', 'internId'],
+      });
+      const employeeIds = [employeeId];
+      if (employee?.internId) {
+        employeeIds.push(employee.internId);
+      }
+
+      const requests = await this.leaveRequestRepository.find({
+        where: { employeeId: In(employeeIds) },
       });
 
       const filteredRequests = requests.filter((req: any) => {
@@ -1753,10 +2320,26 @@ export class LeaveRequestsService {
       }
 
       const previousStatus = request.status;
+
+      if (status === LeaveRequestStatus.REJECTED && previousStatus === LeaveRequestStatus.REQUESTING_FOR_MODIFICATION) {
+        status = LeaveRequestStatus.MODIFICATION_REJECTED;
+      }
+      if (status === LeaveRequestStatus.REJECTED && previousStatus === LeaveRequestStatus.REQUESTING_FOR_CANCELLATION) {
+        status = LeaveRequestStatus.CANCELLATION_REJECTED;
+      }
+
       request.status = status;
       if (reviewedBy) request.reviewedBy = reviewedBy;
       request.isRead = true;
       request.isReadEmployee = false;
+
+      if (status === LeaveRequestStatus.MODIFICATION_APPROVED && request.requestModifiedFrom && request.requestModifiedFrom.startsWith('PARENT_ORIGINAL:')) {
+        request.requestModifiedFrom = null as any;
+      }
+
+      // Backup child's availableDates BEFORE save — TypeORM returns the same object reference,
+      // so the terminalFailedStatuses wipe below would destroy it before the restore block runs.
+      const _childAvailableDatesBackup = request.availableDates;
 
       const savedRequest = await this.leaveRequestRepository.save(request);
 
@@ -1772,7 +2355,7 @@ export class LeaveRequestsService {
       ];
 
       if (terminalFailedStatuses.includes(status as any)) {
-        const isChild = !!request.requestModifiedFrom;
+        const isChild = request.requestModifiedFrom && !request.requestModifiedFrom.startsWith('PARENT_ORIGINAL:');
         // 1. Child records ALWAYS get wiped on failure.
         // 2. Parent records get wiped if they are TRULY terminal (REJECTED/CANCELLED)
         //    and NOT being reverted to APPROVED (handled in reversion logic below).
@@ -1967,7 +2550,7 @@ export class LeaveRequestsService {
               workLocation: () => 'NULL',
             });
 
-            const parentIdVal = request.requestModifiedFrom
+            const parentIdVal = request.requestModifiedFrom && !request.requestModifiedFrom.startsWith('PARENT_ORIGINAL:')
               ? String(request.requestModifiedFrom).split(':')[0]
               : null;
             const idsToCheck = [id];
@@ -2067,29 +2650,198 @@ export class LeaveRequestsService {
       // and it was originally an Approved leave, we should ensure the "original" stays.
       // 1. If it's a FULL modification (editing the parent directly), revert parent to APPROVED.
       if (
-        status === LeaveRequestStatus.REJECTED &&
+        (status === LeaveRequestStatus.REJECTED || status === LeaveRequestStatus.MODIFICATION_REJECTED) &&
         previousStatus === LeaveRequestStatus.REQUESTING_FOR_MODIFICATION
       ) {
-        if (!request.requestModifiedFrom) {
-          // This was a full modification on the parent itself. Revert it.
+        if (!request.requestModifiedFrom || request.requestModifiedFrom.startsWith('PARENT_ORIGINAL:')) {
+          // Clone request to create a child request with MODIFICATION_REJECTED status
+          const childRequest = this.leaveRequestRepository.create({
+            employeeId: request.employeeId,
+            requestType: request.requestType,
+            fromDate: request.fromDate,
+            toDate: request.toDate,
+            title: request.title,
+            description: request.description,
+            status: LeaveRequestStatus.MODIFICATION_REJECTED,
+            submittedDate: request.submittedDate,
+            duration: request.duration,
+            isRead: true,
+            isReadEmployee: false,
+            requestModifiedFrom: `${request.id}:${request.requestType}`,
+            firstHalf: request.firstHalf,
+            secondHalf: request.secondHalf,
+            isHalfDay: request.isHalfDay,
+            ccEmails: request.ccEmails,
+            availableDates: JSON.stringify([]), // doesn't block dates
+            isModified: true,
+            modificationCount: request.modificationCount,
+            lastModifiedDate: new Date(),
+          });
+          await this.leaveRequestRepository.save(childRequest);
+
+          // Now revert the parent request itself back to APPROVED status and restore original details.
           request.status = LeaveRequestStatus.APPROVED;
+          this.restoreParentOriginalDetails(request);
           await this.leaveRequestRepository.save(request);
           this.logger.log(
-            `[UPDATE_STATUS] Reverted request ${id} back to APPROVED after modification rejection.`,
+            `[UPDATE_STATUS] Reverted parent request ${id} back to APPROVED and created child MODIFICATION_REJECTED ${childRequest.id} after modification rejection.`,
           );
         }
       }
 
+
+      const isChildModificationRevert =
+        (status === LeaveRequestStatus.MODIFICATION_CANCELLED ||
+          status === LeaveRequestStatus.MODIFICATION_REJECTED) &&
+        request.requestModifiedFrom &&
+        !request.requestModifiedFrom.startsWith('PARENT_ORIGINAL:');
+      if (isChildModificationRevert) {
+        try {
+          const parentId = Number(
+            String(request.requestModifiedFrom).split(':')[0],
+          );
+          if (!isNaN(parentId)) {
+            const parent = await this.leaveRequestRepository.findOne({
+              where: { id: parentId },
+            });
+            if (parent) {
+              // 1. Get dates from the cancelled modification child (use backup — original is wiped above)
+              let restoredDates: string[] = [];
+              if (_childAvailableDatesBackup) {
+                try {
+                  const parsed = JSON.parse(_childAvailableDatesBackup);
+                  if (Array.isArray(parsed)) restoredDates = parsed;
+                } catch (e) {}
+              }
+              // Fallback: derive from date range
+              if (restoredDates.length === 0) {
+                let cur = dayjs(request.fromDate);
+                const end = dayjs(request.toDate);
+                while (cur.isBefore(end) || cur.isSame(end, 'day')) {
+                  const isWknd = await this._isWeekend(cur, request.employeeId);
+                  const isHol = await this._isHoliday(cur);
+                  if (!isWknd && !isHol) restoredDates.push(cur.format('YYYY-MM-DD'));
+                  cur = cur.add(1, 'day');
+                }
+              }
+
+              if (restoredDates.length > 0) {
+                let allParentDates: string[] = [];
+                if (parent.availableDates) {
+                  try {
+                    const parsed = JSON.parse(parent.availableDates);
+                    if (Array.isArray(parsed)) allParentDates = parsed;
+                  } catch (e) {}
+                }
+
+                const mergedDatesSet = new Set([...allParentDates, ...restoredDates]);
+                const mergedDates = Array.from(mergedDatesSet).sort();
+
+                let totalWorkingDays = 0;
+                for (const d of mergedDates) {
+                  const day = dayjs(d);
+                  const isWknd = await this._isWeekend(day, request.employeeId);
+                  const isHol = await this._isHoliday(day);
+                  if (!isWknd && !isHol) totalWorkingDays++;
+                }
+
+                const factor = parent.isHalfDay
+                  ? this.getDurationFactor(parent.firstHalf, parent.secondHalf)
+                  : 1.0;
+
+                parent.duration = Number((totalWorkingDays * factor).toFixed(2));
+                parent.fromDate = mergedDates[0];
+                parent.toDate = mergedDates[mergedDates.length - 1];
+                parent.availableDates = JSON.stringify(mergedDates);
+                parent.status = LeaveRequestStatus.APPROVED;
+
+                await this.leaveRequestRepository.save(parent);
+                this.logger.log(
+                  `[UPDATE_STATUS] [MOD_CANCELLED] Restored ${restoredDates.length} date(s) to parent ${parentId}. duration=${parent.duration}, from=${parent.fromDate}, to=${parent.toDate}`,
+                );
+
+                for (const dateStr of restoredDates) {
+                  try {
+                    const targetDate = dayjs(dateStr);
+                    const startOfDay = targetDate.startOf('day').toDate();
+                    const endOfDay = targetDate.endOf('day').toDate();
+
+                    let attendance = await this.employeeAttendanceRepository.findOne({
+                      where: { employeeId: parent.employeeId, workingDate: Between(startOfDay, endOfDay) },
+                    });
+
+                    const firstHalf = parent.firstHalf || WorkLocation.OFFICE;
+                    const secondHalf = parent.secondHalf || WorkLocation.OFFICE;
+                    const calculatedHours = this.calculateTotalHours(firstHalf, secondHalf);
+                    let derivedStatus = AttendanceStatus.FULL_DAY;
+                    if (calculatedHours === 9) derivedStatus = AttendanceStatus.FULL_DAY;
+                    else if (calculatedHours === 6) derivedStatus = AttendanceStatus.HALF_DAY;
+                    else if (calculatedHours === 0) derivedStatus = AttendanceStatus.LEAVE;
+
+                    if (!attendance) {
+                      attendance = this.employeeAttendanceRepository.create({
+                        employeeId: parent.employeeId, workingDate: startOfDay,
+                        totalHours: calculatedHours, status: derivedStatus,
+                        firstHalf, secondHalf, sourceRequestId: parent.id, workLocation: null,
+                      });
+                      await this.employeeAttendanceRepository.save(attendance);
+                    } else {
+                      await this.employeeAttendanceRepository.createQueryBuilder()
+                        .update(EmployeeAttendance)
+                        .set({ totalHours: calculatedHours, status: derivedStatus, firstHalf, secondHalf, sourceRequestId: parent.id, workLocation: null })
+                        .where('id = :id', { id: attendance.id })
+                        .execute();
+                    }
+                    this.logger.log(`[UPDATE_STATUS] [MOD_CANCELLED] Attendance restored for ${dateStr}`);
+                  } catch (attErr) {
+                    this.logger.error(`[UPDATE_STATUS] [MOD_CANCELLED] Attendance restore failed for ${dateStr}: ${attErr.message}`);
+                  }
+                }
+              }
+            }
+          }
+        } catch (err) {
+          this.logger.error(`[UPDATE_STATUS] [MOD_CANCELLED] Failed to restore dates to parent: ${err.message}`);
+        }
+      }
+      // ─── END: MODIFICATION_CANCELLED RESTORE LOGIC ────────────────────────────
+
       // 2. If a FULL cancellation request is REJECTED, revert it to APPROVED.
       if (
-        status === LeaveRequestStatus.REJECTED &&
+        (status === LeaveRequestStatus.REJECTED || status === LeaveRequestStatus.CANCELLATION_REJECTED) &&
         previousStatus === LeaveRequestStatus.REQUESTING_FOR_CANCELLATION
       ) {
-        if (!request.requestModifiedFrom) {
+        if (!request.requestModifiedFrom || request.requestModifiedFrom.startsWith('PARENT_ORIGINAL:')) {
+          // Clone request to create a child request with CANCELLATION_REJECTED status
+          const childRequest = this.leaveRequestRepository.create({
+            employeeId: request.employeeId,
+            requestType: request.requestType,
+            fromDate: request.fromDate,
+            toDate: request.toDate,
+            title: request.title,
+            description: request.description,
+            status: LeaveRequestStatus.CANCELLATION_REJECTED,
+            submittedDate: request.submittedDate,
+            duration: request.duration,
+            isRead: true,
+            isReadEmployee: false,
+            requestModifiedFrom: `${request.id}:${request.requestType}`,
+            firstHalf: request.firstHalf,
+            secondHalf: request.secondHalf,
+            isHalfDay: request.isHalfDay,
+            ccEmails: request.ccEmails,
+            availableDates: JSON.stringify([]), // doesn't block dates
+            isModified: request.isModified,
+            modificationCount: request.modificationCount,
+            lastModifiedDate: new Date(),
+          });
+          await this.leaveRequestRepository.save(childRequest);
+
+          // Revert parent request back to APPROVED.
           request.status = LeaveRequestStatus.APPROVED;
           await this.leaveRequestRepository.save(request);
           this.logger.log(
-            `[UPDATE_STATUS] Reverted request ${id} back to APPROVED after cancellation rejection (full).`,
+            `[UPDATE_STATUS] Reverted parent request ${id} back to APPROVED and created child CANCELLATION_REJECTED ${childRequest.id} after cancellation rejection.`,
           );
         }
       }
@@ -2098,7 +2850,8 @@ export class LeaveRequestsService {
       if (
         (status === LeaveRequestStatus.CANCELLATION_APPROVED ||
           status === LeaveRequestStatus.MODIFICATION_APPROVED) &&
-        request.requestModifiedFrom
+        request.requestModifiedFrom &&
+        !request.requestModifiedFrom.startsWith('PARENT_ORIGINAL:')
       ) {
         try {
           const parentId = Number(
@@ -2276,7 +3029,7 @@ export class LeaveRequestsService {
           secondHalf: () => 'NULL',
         });
 
-        const parentIdVal = request.requestModifiedFrom
+        const parentIdVal = request.requestModifiedFrom && !request.requestModifiedFrom.startsWith('PARENT_ORIGINAL:')
           ? String(request.requestModifiedFrom).split(':')[0]
           : null;
         const idsToCheck = [id];
@@ -2463,17 +3216,43 @@ export class LeaveRequestsService {
         this.logger.log(
           `[REJECT_CANCELLATION] Partial cancellation ${id} rejected. availableDates wiped.`,
         );
+        await this.leaveRequestRepository.save(request);
       } else {
-        // Full cancellation rejection - Revert parent to APPROVED
-        request.status = LeaveRequestStatus.APPROVED;
-        this.logger.log(
-          `[REJECT_CANCELLATION] Full cancellation ${id} rejected. Reverted to APPROVED.`,
-        );
-      }
+        // ── FULL cancellation (parent itself was REQUESTING_FOR_CANCELLATION) ──
+        // 1. Create a child request with status CANCELLATION_REJECTED
+        const childRequest = this.leaveRequestRepository.create({
+          employeeId: request.employeeId,
+          requestType: request.requestType,
+          fromDate: request.fromDate,
+          toDate: request.toDate,
+          title: request.title,
+          description: request.description,
+          status: LeaveRequestStatus.CANCELLATION_REJECTED,
+          submittedDate: request.submittedDate,
+          duration: request.duration,
+          isRead: true,
+          isReadEmployee: false,
+          requestModifiedFrom: `${request.id}:${request.requestType}`,
+          firstHalf: request.firstHalf,
+          secondHalf: request.secondHalf,
+          isHalfDay: request.isHalfDay,
+          ccEmails: request.ccEmails,
+          availableDates: JSON.stringify([]), // Doesn't block dates
+          isModified: request.isModified,
+          modificationCount: request.modificationCount,
+          lastModifiedDate: new Date(),
+        });
+        await this.leaveRequestRepository.save(childRequest);
 
-      request.isReadEmployee = false;
-      if (reviewedBy) request.reviewedBy = reviewedBy;
-      await this.leaveRequestRepository.save(request);
+        // 2. Revert parent back to APPROVED status
+        request.status = LeaveRequestStatus.APPROVED;
+        request.isReadEmployee = false;
+        if (reviewedBy) request.reviewedBy = reviewedBy;
+        this.logger.log(
+          `[REJECT_CANCELLATION] Full cancellation ${id} rejected. Parent reverted to APPROVED, child CANCELLATION_REJECTED created.`,
+        );
+        await this.leaveRequestRepository.save(request);
+      }
 
       try {
         const employee = await this.employeeDetailsRepository.findOne({
@@ -3704,6 +4483,7 @@ export class LeaveRequestsService {
         isModified: true,
         modificationCount: (request.modificationCount || 0) + 1,
         lastModifiedDate: new Date(),
+        submittedDate: dayjs().format('YYYY-MM-DD'),
       };
       if (updateData.title !== undefined) updatedData.title = updateData.title;
       if (updateData.description !== undefined)
@@ -3712,6 +4492,18 @@ export class LeaveRequestsService {
       if (request.status === LeaveRequestStatus.APPROVED) {
         updatedData.status = LeaveRequestStatus.REQUESTING_FOR_MODIFICATION;
         updatedData.isRead = false;
+        const originalDetails = {
+          title: request.title,
+          description: request.description,
+          firstHalf: request.firstHalf,
+          secondHalf: request.secondHalf,
+          requestType: request.requestType,
+          isHalfDay: request.isHalfDay,
+          duration: request.duration,
+          availableDates: request.availableDates,
+          submittedDate: request.submittedDate,
+        };
+        updatedData.requestModifiedFrom = `PARENT_ORIGINAL:${JSON.stringify(originalDetails)}`;
       }
 
       if (updateData.firstHalf !== undefined)
@@ -3959,6 +4751,20 @@ export class LeaveRequestsService {
 
       if (isFullModification) {
         // ALL dates modified at once — update parent directly, no child created
+        if (request.status === LeaveRequestStatus.APPROVED) {
+          const originalDetails = {
+            title: request.title,
+            description: request.description,
+            firstHalf: request.firstHalf,
+            secondHalf: request.secondHalf,
+            requestType: request.requestType,
+            isHalfDay: request.isHalfDay,
+            duration: request.duration,
+            availableDates: request.availableDates,
+            submittedDate: request.submittedDate,
+          };
+          request.requestModifiedFrom = `PARENT_ORIGINAL:${JSON.stringify(originalDetails)}`;
+        }
         request.status =
           request.status === LeaveRequestStatus.APPROVED
             ? LeaveRequestStatus.REQUESTING_FOR_MODIFICATION
@@ -3975,6 +4781,7 @@ export class LeaveRequestsService {
         request.isModified = true;
         request.modificationCount = (request.modificationCount || 0) + 1;
         request.lastModifiedDate = new Date();
+        request.submittedDate = dayjs().format('YYYY-MM-DD');
         const factor = isHalfDay
           ? this.getDurationFactor(fHalf, sHalf)
           : 1.0;
@@ -4079,6 +4886,7 @@ export class LeaveRequestsService {
             isModified: true,
             modificationCount: 1,
             lastModifiedDate: new Date(),
+            submittedDate: dayjs().format('YYYY-MM-DD'),
           }) as unknown as LeaveRequest;
 
           const savedNew = (await this.leaveRequestRepository.save(
@@ -4144,7 +4952,26 @@ export class LeaveRequestsService {
 
         // Update parent to remove modified dates
         try {
-          const parentDates: string[] = JSON.parse(request.availableDates || '[]');
+          let parentDates: string[] = [];
+          if (request.availableDates) {
+            try {
+              const parsed = JSON.parse(request.availableDates);
+              if (Array.isArray(parsed)) parentDates = parsed;
+            } catch (e) {}
+          }
+          if (parentDates.length === 0) {
+            let curIter = dayjs(request.fromDate);
+            const endIter = dayjs(request.toDate);
+            while (curIter.isBefore(endIter) || curIter.isSame(endIter, 'day')) {
+              const isWknd = await this._isWeekend(curIter, employeeId);
+              const isHol = await this._isHoliday(curIter);
+              if (!isWknd && !isHol) {
+                parentDates.push(curIter.format('YYYY-MM-DD'));
+              }
+              curIter = curIter.add(1, 'day');
+            }
+          }
+
           const normalizedDatesToModify = datesToModify.map((d) =>
             dayjs(d).format('YYYY-MM-DD'),
           );
@@ -4154,9 +4981,12 @@ export class LeaveRequestsService {
 
           if (remainingDates.length === 0) {
             this.logger.log(
-              `[MODIFY_DATES] Parent ${id} has no dates left, deleting.`,
+              `[MODIFY_DATES] Parent ${id} has no dates left, setting status to CANCELLED.`,
             );
-            await this.leaveRequestRepository.delete({ id });
+            request.status = LeaveRequestStatus.CANCELLED;
+            request.duration = 0;
+            request.availableDates = JSON.stringify([]);
+            await this.leaveRequestRepository.save(request);
           } else {
             request.availableDates = JSON.stringify(remainingDates);
             const parentFactor = request.isHalfDay
@@ -4212,19 +5042,131 @@ export class LeaveRequestsService {
 
       if (request.status !== LeaveRequestStatus.REQUESTING_FOR_MODIFICATION) {
         throw new BadRequestException(
-          'Only requests with status "Requesting for Modification" can be undone.',
+          'Only requests with status "Modification Requested" can be undone.',
         );
       }
 
-      if (request.requestModifiedFrom) {
+      if (request.requestModifiedFrom && !request.requestModifiedFrom.startsWith('PARENT_ORIGINAL:')) {
         // PARTIAL modification (child record)
+        // Backup dates BEFORE wiping — they are needed to restore the parent
+        const modifiedDatesBackup = request.availableDates;
+
         request.status = LeaveRequestStatus.MODIFICATION_CANCELLED;
         request.availableDates = JSON.stringify([]); // No longer blocking/claiming dates
         await this.leaveRequestRepository.save(request);
+
+        // ── RESTORE DATES BACK TO PARENT ──────────────────────────────────────
+        try {
+          const parentId = Number(
+            String(request.requestModifiedFrom).split(':')[0],
+          );
+          if (!isNaN(parentId)) {
+            const parent = await this.leaveRequestRepository.findOne({
+              where: { id: parentId },
+            });
+            if (parent) {
+              let restoredDates: string[] = [];
+              if (modifiedDatesBackup) {
+                try {
+                  const parsed = JSON.parse(modifiedDatesBackup);
+                  if (Array.isArray(parsed)) restoredDates = parsed;
+                } catch (e) {}
+              }
+              if (restoredDates.length === 0) {
+                let cur = dayjs(request.fromDate);
+                const end = dayjs(request.toDate);
+                while (cur.isBefore(end) || cur.isSame(end, 'day')) {
+                  const isWknd = await this._isWeekend(cur, employeeId);
+                  const isHol = await this._isHoliday(cur);
+                  if (!isWknd && !isHol) restoredDates.push(cur.format('YYYY-MM-DD'));
+                  cur = cur.add(1, 'day');
+                }
+              }
+
+              if (restoredDates.length > 0) {
+                let allParentDates: string[] = [];
+                if (parent.availableDates) {
+                  try {
+                    const parsed = JSON.parse(parent.availableDates);
+                    if (Array.isArray(parsed)) allParentDates = parsed;
+                  } catch (e) {}
+                }
+
+                const mergedDatesSet = new Set([...allParentDates, ...restoredDates]);
+                const mergedDates = Array.from(mergedDatesSet).sort();
+
+                let totalWorkingDays = 0;
+                for (const d of mergedDates) {
+                  const day = dayjs(d);
+                  const isWknd = await this._isWeekend(day, employeeId);
+                  const isHol = await this._isHoliday(day);
+                  if (!isWknd && !isHol) totalWorkingDays++;
+                }
+
+                const factor = parent.isHalfDay
+                  ? this.getDurationFactor(parent.firstHalf, parent.secondHalf)
+                  : 1.0;
+
+                parent.duration = Number((totalWorkingDays * factor).toFixed(2));
+                parent.fromDate = mergedDates[0];
+                parent.toDate = mergedDates[mergedDates.length - 1];
+                parent.availableDates = JSON.stringify(mergedDates);
+                parent.status = LeaveRequestStatus.APPROVED;
+
+                await this.leaveRequestRepository.save(parent);
+                this.logger.log(
+                  `[UNDO_MODIFY] Restored ${restoredDates.length} date(s) to parent ${parentId}. duration=${parent.duration}, from=${parent.fromDate}, to=${parent.toDate}`,
+                );
+
+                for (const dateStr of restoredDates) {
+                  try {
+                    const targetDate = dayjs(dateStr);
+                    const startOfDay = targetDate.startOf('day').toDate();
+                    const endOfDay = targetDate.endOf('day').toDate();
+
+                    let attendance = await this.employeeAttendanceRepository.findOne({
+                      where: { employeeId: parent.employeeId, workingDate: Between(startOfDay, endOfDay) },
+                    });
+
+                    const firstHalf = parent.firstHalf || WorkLocation.OFFICE;
+                    const secondHalf = parent.secondHalf || WorkLocation.OFFICE;
+                    const calculatedHours = this.calculateTotalHours(firstHalf, secondHalf);
+                    let derivedStatus = AttendanceStatus.FULL_DAY;
+                    if (calculatedHours === 9) derivedStatus = AttendanceStatus.FULL_DAY;
+                    else if (calculatedHours === 6) derivedStatus = AttendanceStatus.HALF_DAY;
+                    else if (calculatedHours === 0) derivedStatus = AttendanceStatus.LEAVE;
+
+                    if (!attendance) {
+                      attendance = this.employeeAttendanceRepository.create({
+                        employeeId: parent.employeeId, workingDate: startOfDay,
+                        totalHours: calculatedHours, status: derivedStatus,
+                        firstHalf, secondHalf, sourceRequestId: parent.id, workLocation: null,
+                      });
+                      await this.employeeAttendanceRepository.save(attendance);
+                    } else {
+                      await this.employeeAttendanceRepository.createQueryBuilder()
+                        .update(EmployeeAttendance)
+                        .set({ totalHours: calculatedHours, status: derivedStatus, firstHalf, secondHalf, sourceRequestId: parent.id, workLocation: null })
+                        .where('id = :id', { id: attendance.id })
+                        .execute();
+                    }
+                    this.logger.log(`[UNDO_MODIFY] Attendance restored for ${dateStr}`);
+                  } catch (attErr) {
+                    this.logger.error(`[UNDO_MODIFY] Attendance restore failed for ${dateStr}: ${attErr.message}`);
+                  }
+                }
+              }
+            }
+          }
+        } catch (restoreErr) {
+          this.logger.error(`[UNDO_MODIFY] Failed to restore dates to parent: ${restoreErr.message}`);
+        }
+        // ── END RESTORE ───────────────────────────────────────────────────────
       } else {
         // FULL modification (parent record itself)
         // Revert it back to APPROVED so the original leave remains active
         request.status = LeaveRequestStatus.APPROVED;
+        this.restoreParentOriginalDetails(request);
         await this.leaveRequestRepository.save(request);
         this.logger.log(
           `[UNDO_MODIFY] Reverted parent request ${id} to APPROVED status.`,
@@ -4285,17 +5227,17 @@ export class LeaveRequestsService {
           'employmentType',
           'joiningDate',
           'conversionDate',
+          'internId',
         ],
       });
 
       if (!employee)
         throw new NotFoundException(`Employee ${employeeId} not found`);
 
-      const isIntern =
-        employee.employmentType === EmploymentType.INTERN ||
-        (employee.designation || '')
-          .toLowerCase()
-          .includes(EmploymentType.INTERN.toLowerCase());
+      const employeeIds = [employeeId];
+      if (employee.internId) {
+        employeeIds.push(employee.internId);
+      }
 
       let runningBalance = 0;
       let ytdUsed = 0;
@@ -4318,7 +5260,7 @@ export class LeaveRequestsService {
 
       const attendanceRecords = await this.employeeAttendanceRepository.find({
         where: {
-          employeeId,
+          employeeId: In(employeeIds),
           workingDate: Between(
             new Date(`${calculationStartYear}-01-01T00:00:00`),
             new Date(`${year}-12-31T23:59:59`),
@@ -4353,28 +5295,7 @@ export class LeaveRequestsService {
         const endM = curYear === year ? month : 12;
 
         for (let m = startM; m <= endM; m++) {
-          let isInternThisMonth = isIntern;
-          const convDate = (employee as any).conversionDate
-            ? dayjs((employee as any).conversionDate)
-            : null;
-          if (convDate && convDate.isValid()) {
-            const convMonth = convDate.month() + 1;
-            const convYear = convDate.year();
-            if (
-              curYear > convYear ||
-              (curYear === convYear && m >= convMonth)
-            ) {
-              isInternThisMonth = false;
-              if (
-                curYear === convYear &&
-                m === convMonth &&
-                convDate.date() > 10
-              )
-                isInternThisMonth = true;
-            } else {
-              isInternThisMonth = true;
-            }
-          }
+          const isInternThisMonth = this.isInternForMonth(employee, curYear, m);
 
           if (curYear === year && m === month)
             targetMonthStats.carryOver = runningBalance;
@@ -4460,6 +5381,34 @@ export class LeaveRequestsService {
         'Failed to calculate monthly leave balance',
         HttpStatus.INTERNAL_SERVER_ERROR,
       );
+    }
+  }
+
+  private restoreParentOriginalDetails(request: LeaveRequest) {
+    if (
+      request.requestModifiedFrom &&
+      request.requestModifiedFrom.startsWith('PARENT_ORIGINAL:')
+    ) {
+      try {
+        const jsonStr = request.requestModifiedFrom.replace('PARENT_ORIGINAL:', '');
+        const original = JSON.parse(jsonStr);
+        if (original) {
+          if (original.title !== undefined) request.title = original.title;
+          if (original.description !== undefined) request.description = original.description;
+          if (original.firstHalf !== undefined) request.firstHalf = original.firstHalf;
+          if (original.secondHalf !== undefined) request.secondHalf = original.secondHalf;
+          if (original.requestType !== undefined) request.requestType = original.requestType;
+          if (original.isHalfDay !== undefined) request.isHalfDay = original.isHalfDay;
+          if (original.duration !== undefined) request.duration = Number(original.duration);
+          if (original.availableDates !== undefined) request.availableDates = original.availableDates;
+          if (original.submittedDate !== undefined) request.submittedDate = original.submittedDate;
+        }
+      } catch (err) {
+        this.logger.error(
+          `[RESTORE_ORIGINAL] Failed to parse original details for request ${request.id}: ${err.message}`,
+        );
+      }
+      request.requestModifiedFrom = null as any;
     }
   }
 }

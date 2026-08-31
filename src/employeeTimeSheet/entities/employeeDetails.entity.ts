@@ -89,4 +89,7 @@ export class EmployeeDetails extends BaseEntity {
   
   @Column({ name: 'last_link_sent_at', type: 'timestamp', nullable: true })
   lastLinkSentAt: Date | null;
+
+  @Column({ name: 'intern_id', type: 'varchar', length: 100, nullable: true })
+  internId: string | null;
 }
