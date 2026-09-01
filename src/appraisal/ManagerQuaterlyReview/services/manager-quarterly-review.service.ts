@@ -75,10 +75,13 @@ export class ManagerQuarterlyReviewService {
     if (!review) return null;
     return {
       ...review,
-      achievements: this.parseJsonIfNeeded(review.achievements),
-      challenges: this.parseJsonIfNeeded(review.challenges),
-      learningGoals: this.parseJsonIfNeeded(review.learningGoals),
-      ratings: this.parseJsonIfNeeded(review.ratings),
+      projects: this.parseJsonIfNeeded(review.projects) ?? [],
+      achievements: this.parseJsonIfNeeded((review as any).achievements) ?? [],
+      challenges: this.parseJsonIfNeeded((review as any).challenges) ?? [],
+      learningGoals: this.parseJsonIfNeeded(review.learningGoals) ?? [],
+      teamContribution: this.parseJsonIfNeeded(review.teamContribution) ?? [],
+      companyEnvironment: this.parseJsonIfNeeded(review.companyEnvironment) ?? null,
+      ratings: this.parseJsonIfNeeded(review.ratings) ?? null,
     };
   }
 
