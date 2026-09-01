@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Delete, Body, Param, Query, Req, Res, UseGuards, HttpStatus, HttpCode, Logger, UseInterceptors, UploadedFiles, HttpException } from '@nestjs/common';
+﻿import { Controller, Get, Post, Delete, Body, Param, Query, Req, Res, UseGuards, HttpStatus, HttpCode, Logger, UseInterceptors, UploadedFiles, HttpException } from '@nestjs/common';
 import { JwtAuthGuard } from '../../../auth/guards/jwt-auth.guard';
 import { QuarterlyReviewService } from '../services/quarterly-review.service';
 import { CreateQuarterlyReviewDto } from '../dto/create-quarterly-review.dto';
@@ -210,6 +210,21 @@ export class QuarterlyReviewController {
       throw error;
     }
   }
+  @Delete(':id')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Delete or withdraw a quarterly review by ID or Quarter' })
+  async deleteOrWithdraw(@Req() req: any, @Param('id') id: string) {
+    const employeeId = req.user.loginId;
+    this.logger.log(`Employee ${employeeId} requesting delete/withdraw for review id/quarter=${id}`);
+    const result = await this.quarterlyReviewService.deleteOrWithdraw(employeeId, id);
+    return {
+      success: true,
+      statusCode: HttpStatus.OK,
+      message: result.message,
+      data: result.data || null,
+    };
+  }
+
 
   @Delete('entityId/:entityId/refId/:refId/delete')
   @HttpCode(HttpStatus.OK)
@@ -230,5 +245,25 @@ export class QuarterlyReviewController {
       throw error;
     }
   }
-}
 
+
+  @Get(':id/download-pdf')
+  @ApiOperation({ summary: 'Download completed quarterly review PDF report' })
+  async downloadPdf(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Res() res: any,
+  ) {
+    const employeeId = req.user.loginId;
+    this.logger.log(`Employee ${employeeId} downloading PDF for review id/quarter='${id}'`);
+    const { buffer, filename } = await this.quarterlyReviewService.generateQuarterlyReviewPdf(employeeId, id);
+    res.set({
+      ...NO_CACHE_HEADERS,
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `attachment; filename="${filename}"`,
+      'Content-Length': buffer.length,
+    });
+    res.send(buffer);
+  }
+
+}

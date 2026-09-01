@@ -15,8 +15,8 @@ export class QuarterlyReview extends BaseEntity {
 
   @Column({
     name: 'status',
-    type: 'enum',
-    enum: ReviewStatus,
+    type: 'varchar',
+    length: 50,
     default: ReviewStatus.DRAFT,
   })
   status: ReviewStatus;
