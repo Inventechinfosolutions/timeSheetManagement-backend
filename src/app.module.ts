@@ -11,6 +11,7 @@ import { UsersModule } from './users/users.module';
 import { EmployeeTimeSheetModule } from './employeeTimeSheet/employeeTimeSheet.module';
 import { MasterModule } from './master/master.module';
 import { ManagerMappingModule } from './managerMapping/managerMapping.module';
+import { AppraisalModule } from './appraisal/appraisal.module';
 import { ScheduleModule } from '@nestjs/schedule';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AttendanceCronService } from './cron/attendance.cron.service';
@@ -56,6 +57,7 @@ function getEnvFiles(): string[] {
     EmployeeTimeSheetModule,
     MasterModule,
     ManagerMappingModule,
+    AppraisalModule,
     ScheduleModule.forRoot(),
     TypeOrmModule.forFeature([
       EmployeeAttendance,
