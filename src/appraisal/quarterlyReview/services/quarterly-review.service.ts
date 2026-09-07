@@ -35,6 +35,24 @@ export class QuarterlyReviewService implements OnModuleInit {
       );
       const existingCols = new Set(columns.map(c => c.COLUMN_NAME.toLowerCase()));
 
+      if (!existingCols.has('start_date')) {
+        await this.quarterlyReviewRepository.query(`ALTER TABLE quarterly_reviews ADD COLUMN start_date DATE NULL AFTER quarter`);
+        this.logger.log('[DB Migration] Added start_date column to quarterly_reviews.');
+      }
+      if (!existingCols.has('end_date')) {
+        await this.quarterlyReviewRepository.query(`ALTER TABLE quarterly_reviews ADD COLUMN end_date DATE NULL AFTER start_date`);
+        this.logger.log('[DB Migration] Added end_date column to quarterly_reviews.');
+      }
+      await this.quarterlyReviewRepository.query(`
+        UPDATE quarterly_reviews r
+        INNER JOIN quarter_date_configs c
+          ON r.quarter LIKE CONCAT('%', c.year, '%')
+         AND r.quarter LIKE CONCAT(c.quarter, '%')
+        SET r.start_date = COALESCE(r.start_date, c.start_date),
+            r.end_date = COALESCE(r.end_date, c.end_date)
+      `).catch(() => {});
+      await this.quarterlyReviewRepository.query(`DROP TABLE IF EXISTS quarter_date_configs`);
+
       if (!existingCols.has('projects')) {
         await this.quarterlyReviewRepository.query(`ALTER TABLE quarterly_reviews ADD COLUMN projects JSON NULL AFTER overview`);
         this.logger.log('[DB Migration] Added projects column to quarterly_reviews.');
@@ -184,6 +202,8 @@ export class QuarterlyReviewService implements OnModuleInit {
       companyEnvironment: companyEnv ?? null,
       submittedDate: review.submittedDate,
       managerName: review.managerName,
+      startDate: review.startDate ?? null,
+      endDate: review.endDate ?? null,
       reviewStatus: review.reviewStatus ?? null,
       finalRating: review.finalRating ?? null,
       reviewedOn: review.reviewedOn ?? null,
@@ -277,7 +297,7 @@ export class QuarterlyReviewService implements OnModuleInit {
 
   async saveOrSubmit(employeeId: string, dto: CreateQuarterlyReviewDto, username: string): Promise<any> {
     const canonicalQuarter = this.normalizeQuarter(dto.quarter);
-    const { status, overview, projects, learningGoals, teamContribution, averageRating, companyEnvironment } = dto;
+    const { status, overview, projects, learningGoals, teamContribution, averageRating, companyEnvironment, startDate, endDate } = dto;
     this.logger.log(`[saveOrSubmit] employeeId='${employeeId}' | quarter='${canonicalQuarter}' | status='${status}'`);
 
     try {
@@ -314,6 +334,13 @@ export class QuarterlyReviewService implements OnModuleInit {
         ],
       });
 
+      if ((startDate && !endDate) || (!startDate && endDate)) {
+        throw new BadRequestException('Start date and end date must be provided together.');
+      }
+      if (startDate && endDate && new Date(startDate).getTime() >= new Date(endDate).getTime()) {
+        throw new BadRequestException('Start date must be before end date.');
+      }
+
       let review: QuarterlyReview;
 
       if (existing) {
@@ -322,6 +349,8 @@ export class QuarterlyReviewService implements OnModuleInit {
         }
 
         existing.quarter = canonicalQuarter;
+        existing.startDate = startDate ?? existing.startDate;
+        existing.endDate = endDate ?? existing.endDate;
         existing.overview = overview ?? existing.overview;
         existing.projects = projects ?? existing.projects;
         existing.learningGoals = learningGoals ?? existing.learningGoals;
@@ -341,6 +370,8 @@ export class QuarterlyReviewService implements OnModuleInit {
         review = this.quarterlyReviewRepository.create({
           employeeId,
           quarter: canonicalQuarter,
+          startDate: startDate ?? null,
+          endDate: endDate ?? null,
           status,
           overview,
           projects,

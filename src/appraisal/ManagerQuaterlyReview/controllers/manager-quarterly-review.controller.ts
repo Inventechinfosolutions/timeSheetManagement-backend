@@ -53,6 +53,36 @@ export class ManagerQuarterlyReviewController {
     };
   }
 
+  @Get('notification-candidates')
+  @ApiOperation({ summary: 'Get mapped employees with incomplete quarterly reviews' })
+  async getNotificationCandidates(@Req() req: any) {
+    const candidates = await this.managerQuarterlyReviewService.getNotificationCandidates(req.user);
+    return {
+      success: true,
+      statusCode: HttpStatus.OK,
+      data: candidates,
+    };
+  }
+
+  @Post('notifications')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Send quarterly review reminders to selected pending employees' })
+  async sendReviewNotifications(
+    @Req() req: any,
+    @Body() body: { employeeIds: string[] },
+  ) {
+    const result = await this.managerQuarterlyReviewService.sendReviewNotifications(
+      req.user,
+      body?.employeeIds,
+    );
+    return {
+      success: true,
+      statusCode: HttpStatus.OK,
+      message: `Quarterly review reminders sent to ${result.sent} employee(s).`,
+      data: result,
+    };
+  }
+
   @Get()
   @ApiOperation({ summary: 'Get team quarterly review submissions for logged-in manager (paginated)' })
   async getTeamSubmissions(

@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsNotEmpty, IsOptional, IsString, IsEnum, IsArray, ValidateNested, MaxLength } from 'class-validator';
+import { IsNotEmpty, IsOptional, IsString, IsEnum, IsArray, ValidateNested, MaxLength, IsDateString } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ReviewStatus } from '../enums/quarterly-review.enum';
 
@@ -73,6 +73,16 @@ export class CreateQuarterlyReviewDto {
   @IsString()
   @ApiProperty({ description: 'Quarter (e.g. Q1 FY2026-27)' })
   quarter: string;
+
+  @IsOptional()
+  @IsDateString()
+  @ApiProperty({ description: 'Quarter start date (YYYY-MM-DD)', required: false })
+  startDate?: string;
+
+  @IsOptional()
+  @IsDateString()
+  @ApiProperty({ description: 'Quarter end date (YYYY-MM-DD)', required: false })
+  endDate?: string;
 
   @IsNotEmpty()
   @IsEnum(ReviewStatus)

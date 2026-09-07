@@ -1,11 +1,16 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsOptional, IsString, IsObject, IsBoolean } from 'class-validator';
+import { Transform } from 'class-transformer';
+import { IsOptional, IsString, IsBoolean } from 'class-validator';
 
 export class ManagerEvaluationDto {
   @IsOptional()
-  @IsObject()
-  @ApiProperty({ description: 'Rating breakdown object (productivity, quality, ownership, communication, collaboration, innovation)' })
-  ratings?: Record<string, number>;
+  @IsString()
+  @ApiProperty({ description: 'Quarter being evaluated (e.g. Q2 FY2026-27)' })
+  quarter?: string;
+
+  @IsOptional()
+  @ApiProperty({ description: 'Rating breakdown object or rating-row array' })
+  ratings?: Record<string, number> | Array<{ category: string; rating: number }>;
 
   @IsOptional()
   @IsString()
@@ -24,6 +29,7 @@ export class ManagerEvaluationDto {
 
   @IsOptional()
   @IsString()
+  @Transform(({ value }) => (value === null || value === undefined ? value : String(value)))
   @ApiProperty({ description: 'Final rating label or score' })
   finalRating?: string;
 
