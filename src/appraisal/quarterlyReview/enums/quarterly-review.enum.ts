@@ -8,3 +8,12 @@ export enum ReviewStatus {
   NOT_STARTED = 'Not Started',
   AUTO_SUBMITTED = 'Auto Submitted',
 }
+
+/** Filter values accepted by the manager submissions endpoint via ?status= */
+export enum DisplayStatusFilter {
+  ALL = 'ALL',
+  ASSIGNED = 'ASSIGNED',
+  PENDING = 'PENDING',
+  IN_REVIEW = 'IN_REVIEW',
+  COMPLETED = 'COMPLETED',
+}

@@ -76,6 +76,26 @@ export class ManagerQuarterlyReviewController {
     }
   }
 
+  @Get('employees')
+  @ApiOperation({ summary: 'Get list of team employees for filter dropdown' })
+  async getEmployees(@Req() req: any) {
+    try {
+      const employees = await this.managerQuarterlyReviewService.getTeamEmployees(req.user);
+      return {
+        success: true,
+        statusCode: HttpStatus.OK,
+        data: employees,
+      };
+    } catch (error: any) {
+      this.logger.error(`[getEmployees] Error: ${error.message}`, error.stack);
+      if (error instanceof HttpException) throw error;
+      throw new HttpException(
+        error.message || 'Failed to fetch team employees',
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
+  }
+
   @Get('notification-candidates')
   @ApiOperation({ summary: 'Get mapped employees with incomplete quarterly reviews' })
   async getNotificationCandidates(@Req() req: any) {
@@ -134,6 +154,7 @@ export class ManagerQuarterlyReviewController {
     @Query('year') year?: string,
     @Query('search') search?: string,
     @Query('role') role?: string,
+    @Query('employeeId') employeeId?: string,
     @Query('page') page?: string,
     @Query('pageSize') pageSize?: string,
   ) {
@@ -144,7 +165,7 @@ export class ManagerQuarterlyReviewController {
 
       this.logger.log(
         `Fetching team submissions for manager ${req.user?.loginId}, quarter: ${quarter || 'all'}, ` +
-          `status: ${status || 'all'}, page: ${parsedPage}, pageSize: ${parsedPageSize}`,
+          `status: ${status || 'all'}, employeeId: ${employeeId || 'all'}, page: ${parsedPage}, pageSize: ${parsedPageSize}`,
       );
 
       const result = await this.managerQuarterlyReviewService.getTeamSubmissions(req.user, {
@@ -154,6 +175,7 @@ export class ManagerQuarterlyReviewController {
         year,
         search,
         role,
+        employeeId,
         page: parsedPage,
         pageSize: parsedPageSize,
       }, revealToken);
