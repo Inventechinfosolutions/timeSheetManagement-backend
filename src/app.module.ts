@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+﻿import { Module } from '@nestjs/common';
 import { APP_INTERCEPTOR } from '@nestjs/core';
 import { NoCacheInterceptor } from './common/interceptors/no-cache.interceptor';
 import { SlidingSessionInterceptor } from './common/interceptors/sliding-session.interceptor';

@@ -4,4 +4,5 @@ export enum UserType {
   MANAGER = 'MANAGER',
   TEAMLEAD = 'TEAM LEAD',
   RECEPTIONIST = 'RECEPTIONIST',
+  CEO = 'CEO',
 }

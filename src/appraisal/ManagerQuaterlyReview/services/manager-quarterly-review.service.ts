@@ -1,13 +1,19 @@
-import { Injectable, NotFoundException, ForbiddenException, BadRequestException, Logger, HttpException, HttpStatus, OnModuleInit } from '@nestjs/common';
+import { Injectable, NotFoundException, ForbiddenException, BadRequestException, Logger, HttpException, HttpStatus } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In } from 'typeorm';
+import { Repository, In, Like } from 'typeorm';
 import { QuarterlyReview } from '../../quarterlyReview/entities/quarterly-review.entity';
 import { ManagerMapping, ManagerMappingStatus } from '../../../managerMapping/entities/managerMapping.entity';
 import { EmployeeDetails } from '../../../employeeTimeSheet/entities/employeeDetails.entity';
+import { User } from '../../../users/entities/user.entity';
+import { UserType } from '../../../users/enums/user-type.enum';
 import { ManagerEvaluationDto } from '../dto/manager-evaluation.dto';
 import { ReviewStatus } from '../../quarterlyReview/enums/quarterly-review.enum';
 import { EmailService } from '../../../email/email.service';
 import { NotificationsService } from '../../../notifications/Services/notifications.service';
+import { getAppraisalQuarterEvaluatedTemplate } from '../../../common/mail/templates';
+
+import { ReviewAssignment, AssignmentStatus } from '../../quarterlyReview/entities/review-assignment.entity';
+import { isRevealTokenValid } from '../../quarterlyReview/utils/rating-reveal.utils';
 
 /** Filters + pagination params accepted by getTeamSubmissions */
 export interface TeamSubmissionsFilters {
@@ -16,6 +22,7 @@ export interface TeamSubmissionsFilters {
   quarterCard?: string;
   year?: string;
   search?: string;
+  role?: string;
   page?: number;
   pageSize?: number;
 }
@@ -28,80 +35,28 @@ export interface PaginatedResult<T> {
 }
 
 @Injectable()
-export class ManagerQuarterlyReviewService implements OnModuleInit {
+export class ManagerQuarterlyReviewService {
   private readonly logger = new Logger(ManagerQuarterlyReviewService.name);
 
   constructor(
     @InjectRepository(QuarterlyReview)
     private readonly quarterlyReviewRepository: Repository<QuarterlyReview>,
+    @InjectRepository(ReviewAssignment)
+    private readonly assignmentRepository: Repository<ReviewAssignment>,
     @InjectRepository(ManagerMapping)
     private readonly managerMappingRepository: Repository<ManagerMapping>,
     @InjectRepository(EmployeeDetails)
     private readonly employeeDetailsRepository: Repository<EmployeeDetails>,
     private readonly emailService: EmailService,
     private readonly notificationsService: NotificationsService,
+    @InjectRepository(User)
+    private readonly userRepository: Repository<User>,
   ) {}
 
-  async onModuleInit() {
-    await this.ensureQuarterlyReviewAuditColumns();
-  }
-
-  /**
-   * QuarterlyReview extends BaseEntity, which declares createdAt, updatedAt,
-   * createdBy, updatedBy — TypeORM includes these in EVERY SELECT against
-   * quarterly_reviews. If the table itself never got these columns (e.g. it
-   * was created by a hand-written migration that predates BaseEntity, or one
-   * that only covered the domain-specific fields), every read against this
-   * entity fails with "Unknown column 'QuarterlyReview.createdAt' in 'field
-   * list'" — which is exactly what getStats() and getTeamSubmissions() were
-   * surfacing as a bare 500, since neither method wraps its DB calls in a
-   * try/catch.
-   *
-   * This checks INFORMATION_SCHEMA for which of the four BaseEntity columns
-   * are actually present on quarterly_reviews, and adds only the ones that
-   * are missing — matching the exact column types TypeORM generates from
-   * @CreateDateColumn/@UpdateDateColumn/@Column in BaseEntity. Non-fatal,
-   * like the check above: a failure here is logged with its full cause
-   * rather than silently ignored, but the app keeps booting either way.
-   */
-  private async ensureQuarterlyReviewAuditColumns() {
-    const requiredColumns = ['createdAt', 'updatedAt', 'createdBy', 'updatedBy'];
-
-    try {
-      const existing: Array<{ COLUMN_NAME: string }> = await this.quarterlyReviewRepository.query(
-        `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'quarterly_reviews'`,
-      );
-      const existingNames = new Set(existing.map((c) => c.COLUMN_NAME));
-      const missing = requiredColumns.filter((c) => !existingNames.has(c));
-
-      if (missing.length === 0) {
-        this.logger.log('[DB Schema] quarterly_reviews already has all BaseEntity audit columns.');
-        return;
-      }
-
-      this.logger.warn(`[DB Schema] quarterly_reviews is missing audit columns: ${missing.join(', ')}. Adding them now.`);
-
-      // NOTE: these type strings assume MySQL's default TypeORM output for
-      // @CreateDateColumn()/@UpdateDateColumn() with no explicit type —
-      // DATETIME(6) with a fractional-second default. If `SHOW CREATE TABLE
-      // manager_mapping` (an existing BaseEntity-derived table with the same
-      // four columns) shows a different type/precision in your database,
-      // update the strings below to match exactly so every BaseEntity table
-      // stays consistent.
-      const columnDefs: Record<string, string> = {
-        createdAt: '`createdAt` DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)',
-        updatedAt: '`updatedAt` DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6)',
-        createdBy: '`createdBy` VARCHAR(255) NULL',
-        updatedBy: '`updatedBy` VARCHAR(255) NULL',
-      };
-
-      const alterClauses = missing.map((c) => `ADD COLUMN ${columnDefs[c]}`).join(', ');
-      await this.quarterlyReviewRepository.query(`ALTER TABLE quarterly_reviews ${alterClauses}`);
-
-      this.logger.log(`[DB Schema] Added missing audit columns to quarterly_reviews: ${missing.join(', ')}.`);
-    } catch (err: any) {
-      this.logger.error(`[DB Schema] Failed to verify/add audit columns on quarterly_reviews: ${err.message}`, err.stack);
-    }
+  /** Check if the user has privileged access (Admin or CEO). */
+  private isPrivilegedUser(user: any): boolean {
+    const userRole = (user?.userType || user?.role || '')?.toString().toUpperCase();
+    return userRole === 'ADMIN' || userRole === 'CEO' || user?.userType === UserType.ADMIN || user?.userType === UserType.CEO;
   }
 
   /** Get list of employee IDs mapped to the manager */
@@ -113,41 +68,39 @@ export class ManagerQuarterlyReviewService implements OnModuleInit {
       `[getMappedEmployeeIds] manager loginId='${managerLoginId}', fullName='${managerFullName}'`,
     );
 
-    // Identify mappings by:
-    //  1. manager_name = full name from employee profile (e.g. "John Doe")
-    //  2. manager_name = loginId (e.g. "abc") — covers cases where loginId is stored as the name
-    //  3. manager_id  = loginId
-    // NOTE: We deliberately do NOT include { employeeId: managerLoginId } here —
-    // that would accidentally pick up rows where the manager happens to share an
-    // employee_id value, and then add the manager themselves to their own team list.
-    const mappings = await this.managerMappingRepository.find({
-      where: [
-        { managerName: managerFullName, status: ManagerMappingStatus.ACTIVE },
-        { managerName: managerLoginId, status: ManagerMappingStatus.ACTIVE },
-        { managerId: managerLoginId, status: ManagerMappingStatus.ACTIVE },
-      ],
-    });
+    try {
+      const mappings = await this.managerMappingRepository.find({
+        where: [
+          { managerName: managerFullName, status: ManagerMappingStatus.ACTIVE },
+          { managerName: managerLoginId, status: ManagerMappingStatus.ACTIVE },
+          { managerId: managerLoginId, status: ManagerMappingStatus.ACTIVE },
+        ],
+      });
 
-    // De-duplicate and exclude the manager's own loginId from the employee list
-    const employeeIds = Array.from(
-      new Set(
-        mappings
-          .map((m) => m.employeeId)
-          .filter((id) => Boolean(id) && id !== managerLoginId),
-      ),
-    );
+      // De-duplicate and exclude the manager's own loginId from the employee list.
+      const employeeIds = Array.from(
+        new Set(
+          mappings
+            .map((mappingItem) => mappingItem.employeeId)
+            .filter((id) => Boolean(id) && id !== managerLoginId),
+        ),
+      );
 
-    const managerNames = Array.from(
-      new Set(
-        [managerFullName, managerLoginId, ...mappings.map((m) => m.managerName)].filter(Boolean),
-      ),
-    );
+      const managerNames = Array.from(
+        new Set(
+          [managerFullName, managerLoginId, ...mappings.map((mappingItem) => mappingItem.managerName)].filter(Boolean),
+        ),
+      );
 
-    this.logger.log(
-      `[getMappedEmployeeIds] Found ${mappings.length} mapping row(s), ${employeeIds.length} unique employee(s): [${employeeIds.join(', ')}]`,
-    );
+      this.logger.log(
+        `[getMappedEmployeeIds] Found ${mappings.length} mapping row(s), ${employeeIds.length} unique employee(s): [${employeeIds.join(', ')}]`,
+      );
 
-    return { employeeIds, managerNames };
+      return { employeeIds, managerNames };
+    } catch (error: any) {
+      this.logger.error(`[getMappedEmployeeIds] Error: ${error.message}`, error.stack);
+      return { employeeIds: [], managerNames: [managerFullName, managerLoginId].filter(Boolean) };
+    }
   }
 
   /** Helper to parse JSON fields safely */
@@ -176,171 +129,404 @@ export class ManagerQuarterlyReviewService implements OnModuleInit {
     };
   }
 
+  /** Build initials from a full name, e.g. "Aditi Sharma" -> "AS" */
   private getInitials(name: string): string {
     if (!name) return '--';
     const parts = name.trim().split(/\s+/);
-    return ((parts[0]?.[0] || '') + (parts.length > 1 ? parts[parts.length - 1][0] : '')).toUpperCase();
+    const firstInitial = parts[0]?.[0] || '';
+    const lastInitial = parts.length > 1 ? parts[parts.length - 1][0] : '';
+    return (firstInitial + lastInitial).toUpperCase();
   }
 
-  private getDisplayStatus(review: QuarterlyReview): string {
-    if (review.status === ReviewStatus.SUBMITTED && !review.reviewStatus) return 'Under Review';
-    if (review.status === ReviewStatus.IN_REVIEW) return 'Under Review';
-    if (review.status === ReviewStatus.APPROVED || review.reviewStatus === ReviewStatus.REVIEWED) return 'Reviewed';
+  private getDisplayStatus(review: QuarterlyReview, assignment?: ReviewAssignment | null): string {
     if (review.status === ReviewStatus.COMPLETED) return 'Completed';
+    if (review.status === ReviewStatus.APPROVED || review.reviewStatus === ReviewStatus.REVIEWED) return 'Reviewed';
+    if (review.reviewStatus === ReviewStatus.DRAFT || review.status === ReviewStatus.DRAFT) return 'Draft';
+    if (review.status === ReviewStatus.IN_REVIEW) return 'Under Review';
+    if (review.status === ReviewStatus.SUBMITTED) return 'Under Review';
+    if (review.status === ReviewStatus.AUTO_SUBMITTED) return 'Auto Submitted';
+    if (assignment || review.status === ReviewStatus.NOT_STARTED) return 'Assigned';
     return review.reviewStatus || review.status || 'Not Started';
   }
 
-  private getStatusBucket(r: QuarterlyReview): 'pending' | 'in-review' | 'completed' | 'other' {
-    if (['Reviewed', 'Approved', 'Completed'].includes(r.reviewStatus || '')) return 'completed';
-    if (r.reviewStatus === 'In Review' || r.status === ReviewStatus.IN_REVIEW) return 'in-review';
-    if (!r.reviewStatus || r.status === ReviewStatus.SUBMITTED) return 'pending';
+  /** Categorize a raw review or row into standard buckets. */
+  private getStatusBucket(reviewRecord: any): 'pending' | 'in-review' | 'completed' | 'other' {
+    const revStatus = reviewRecord.reviewStatus || '';
+    const st = reviewRecord.status || '';
+    if (['Reviewed', 'Approved', 'Completed'].includes(revStatus) || ['Reviewed', 'Approved', 'Completed'].includes(st)) {
+      return 'completed';
+    }
+    if (revStatus === 'Pending' || st === 'Submitted' || st === ReviewStatus.SUBMITTED || st === 'Auto Submitted' || st === ReviewStatus.AUTO_SUBMITTED) {
+      return 'pending';
+    }
+    if (revStatus === 'In Review' || st === 'Under Review' || st === ReviewStatus.IN_REVIEW) {
+      return 'in-review';
+    }
+    if (st === 'Assigned' || st === 'Draft' || st === ReviewStatus.DRAFT || !revStatus) {
+      return 'pending';
+    }
     return 'other';
   }
 
-  private normalizeStatusFilter(status: string): string {
-    return status.toLowerCase().replace(/[\s_-]/g, '');
+  private normalizeStatusFilter(statusValue: string): string {
+    return statusValue.toLowerCase().replace(/[\s_-]/g, '');
   }
+
+  private normalizeYear(yearStr: string): string {
+    if (!yearStr) return '';
+    const match = yearStr.match(/(\d{4}-\d{2})/);
+    return match ? match[1] : yearStr.replace(/[^0-9-]/g, '').trim();
+  }
+
+  /** Known rating band labels mapped to representative numeric scores. */
+  private static readonly RATING_LABEL_MAP: Record<string, number> = {
+    outstanding: 5.0,
+    'exceeds expectations': 4.5,
+    'meets expectations': 3.5,
+    'needs improvement': 2.5,
+    unsatisfactory: 1.5,
+  };
 
   private extractRatingValue(finalRating: string | null): number | null {
     if (!finalRating) return null;
+
     const normalized = finalRating.trim().toLowerCase();
-    const labels: Record<string, number> = {
-      outstanding: 5.0,
-      'exceeds expectations': 4.5,
-      'meets expectations': 3.5,
-      'needs improvement': 2.5,
-      unsatisfactory: 1.5,
-    };
-    if (normalized in labels) return labels[normalized];
+    if (normalized in ManagerQuarterlyReviewService.RATING_LABEL_MAP) {
+      return ManagerQuarterlyReviewService.RATING_LABEL_MAP[normalized];
+    }
+
     const directNumber = parseFloat(finalRating);
     if (!isNaN(directNumber) && /^\s*[\d.]+\s*$/.test(finalRating)) return directNumber;
+
     const rangeMatch = finalRating.match(/(\d+(\.\d+)?)\s*-\s*(\d+(\.\d+)?)/);
-    if (rangeMatch) return Math.round(((parseFloat(rangeMatch[1]) + parseFloat(rangeMatch[3])) / 2) * 10) / 10;
+    if (rangeMatch) {
+      const lowerBound = parseFloat(rangeMatch[1]);
+      const upperBound = parseFloat(rangeMatch[3]);
+      return Math.round(((lowerBound + upperBound) / 2) * 10) / 10;
+    }
+
     const singleMatch = finalRating.match(/\d+(\.\d+)?/);
     return singleMatch ? parseFloat(singleMatch[0]) : null;
   }
 
-  /** Shape a single review row exactly to what the manager's table UI expects */
-  private toTableRow(review: QuarterlyReview, empDetail?: EmployeeDetails) {
+  /** Shape a single review row to what the review table UI expects */
+  private toTableRow(
+    review: QuarterlyReview,
+    empDetail?: EmployeeDetails,
+    userRecord?: User,
+    assignment?: ReviewAssignment | null,
+    revealToken?: string,
+    managerUser?: any,
+  ) {
     const sanitized = this.sanitizeReview(review);
-    const employeeName = empDetail?.fullName || review.employeeId;
-    const displayStatus = this.getDisplayStatus(review);
+    const employeeName = empDetail?.fullName || assignment?.employeeName || review.employeeId;
+    const displayStatus = this.getDisplayStatus(review, assignment);
     const isEvaluated = displayStatus === 'Reviewed' || displayStatus === 'Completed';
+    const isSubmitted = review.status === ReviewStatus.SUBMITTED || review.status === ReviewStatus.AUTO_SUBMITTED || review.status === ReviewStatus.IN_REVIEW;
 
-    // finalRating stored as varchar. It may be a plain number ("4.5") or a label
-    // like "Exceeds Expectations (4.0 - 4.9)" — extract the numeric value either way.
     const parsedRating = this.extractRatingValue(review.finalRating);
+    const hasFinalRating = isEvaluated && (parsedRating !== null || review.finalRating !== null);
+
+    // Evaluator who evaluated the review can see what they gave
+    const isEvaluator = Boolean(
+      managerUser &&
+      (this.isPrivilegedUser(managerUser) ||
+        review.evaluatorId === managerUser.loginId ||
+        review.managerName === managerUser.loginId ||
+        (managerUser.aliasLoginName && review.managerName === managerUser.aliasLoginName) ||
+        (managerUser.fullName && review.managerName === managerUser.fullName) ||
+        (review.evaluatorName && (review.evaluatorName === managerUser.aliasLoginName || review.evaluatorName === managerUser.fullName)))
+    );
+
+    const isTokenValid = Boolean(
+      revealToken && review.id && isRevealTokenValid(revealToken, review.id, review.employeeId),
+    );
+    const shouldHideRating = hasFinalRating && !isEvaluator && !isTokenValid;
+
+    const isManagerEmployee =
+      userRecord?.userType === UserType.MANAGER ||
+      userRecord?.role === 'MANAGER' ||
+      review.managerName === 'CEO & Admin' ||
+      (empDetail?.designation && empDetail.designation.toLowerCase().includes('manager'));
+
+    const employeeRole = isManagerEmployee ? 'MANAGER' : 'EMPLOYEE';
 
     return {
       ...sanitized,
+      id: review.id || assignment?.id,
+      assignmentId: assignment?.id || review.assignmentId || null,
       employeeId: review.employeeId,
       employeeName,
       employeeInitials: this.getInitials(employeeName),
+      employeeRole,
       department: empDetail?.department || 'Engineering',
-      designation: empDetail?.designation || 'Employee',
-      quarter: review.quarter,
+      designation: empDetail?.designation || (isManagerEmployee ? 'Manager' : 'Employee'),
+      quarter: review.quarter || assignment?.quarter,
+      financialYear: assignment?.financialYear || null,
       status: displayStatus,
-      finalRating: parsedRating,
-      lastModified: review.reviewedOn || (review as any).updatedAt || review.submittedDate || null,
-      actionType: isEvaluated ? 'view' : 'evaluate',
-      actionLabel: isEvaluated ? 'View Review' : 'Evaluate Now',
+      reviewStatus: review.reviewStatus || (isSubmitted ? 'Pending' : null),
+      finalRating: shouldHideRating ? null : parsedRating,
+      ratings: shouldHideRating ? null : sanitized.ratings,
+      isFinalRatingHidden: shouldHideRating,
+      hasFinalRating,
+      lastModified: review.reviewedOn || (review as any).updatedAt || review.submittedDate || assignment?.assignedAt || null,
+      deadlineAt: assignment?.deadlineAt || review.deadlineAt || null,
+      assignedAt: assignment?.assignedAt || assignment?.createdAt || null,
+      assignedByName: assignment?.assignedByName || null,
+      actionType: isEvaluated ? 'view' : (isSubmitted ? 'evaluate' : 'view'),
+      actionLabel: isEvaluated ? 'View Review' : (isSubmitted ? 'Evaluate Now' : 'Assigned'),
+      managerName: review.managerName || assignment?.assignedByName,
+      evaluatorName: review.evaluatorName || (isEvaluated ? review.managerName : null),
+      evaluatorRole: review.evaluatorRole || (isEvaluated ? (review.managerName === 'CEO & Admin' ? 'CEO' : 'MANAGER') : null),
+      evaluatorId: review.evaluatorId || null,
     };
   }
 
-  /** Best-effort fiscal-year label for a table row, e.g. "2025-26" */
+  /** Fiscal-year label for a table row, e.g. "2026-27" */
   private getRowFiscalYear(row: any): string {
-    const fyMatch = (row.quarter || '').match(/FY(\d{4}-\d{2})/i);
-    if (fyMatch) return fyMatch[1];
-    if (row.lastModified) {
-      const y = new Date(row.lastModified).getFullYear();
-      return `FY${y}-${String(y + 1).slice(-2)}`;
+    const financialYearMatch = (row.quarter || '').match(/FY\s*(\d{4}-\d{2})/i);
+    if (financialYearMatch) return financialYearMatch[1];
+    if (row.financialYear) {
+      const fyMatch = String(row.financialYear).match(/(\d{4}-\d{2})/);
+      if (fyMatch) return fyMatch[1];
+    }
+    if (row.lastModified || row.createdAt || row.assignedAt) {
+      const d = new Date(row.lastModified || row.createdAt || row.assignedAt);
+      if (!isNaN(d.getTime())) {
+        const yearNumber = d.getMonth() >= 3 ? d.getFullYear() : d.getFullYear() - 1;
+        return `${yearNumber}-${String(yearNumber + 1).slice(-2)}`;
+      }
     }
     return '';
   }
 
   /**
-   * Fetch + enrich + filter ALL rows matching the manager's team and the
-   * given filters, with NO pagination applied. This is the single source of
-   * truth for "what rows match" — used both to build a page of results and
-   * to compute accurate stats/filter-option lists across the whole team.
+   * Fetch, enrich, and filter rows based on logged-in user role and filters.
+   * Includes both submitted reviews and active review assignments.
    */
-  private async getFilteredRows(managerUser: any, filters: TeamSubmissionsFilters = {}): Promise<any[]> {
-    const { employeeIds, managerNames } = await this.getMappedEmployeeIds(managerUser);
+  private async getFilteredRows(managerUser: any, filters: TeamSubmissionsFilters = {}, revealToken?: string): Promise<any[]> {
+    const isPrivileged = this.isPrivilegedUser(managerUser);
+    let reviews: QuarterlyReview[] = [];
+    let assignments: ReviewAssignment[] = [];
 
-    this.logger.log(`Found ${employeeIds.length} mapped employees for manager`);
+    if (isPrivileged) {
+      this.logger.log(`Admin/CEO ${managerUser?.loginId} fetching organization-wide quarterly reviews`);
+      [reviews, assignments] = await Promise.all([
+        this.quarterlyReviewRepository.find({ order: { id: 'DESC' } }),
+        this.assignmentRepository.find({ order: { id: 'DESC' } }),
+      ]);
+    } else {
+      const { employeeIds, managerNames } = await this.getMappedEmployeeIds(managerUser);
+      const managerLoginId = managerUser?.loginId || '';
+      const managerFullName = managerUser?.aliasLoginName || managerUser?.fullName || managerUser?.name || managerLoginId;
 
-    const whereConditions: any[] = [];
-    if (employeeIds.length > 0) {
-      whereConditions.push({ employeeId: In(employeeIds) });
+      this.logger.log(`Found ${employeeIds.length} mapped employees for manager ${managerUser?.loginId}`);
+
+      const whereConditions: any[] = [];
+      if (employeeIds.length > 0) {
+        whereConditions.push({ employeeId: In(employeeIds) });
+      }
+      if (managerNames.length > 0) {
+        managerNames.forEach((nameItem) => {
+          whereConditions.push({ managerName: nameItem });
+        });
+      }
+      if (managerLoginId) {
+        whereConditions.push({ createdBy: managerLoginId });
+      }
+
+      // Assignment conditions for manager
+      const assignConditions: any[] = [
+        { assignedById: managerLoginId },
+        { assignedByName: managerFullName },
+      ];
+      if (employeeIds.length > 0) {
+        assignConditions.push({ employeeId: In(employeeIds) });
+      }
+
+      const [foundReviews, foundAssignments] = await Promise.all([
+        whereConditions.length > 0
+          ? this.quarterlyReviewRepository.find({ where: whereConditions, order: { id: 'DESC' } })
+          : [],
+        this.assignmentRepository.find({ where: assignConditions, order: { id: 'DESC' } }),
+      ]);
+
+      reviews = foundReviews;
+      assignments = foundAssignments;
     }
-    if (managerNames.length > 0) {
-      managerNames.forEach((mName) => {
-        whereConditions.push({ managerName: mName });
-      });
+
+    const normalizeQ = (q: string) => (q || '').toUpperCase().replace(/[\s_-]/g, '');
+
+    // Map reviews by employeeId + normalized quarter
+    const reviewMap = new Map<string, QuarterlyReview>();
+    for (const r of reviews) {
+      reviewMap.set(`${r.employeeId}_${normalizeQ(r.quarter)}`, r);
     }
 
-    // If no conditions match (e.g. no mapping), fallback to empty
-    if (whereConditions.length === 0) {
-      return [];
+    // Map assignments by employeeId + normalized quarter
+    const assignmentMap = new Map<string, ReviewAssignment>();
+    for (const a of assignments) {
+      const key = `${a.employeeId}_${normalizeQ(a.quarter)}`;
+      if (!assignmentMap.has(key)) {
+        assignmentMap.set(key, a);
+      }
     }
 
-    let reviews = await this.quarterlyReviewRepository.find({
-      where: whereConditions,
-      order: { id: 'DESC' },
+    // For any assignment that was AUTO_SUBMITTED and does not yet have a record in reviews, synthesize a review entry
+    for (const a of assignments) {
+      const key = `${a.employeeId}_${normalizeQ(a.quarter)}`;
+      if (!reviewMap.has(key) && a.status === AssignmentStatus.AUTO_SUBMITTED) {
+        const synth = this.quarterlyReviewRepository.create({
+          id: a.id,
+          employeeId: a.employeeId,
+          quarter: a.quarter,
+          status: ReviewStatus.AUTO_SUBMITTED,
+          reviewStatus: null,
+          assignmentId: a.id,
+          deadlineAt: a.deadlineAt,
+          managerName: a.assignedByName,
+          createdBy: a.assignedByName,
+          updatedBy: a.assignedByName,
+        } as any) as unknown as QuarterlyReview;
+        (synth as any).createdAt = a.assignedAt || a.createdAt;
+        (synth as any).updatedAt = a.updatedAt || a.createdAt;
+        reviews.push(synth);
+        reviewMap.set(key, synth);
+      }
+    }
+
+    // Filter out reviews where neither the employee nor manager has submitted
+    reviews = reviews.filter((reviewItem) => {
+      const isEmployeeSubmitted = Boolean(
+        (reviewItem.status &&
+          reviewItem.status !== ReviewStatus.DRAFT &&
+          reviewItem.status !== ReviewStatus.NOT_STARTED) ||
+        reviewItem.submittedDate,
+      );
+      const isManagerSubmitted = Boolean(
+        (reviewItem.reviewStatus &&
+          ['Reviewed', 'Approved', 'Completed'].includes(reviewItem.reviewStatus)) ||
+        (reviewItem.status &&
+          ['Reviewed', 'Approved', 'Completed'].includes(reviewItem.status)) ||
+        reviewItem.reviewedOn ||
+        (reviewItem.finalRating !== null && reviewItem.finalRating !== undefined),
+      );
+      return isEmployeeSubmitted || isManagerSubmitted;
     });
 
-    // Filter out draft reviews that employee hasn't submitted yet.
-    // Managers should see reviews with status Submitted, In Review, Reviewed, Approved, Completed
-    reviews = reviews.filter((r) => r.status !== ReviewStatus.DRAFT);
-
-    if (filters.quarter) {
-      reviews = reviews.filter((r) => r.quarter?.toLowerCase().includes(filters.quarter!.toLowerCase()));
+    // Filter by quarter if provided
+    if (filters.quarter && filters.quarter.toUpperCase() !== 'ALL') {
+      const normFilterQuarter = normalizeQ(filters.quarter);
+      reviews = reviews.filter((reviewItem) =>
+        normalizeQ(reviewItem.quarter).includes(normFilterQuarter),
+      );
     }
 
-    // Status-tab filter (All / Pending / In Review / Completed). Uses the
-    // same getStatusBucket() classification as getStats(), so the tab
-    // results and the dashboard stat-card counts always agree. Comparison
-    // is normalized (case/space/hyphen-insensitive) so it doesn't matter
-    // whether the frontend sends "pending", "Pending", "in-review",
-    // "in_review", or "In Review".
-    if (filters.status) {
-      const target = this.normalizeStatusFilter(filters.status);
-      reviews = reviews.filter((r) => this.normalizeStatusFilter(this.getStatusBucket(r)) === target);
-    }
+    // Fetch employee details and user accounts for enrichment and role detection
+    const allEmployeeIds = Array.from(new Set(reviews.map((reviewItem) => reviewItem.employeeId)));
+    let employeeDetailsMap: Record<string, EmployeeDetails> = {};
+    let usersMap: Record<string, User> = {};
 
-    // Fetch employee details to enrich response
-    const allEmpIds = Array.from(new Set(reviews.map((r) => r.employeeId)));
-    let empDetailsMap: Record<string, EmployeeDetails> = {};
-    if (allEmpIds.length > 0) {
-      const empDetails = await this.employeeDetailsRepository.find({
-        where: { employeeId: In(allEmpIds) },
-      });
-      empDetailsMap = empDetails.reduce((acc, curr) => {
-        acc[curr.employeeId] = curr;
-        return acc;
+    if (allEmployeeIds.length > 0) {
+      const [employeeDetailsList, usersList] = await Promise.all([
+        this.employeeDetailsRepository.find({
+          where: { employeeId: In(allEmployeeIds) },
+        }),
+        this.userRepository.find({
+          where: { loginId: In(allEmployeeIds) },
+        }),
+      ]);
+
+      employeeDetailsMap = employeeDetailsList.reduce((accumulator, currentItem) => {
+        accumulator[currentItem.employeeId] = currentItem;
+        return accumulator;
       }, {} as Record<string, EmployeeDetails>);
+
+      usersMap = usersList.reduce((accumulator, currentUserItem) => {
+        if (currentUserItem.loginId) {
+          accumulator[currentUserItem.loginId] = currentUserItem;
+        }
+        return accumulator;
+      }, {} as Record<string, User>);
     }
 
-    let rows = reviews.map((r) => this.toTableRow(r, empDetailsMap[r.employeeId]));
+    let rows = reviews.map((reviewItem) => {
+      const matchingAssignment = assignmentMap.get(
+        `${reviewItem.employeeId}_${normalizeQ(reviewItem.quarter)}`,
+      );
+      return this.toTableRow(
+        reviewItem,
+        employeeDetailsMap[reviewItem.employeeId],
+        usersMap[reviewItem.employeeId],
+        matchingAssignment,
+        revealToken,
+        managerUser,
+      );
+    });
 
-    // Quarter "quick filter" cards (Q1/Q2/Q3/Q4), separate from the exact-match
-    // quarter dropdown filter above.
-    if (filters.quarterCard) {
-      const qc = filters.quarterCard.toUpperCase();
-      rows = rows.filter((row) => (row.quarter || '').toUpperCase().includes(qc));
+    // Exclude records where neither the employee nor manager has submitted
+    rows = rows.filter((rowItem) => {
+      const isEmployeeSubmitted = Boolean(
+        (rowItem.status &&
+          rowItem.status !== 'Assigned' &&
+          rowItem.status !== 'Draft' &&
+          rowItem.status !== ReviewStatus.DRAFT &&
+          rowItem.status !== ReviewStatus.NOT_STARTED) ||
+        rowItem.submittedDate,
+      );
+      const isManagerSubmitted = Boolean(
+        (rowItem.reviewStatus && ['Reviewed', 'Approved', 'Completed'].includes(rowItem.reviewStatus)) ||
+        (rowItem.status && ['Reviewed', 'Approved', 'Completed'].includes(rowItem.status)) ||
+        rowItem.reviewedOn ||
+        (rowItem.finalRating !== null && rowItem.finalRating !== undefined),
+      );
+      return isEmployeeSubmitted || isManagerSubmitted;
+    });
+
+    // Filter by status tab if requested
+    if (filters.status && filters.status.toUpperCase() !== 'ALL') {
+      const targetStatus = this.normalizeStatusFilter(filters.status);
+      rows = rows.filter(
+        (rowItem) => this.normalizeStatusFilter(this.getStatusBucket(rowItem)) === targetStatus,
+      );
     }
 
-    if (filters.year) {
-      rows = rows.filter((row) => this.getRowFiscalYear(row) === filters.year);
+    // Filter by role if requested (e.g. 'MANAGER' or 'EMPLOYEE')
+    if (filters.role && filters.role.toUpperCase() !== 'ALL') {
+      const targetRole = filters.role.toUpperCase();
+      rows = rows.filter((rowItem) => rowItem.employeeRole === targetRole);
     }
 
+    // Quarter filter (supports both filters.quarter and filters.quarterCard)
+    const effectiveQuarter = (filters.quarter && filters.quarter.toUpperCase() !== 'ALL')
+      ? filters.quarter
+      : (filters.quarterCard && filters.quarterCard.toUpperCase() !== 'ALL')
+      ? filters.quarterCard
+      : null;
+
+    if (effectiveQuarter) {
+      const qUpper = effectiveQuarter.toUpperCase().trim();
+      rows = rows.filter((rowItem) => {
+        const rowQ = (rowItem.quarter || '').toUpperCase().trim();
+        return rowQ === qUpper || rowQ.startsWith(qUpper + ' ') || rowQ.includes(qUpper);
+      });
+    }
+
+    // Filter by year if requested
+    if (filters.year && filters.year.toUpperCase() !== 'ALL') {
+      const targetYear = this.normalizeYear(filters.year);
+      rows = rows.filter((rowItem) => this.normalizeYear(this.getRowFiscalYear(rowItem)) === targetYear);
+    }
+
+    // Filter by search query
     if (filters.search?.trim()) {
-      const q = filters.search.trim().toLowerCase();
-      rows = rows.filter((row) => {
-        const matchesName = row.employeeName?.toLowerCase().includes(q);
-        const matchesId = row.employeeId?.toLowerCase().includes(q);
-        const matchesDept = row.department?.toLowerCase().includes(q);
-        return matchesName || matchesId || matchesDept;
+      const searchQueryLower = filters.search.trim().toLowerCase();
+      rows = rows.filter((rowItem) => {
+        const matchesName = rowItem.employeeName?.toLowerCase().includes(searchQueryLower);
+        const matchesId = rowItem.employeeId?.toLowerCase().includes(searchQueryLower);
+        const matchesDepartment = rowItem.department?.toLowerCase().includes(searchQueryLower);
+        const matchesDesignation = rowItem.designation?.toLowerCase().includes(searchQueryLower);
+        return matchesName || matchesId || matchesDepartment || matchesDesignation;
       });
     }
 
@@ -348,236 +534,670 @@ export class ManagerQuarterlyReviewService implements OnModuleInit {
   }
 
   /**
-   * Fetch team submissions for the requesting manager, filtered and paginated
-   * server-side. Each call re-runs the filter against the DB-backed rows and
-   * returns only the slice for the requested page — page 2 returns page 2's
-   * rows, and navigating back to page 1 returns page 1's rows again, rather
-   * than relying on a client-side cache of the full list.
+   * Fetch submissions, paginated server-side.
    */
   async getTeamSubmissions(
     managerUser: any,
     filters: TeamSubmissionsFilters = {},
+    revealToken?: string,
   ): Promise<PaginatedResult<any>> {
-    const rows = await this.getFilteredRows(managerUser, filters);
+    try {
+      const rows = await this.getFilteredRows(managerUser, filters, revealToken);
 
-    const total = rows.length;
-    const page = filters.page && filters.page > 0 ? filters.page : 1;
-    const pageSize = filters.pageSize && filters.pageSize > 0 ? filters.pageSize : 10;
-    const start = (page - 1) * pageSize;
+      const total = rows.length;
+      const page = filters.page && filters.page > 0 ? filters.page : 1;
+      const pageSize = filters.pageSize && filters.pageSize > 0 ? filters.pageSize : 10;
+      const start = (page - 1) * pageSize;
 
-    return {
-      data: rows.slice(start, start + pageSize),
-      total,
-      page,
-      pageSize,
-    };
+      return {
+        data: rows.slice(start, start + pageSize),
+        total,
+        page,
+        pageSize,
+      };
+    } catch (error: any) {
+      this.logger.error(`[getTeamSubmissions] Error: ${error.message}`, error.stack);
+      if (error instanceof HttpException) throw error;
+      throw new HttpException(
+        error.message || 'Failed to fetch team submissions',
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
   }
 
-  /** Distinct quarter values available for this manager's team, for populating the dropdown */
+  /** Distinct quarter values available for this manager/admin team */
   async getQuarterOptions(managerUser: any): Promise<string[]> {
-    const rows = await this.getFilteredRows(managerUser);
-    return Array.from(new Set(rows.map((r) => r.quarter).filter(Boolean)));
+    try {
+      const rows = await this.getFilteredRows(managerUser);
+      return Array.from(new Set(rows.map((rowItem) => rowItem.quarter).filter(Boolean)));
+    } catch (error: any) {
+      this.logger.error(`[getQuarterOptions] Error: ${error.message}`, error.stack);
+      if (error instanceof HttpException) throw error;
+      throw new HttpException(
+        error.message || 'Failed to fetch quarter options',
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
   }
 
   /** Return every active employee mapped to this manager for the reminder modal. */
   async getNotificationCandidates(managerUser: any) {
-    const { employeeIds } = await this.getMappedEmployeeIds(managerUser);
-    if (employeeIds.length === 0) return [];
+    try {
+      const { employeeIds } = await this.getMappedEmployeeIds(managerUser);
+      if (employeeIds.length === 0) return [];
 
-    const [employees, reviews] = await Promise.all([
-      this.employeeDetailsRepository.find({ where: { employeeId: In(employeeIds) } }),
-      this.quarterlyReviewRepository.find({
-        where: { employeeId: In(employeeIds) },
-        order: { id: 'DESC' },
-      }),
-    ]);
+      const [employees, reviews] = await Promise.all([
+        this.employeeDetailsRepository.find({ where: { employeeId: In(employeeIds) } }),
+        this.quarterlyReviewRepository.find({
+          where: { employeeId: In(employeeIds) },
+          order: { id: 'DESC' },
+        }),
+      ]);
 
-    const latestReviewByEmployee = new Map<string, QuarterlyReview>();
-    for (const review of reviews) {
-      if (!latestReviewByEmployee.has(review.employeeId)) {
-        latestReviewByEmployee.set(review.employeeId, review);
+      const latestReviewByEmployee = new Map<string, QuarterlyReview>();
+      for (const review of reviews) {
+        if (!latestReviewByEmployee.has(review.employeeId)) {
+          latestReviewByEmployee.set(review.employeeId, review);
+        }
       }
-    }
 
-    // Return ALL employees assigned to this manager — including those who have
-    // completed reviews. isCompleted lets the frontend distinguish who still
-    // needs action without hiding anyone from the notification modal.
-    return employeeIds.map((employeeId) => {
-      const employee = employees.find((item) => item.employeeId === employeeId);
-      const review = latestReviewByEmployee.get(employeeId);
-      const isCompleted = Boolean(
-        review &&
-        ([ReviewStatus.APPROVED, ReviewStatus.COMPLETED].includes(review.status) ||
-          review.reviewStatus === ReviewStatus.REVIEWED),
+      return employeeIds.map((employeeId) => {
+        const employee = employees.find((item) => item.employeeId === employeeId);
+        const review = latestReviewByEmployee.get(employeeId);
+        const isCompleted = Boolean(
+          review &&
+          ([ReviewStatus.APPROVED, ReviewStatus.COMPLETED].includes(review.status) ||
+            review.reviewStatus === ReviewStatus.REVIEWED),
+        );
+        const hasFinalRating = isCompleted && Boolean(review?.finalRating);
+
+        return {
+          employeeId,
+          employeeName: employee?.fullName || employeeId,
+          designation: employee?.designation || 'Employee',
+          department: employee?.department || '—',
+          email: employee?.email || null,
+          joiningDate: employee?.joiningDate || null,
+          employmentType: employee?.employmentType || null,
+          gender: employee?.gender || null,
+          userStatus: employee?.userStatus || null,
+          quarter: review?.quarter || null,
+          reviewStatus: review?.reviewStatus || review?.status || null,
+          submittedDate: review?.submittedDate || null,
+          averageRating: review?.averageRating != null
+            ? parseFloat(String(review.averageRating))
+            : null,
+          finalRating: hasFinalRating ? null : (review?.finalRating || null),
+          isFinalRatingHidden: hasFinalRating,
+          hasFinalRating,
+          managerName: review?.managerName || null,
+          isCompleted,
+        };
+      });
+    } catch (error: any) {
+      this.logger.error(`[getNotificationCandidates] Error: ${error.message}`, error.stack);
+      if (error instanceof HttpException) throw error;
+      throw new HttpException(
+        error.message || 'Failed to fetch notification candidates',
+        HttpStatus.INTERNAL_SERVER_ERROR,
       );
-
-      return {
-        // ── Identity ───────────────────────────────────────────────────────────
-        employeeId,
-        employeeName: employee?.fullName || employeeId,
-        designation: employee?.designation || 'Employee',
-        department: employee?.department || '—',
-        // ── Full employee details ──────────────────────────────────────────────
-        email: employee?.email || null,
-        joiningDate: employee?.joiningDate || null,
-        employmentType: employee?.employmentType || null,
-        gender: employee?.gender || null,
-        userStatus: employee?.userStatus || null,
-        // ── Review details ─────────────────────────────────────────────────────
-        quarter: review?.quarter || null,
-        reviewStatus: review?.reviewStatus || review?.status || null,
-        submittedDate: review?.submittedDate || null,
-        averageRating: review?.averageRating != null
-          ? parseFloat(String(review.averageRating))
-          : null,
-        finalRating: review?.finalRating || null,
-        managerName: review?.managerName || null,
-        // ── Status flag ────────────────────────────────────────────────────────
-        isCompleted,
-      };
-    });
+    }
   }
 
   /** Send in-app reminders to mapped employees who have not completed a review. */
   async sendReviewNotifications(managerUser: any, employeeIds: string[]) {
-    if (!Array.isArray(employeeIds) || employeeIds.length === 0) {
-      throw new BadRequestException('At least one employee must be selected.');
-    }
-
-    const { employeeIds: mappedEmployeeIds } = await this.getMappedEmployeeIds(managerUser);
-    const mappedIds = new Set(mappedEmployeeIds);
-    const requestedIds = Array.from(new Set(employeeIds.map((id) => String(id).trim()).filter(Boolean)));
-    const eligibleIds = requestedIds.filter((employeeId) => mappedIds.has(employeeId));
-
-    if (eligibleIds.length === 0) {
-      throw new ForbiddenException('None of the selected employees are mapped to this manager.');
-    }
-
-    const reviews = await this.quarterlyReviewRepository.find({
-      where: { employeeId: In(eligibleIds) },
-      order: { id: 'DESC' },
-    });
-    const latestReviewByEmployee = new Map<string, QuarterlyReview>();
-    for (const review of reviews) {
-      if (!latestReviewByEmployee.has(review.employeeId)) {
-        latestReviewByEmployee.set(review.employeeId, review);
+    try {
+      if (!Array.isArray(employeeIds) || employeeIds.length === 0) {
+        throw new BadRequestException('At least one employee must be selected.');
       }
-    }
 
-    const pendingIds = eligibleIds.filter((employeeId) => {
-      const review = latestReviewByEmployee.get(employeeId);
-      return !review || ![ReviewStatus.APPROVED, ReviewStatus.COMPLETED].includes(review.status) && review.reviewStatus !== ReviewStatus.REVIEWED;
-    });
+      const { employeeIds: mappedEmployeeIds } = await this.getMappedEmployeeIds(managerUser);
+      const mappedIds = new Set(mappedEmployeeIds);
+      const requestedIds = Array.from(new Set(employeeIds.map((id) => String(id).trim()).filter(Boolean)));
+      const eligibleIds = requestedIds.filter((employeeId) => mappedIds.has(employeeId));
 
-    if (pendingIds.length === 0) {
-      return { sent: 0, skipped: eligibleIds.length, employeeIds: [] };
-    }
+      if (eligibleIds.length === 0) {
+        throw new ForbiddenException('None of the selected employees are mapped to this manager.');
+      }
 
-    const title = 'Quarterly Review Reminder';
-    const message = 'Please complete your quarterly review submission. Your manager has requested that you update it as soon as possible.';
-    for (const employeeId of pendingIds) {
-      await this.notificationsService.createNotification({
-        employeeId,
-        title,
-        message,
-        type: 'alert',
+      const reviews = await this.quarterlyReviewRepository.find({
+        where: { employeeId: In(eligibleIds) },
+        order: { id: 'DESC' },
       });
+      const latestReviewByEmployee = new Map<string, QuarterlyReview>();
+      for (const review of reviews) {
+        if (!latestReviewByEmployee.has(review.employeeId)) {
+          latestReviewByEmployee.set(review.employeeId, review);
+        }
+      }
+
+      const pendingIds = eligibleIds.filter((employeeId) => {
+        const review = latestReviewByEmployee.get(employeeId);
+        return !review || ![ReviewStatus.APPROVED, ReviewStatus.COMPLETED].includes(review.status) && review.reviewStatus !== ReviewStatus.REVIEWED;
+      });
+
+      if (pendingIds.length === 0) {
+        return { sent: 0, skipped: eligibleIds.length, employeeIds: [] };
+      }
+
+      const title = 'Quarterly Review Reminder';
+      const message = 'Please complete your quarterly review submission. Your manager has requested that you update it as soon as possible.';
+      for (const employeeId of pendingIds) {
+        await this.notificationsService.createNotification({
+          employeeId,
+          title,
+          message,
+          type: 'alert',
+        });
+      }
+
+      this.logger.log(`Sent quarterly review reminders to ${pendingIds.length} employees.`);
+      return {
+        sent: pendingIds.length,
+        skipped: eligibleIds.length - pendingIds.length,
+        employeeIds: pendingIds,
+      };
+    } catch (error: any) {
+      this.logger.error(`[sendReviewNotifications] Error: ${error.message}`, error.stack);
+      if (error instanceof HttpException) throw error;
+      throw new HttpException(
+        error.message || 'Failed to send review reminders',
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
     }
-
-    this.logger.log(`Sent quarterly review reminders to ${pendingIds.length} employees.`);
-    return {
-      sent: pendingIds.length,
-      skipped: eligibleIds.length - pendingIds.length,
-      employeeIds: pendingIds,
-    };
   }
 
-  /** Calculate stats for manager dashboard — always computed over the full (unpaginated) team */
-  async getStats(managerUser: any) {
-    const reviews = await this.getFilteredRows(managerUser);
+  /** Calculate stats for manager dashboard — submissions summary and quarter-specific employee assignment summary. */
+  async getStats(
+    managerUser: any,
+    queryFilters: { quarter?: string; financialYear?: string; year?: string } = {},
+  ) {
+    try {
+      const isPrivileged = this.isPrivilegedUser(managerUser);
 
-    const totalSubmissions = reviews.length;
-    const pendingReviews = reviews.filter((r) => !r.reviewStatus || r.reviewStatus === 'Pending' || r.status === ReviewStatus.SUBMITTED && r.reviewStatus !== 'Reviewed').length;
-    const inReview = reviews.filter((r) => r.reviewStatus === 'In Review' || r.status === ReviewStatus.IN_REVIEW).length;
-    const completed = reviews.filter((r) => ['Reviewed', 'Approved', 'Completed'].includes(r.reviewStatus || '')).length;
+      // Determine requested quarter & financial year
+      const rawQuarterString = (queryFilters.quarter || '').trim();
+      const isAllQuartersSelected = !rawQuarterString || rawQuarterString.toUpperCase() === 'ALL';
+      const selectedQuarter = isAllQuartersSelected ? '' : rawQuarterString;
 
-    const { employeeIds } = await this.getMappedEmployeeIds(managerUser);
+      const rawYearString = (queryFilters.financialYear || queryFilters.year || '').trim();
+      const isAllYearsSelected = !rawYearString || rawYearString.toUpperCase() === 'ALL';
+      const normalizedYearDigits = rawYearString ? this.normalizeYear(rawYearString) : '';
+      const selectedFinancialYear = normalizedYearDigits ? `FY${normalizedYearDigits}` : 'FY2026-27';
 
-    return {
-      totalTeamMembers: employeeIds.length || totalSubmissions,
-      totalSubmissions,
-      pendingReviews,
-      inReview,
-      completed,
-    };
+      // ── 1. Fetch eligible employees for this manager/admin ──
+      let eligibleEmployees: Array<{
+        employeeId: string;
+        employeeName: string;
+        designation: string;
+        department: string;
+        email?: string;
+      }> = [];
+
+      if (isPrivileged) {
+        const allEmployeesList = await this.employeeDetailsRepository.find({ order: { fullName: 'ASC' } });
+        eligibleEmployees = allEmployeesList
+          .filter((employee) => employee.employeeId && employee.employeeId !== managerUser?.loginId)
+          .map((employee) => ({
+            employeeId: employee.employeeId,
+            employeeName: employee.fullName || employee.employeeId,
+            designation: employee.designation || 'Employee',
+            department: employee.department || 'General',
+            email: employee.email || '',
+          }));
+      } else {
+        const { employeeIds: mappedEmployeeIds } = await this.getMappedEmployeeIds(managerUser);
+        if (mappedEmployeeIds.length > 0) {
+          const allEmployeesList = await this.employeeDetailsRepository.find({
+            where: { employeeId: In(mappedEmployeeIds) },
+            order: { fullName: 'ASC' },
+          });
+          eligibleEmployees = mappedEmployeeIds.map((targetEmployeeId) => {
+            const matchedEmployee = allEmployeesList.find(
+              (employeeDetail) => employeeDetail.employeeId === targetEmployeeId,
+            );
+            return {
+              employeeId: targetEmployeeId,
+              employeeName: matchedEmployee?.fullName || targetEmployeeId,
+              designation: matchedEmployee?.designation || 'Team Member',
+              department: matchedEmployee?.department || 'General',
+              email: matchedEmployee?.email || '',
+            };
+          });
+        }
+      }
+
+      // ── 2. Employee Assignment Summary for the selected Quarter & Year ──
+      const eligibleEmployeeIds = eligibleEmployees.map((employee) => employee.employeeId);
+      let assignedReviewList: ReviewAssignment[] = [];
+
+      let displayQuarterLabel = selectedQuarter;
+      if (!displayQuarterLabel) {
+        displayQuarterLabel = 'Q1';
+      }
+      let targetQuarterCanonical = displayQuarterLabel;
+      if (/^Q[1-4]$/i.test(displayQuarterLabel)) {
+        targetQuarterCanonical = `${displayQuarterLabel.toUpperCase()} ${selectedFinancialYear}`;
+      }
+
+      if (eligibleEmployeeIds.length > 0) {
+        const assignmentQueryBuilder = this.assignmentRepository
+          .createQueryBuilder('assignment')
+          .where('assignment.employeeId IN (:...eligibleEmployeeIds)', { eligibleEmployeeIds });
+
+        if (selectedQuarter) {
+          const quarterPrefixMatch = selectedQuarter.match(/^Q[1-4]/i)?.[0]?.toUpperCase() || selectedQuarter;
+          assignmentQueryBuilder.andWhere(
+            '(assignment.quarter = :targetQuarterCanonical OR assignment.quarter LIKE :quarterPrefixPattern)',
+            {
+              targetQuarterCanonical,
+              quarterPrefixPattern: `${quarterPrefixMatch}%`,
+            },
+          );
+        }
+
+        if (selectedFinancialYear) {
+          const rawFiscalYearNumber = selectedFinancialYear.replace(/^FY/i, '').trim();
+          assignmentQueryBuilder.andWhere(
+            '(assignment.financialYear = :selectedFinancialYear OR assignment.financialYear LIKE :rawFiscalYearPattern OR assignment.quarter LIKE :yearMatchPattern)',
+            {
+              selectedFinancialYear,
+              rawFiscalYearPattern: `%${rawFiscalYearNumber}%`,
+              yearMatchPattern: `%${rawFiscalYearNumber}%`,
+            },
+          );
+        }
+
+        assignedReviewList = await assignmentQueryBuilder.orderBy('assignment.id', 'DESC').getMany();
+      }
+
+      const assignmentMap = new Map<string, ReviewAssignment>();
+      for (const assignmentRecord of assignedReviewList) {
+        if (!assignmentMap.has(assignmentRecord.employeeId)) {
+          assignmentMap.set(assignmentRecord.employeeId, assignmentRecord);
+        }
+      }
+
+      // ── 2b. Query all assignments for the financial year to find employees with only 1 quarter assigned & pending quarters ──
+      let allFyAssignments: ReviewAssignment[] = [];
+      if (eligibleEmployeeIds.length > 0) {
+        const fyAssignmentQueryBuilder = this.assignmentRepository
+          .createQueryBuilder('assignment')
+          .where('assignment.employeeId IN (:...eligibleEmployeeIds)', { eligibleEmployeeIds });
+
+        if (selectedFinancialYear) {
+          const rawFiscalYearNumber = selectedFinancialYear.replace(/^FY/i, '').trim();
+          fyAssignmentQueryBuilder.andWhere(
+            '(assignment.financialYear = :selectedFinancialYear OR assignment.financialYear LIKE :rawFiscalYearPattern OR assignment.quarter LIKE :yearMatchPattern)',
+            {
+              selectedFinancialYear,
+              rawFiscalYearPattern: `%${rawFiscalYearNumber}%`,
+              yearMatchPattern: `%${rawFiscalYearNumber}%`,
+            },
+          );
+        }
+
+        allFyAssignments = await fyAssignmentQueryBuilder.orderBy('assignment.id', 'DESC').getMany();
+      }
+
+      const getQuarterCode = (qStr: string): string => {
+        const m = (qStr || '').match(/Q[1-4]/i);
+        return m ? m[0].toUpperCase() : (qStr || '').trim();
+      };
+
+      const employeeFyAssignmentsMap = new Map<string, ReviewAssignment[]>();
+      for (const a of allFyAssignments) {
+        const list = employeeFyAssignmentsMap.get(a.employeeId) || [];
+        list.push(a);
+        employeeFyAssignmentsMap.set(a.employeeId, list);
+      }
+
+      const allQuarterCodes = ['Q1', 'Q2', 'Q3', 'Q4'];
+      const now = new Date();
+      const currentMonth = now.getMonth();
+      let currentQuarterCode = 'Q1';
+      if (currentMonth >= 3 && currentMonth <= 5) currentQuarterCode = 'Q1';
+      else if (currentMonth >= 6 && currentMonth <= 8) currentQuarterCode = 'Q2';
+      else if (currentMonth >= 9 && currentMonth <= 11) currentQuarterCode = 'Q3';
+      else currentQuarterCode = 'Q4';
+
+      const assignedEmployees: any[] = [];
+      const notAssignedEmployees: any[] = [];
+      const singleQuarterEmployees: any[] = [];
+
+      for (const currentEmployee of eligibleEmployees) {
+        const existingAssignment = assignmentMap.get(currentEmployee.employeeId);
+        const empAssignments = employeeFyAssignmentsMap.get(currentEmployee.employeeId) || (existingAssignment ? [existingAssignment] : []);
+        const uniqueAssignedCodes = Array.from(
+          new Set(empAssignments.map((a) => getQuarterCode(a.quarter)).filter(Boolean)),
+        );
+        const pendingCodes = allQuarterCodes.filter((q) => !uniqueAssignedCodes.includes(q));
+        let primaryPending = pendingCodes.find((q) => q === currentQuarterCode) || pendingCodes[0] || '';
+        if (uniqueAssignedCodes.includes(currentQuarterCode)) {
+          primaryPending = pendingCodes.includes('Q1') ? 'Q1' : (pendingCodes[0] || '');
+        }
+
+        if (existingAssignment) {
+          assignedEmployees.push({
+            employeeId: currentEmployee.employeeId,
+            employeeName: currentEmployee.employeeName,
+            designation: currentEmployee.designation,
+            department: currentEmployee.department,
+            email: currentEmployee.email,
+            quarter: existingAssignment.quarter,
+            assignedQuarter: existingAssignment.quarter,
+            assignedQuarters: uniqueAssignedCodes.length > 0 ? uniqueAssignedCodes : [getQuarterCode(existingAssignment.quarter)],
+            pendingQuarter: primaryPending,
+            pendingQuarters: pendingCodes,
+            financialYear: existingAssignment.financialYear || selectedFinancialYear,
+            status: existingAssignment.status || 'Assigned',
+            assignedAt: existingAssignment.assignedAt,
+            deadlineAt: existingAssignment.deadlineAt,
+            assignedByName: existingAssignment.assignedByName,
+          });
+        } else {
+          notAssignedEmployees.push({
+            employeeId: currentEmployee.employeeId,
+            employeeName: currentEmployee.employeeName,
+            designation: currentEmployee.designation,
+            department: currentEmployee.department,
+            email: currentEmployee.email,
+          });
+        }
+
+        if (uniqueAssignedCodes.length === 1) {
+          const assignedCode = uniqueAssignedCodes[0];
+          const matchedAssignment = empAssignments[0] || existingAssignment;
+
+          singleQuarterEmployees.push({
+            employeeId: currentEmployee.employeeId,
+            employeeName: currentEmployee.employeeName,
+            designation: currentEmployee.designation,
+            department: currentEmployee.department,
+            email: currentEmployee.email,
+            assignedQuarter: assignedCode,
+            assignedQuarters: uniqueAssignedCodes,
+            pendingQuarter: primaryPending || 'Q2',
+            pendingQuarters: pendingCodes,
+            financialYear: selectedFinancialYear,
+            status: matchedAssignment?.status || 'Assigned',
+            assignedAt: matchedAssignment?.assignedAt || null,
+            deadlineAt: matchedAssignment?.deadlineAt || null,
+            assignedByName: matchedAssignment?.assignedByName || null,
+          });
+        }
+      }
+
+      // ── 3. Review Submissions Summary (Strictly actual submissions only) ──
+      // Exclude unsubmitted 'Assigned' and 'Draft' records so assignment counts are NOT mixed with submissions
+      const filteredReviewRows = await this.getFilteredRows(managerUser, {
+        quarter: selectedQuarter || undefined,
+        year: isAllYearsSelected ? undefined : rawYearString,
+      });
+
+      const isActualSubmission = (reviewRow: any) => {
+        const reviewStatusLower = (reviewRow.status || '').toLowerCase();
+        const evaluationStatusLower = (reviewRow.reviewStatus || '').toLowerCase();
+        const hasSubmittedReviewStatus = [
+          'submitted',
+          'auto submitted',
+          'in review',
+          'under review',
+          'reviewed',
+          'completed',
+          'approved',
+        ].includes(reviewStatusLower) || [
+          'pending',
+          'in review',
+          'under review',
+          'reviewed',
+          'completed',
+          'approved',
+        ].includes(evaluationStatusLower);
+
+        return hasSubmittedReviewStatus && reviewStatusLower !== 'assigned' && reviewStatusLower !== 'draft';
+      };
+
+      const actualSubmissionRows = filteredReviewRows.filter(isActualSubmission);
+      const pendingReviewsCount = actualSubmissionRows.filter(
+        (reviewItem) => this.getStatusBucket(reviewItem) === 'pending',
+      ).length;
+      const inReviewCount = actualSubmissionRows.filter(
+        (reviewItem) => this.getStatusBucket(reviewItem) === 'in-review',
+      ).length;
+      const completedCount = actualSubmissionRows.filter(
+        (reviewItem) => this.getStatusBucket(reviewItem) === 'completed',
+      ).length;
+      const totalSubmissionsCount = pendingReviewsCount + inReviewCount + completedCount;
+
+      return {
+        totalTeamMembers: eligibleEmployees.length,
+        totalSubmissions: totalSubmissionsCount,
+        pendingReviews: pendingReviewsCount,
+        inReview: inReviewCount,
+        completed: completedCount,
+        assignmentSummary: {
+          quarter: selectedQuarter || displayQuarterLabel,
+          financialYear: selectedFinancialYear,
+          canonicalQuarter: targetQuarterCanonical,
+          totalEmployees: eligibleEmployees.length,
+          totalSubmissions: totalSubmissionsCount,
+          pendingReviews: pendingReviewsCount,
+          inReview: inReviewCount,
+          completed: completedCount, 
+          assignedCount: assignedEmployees.length,
+          notAssignedCount: notAssignedEmployees.length,
+          singleQuarterCount: singleQuarterEmployees.length,
+          assignedEmployees,
+          notAssignedEmployees,
+          singleQuarterEmployees,
+        },
+      };
+    } catch (error: any) {
+      this.logger.error(`[getStats] Error: ${error.message}`, error.stack);
+      if (error instanceof HttpException) throw error;
+      throw new HttpException(
+        error.message || 'Failed to compute manager review stats',
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
   }
 
-  /** Get single submission details — scoped to the logged-in manager's mapped employees */
+  /** Get single submission details */
   async getSubmissionById(managerUser: any, id: number) {
-    const review = await this.quarterlyReviewRepository.findOne({ where: { id } });
-    if (!review) {
-      throw new NotFoundException(`Quarterly review with ID ${id} not found.`);
+    try {
+      const review = await this.quarterlyReviewRepository.findOne({ where: { id } });
+      if (!review) {
+        throw new NotFoundException(`Quarterly review with ID ${id} not found.`);
+      }
+
+      const isPrivileged = this.isPrivilegedUser(managerUser);
+
+      if (!isPrivileged) {
+        const { employeeIds, managerNames } = await this.getMappedEmployeeIds(managerUser);
+        const isMappedByEmployeeId = employeeIds.includes(review.employeeId);
+        const isMappedByManagerName = managerNames.some(
+          (mName) =>
+            mName &&
+            review.managerName &&
+            (mName.toLowerCase() === review.managerName.toLowerCase() ||
+              review.managerName.toLowerCase().includes(mName.toLowerCase())),
+        );
+        const isDirectEvaluator =
+          review.evaluatorId === managerUser?.loginId ||
+          review.managerName === managerUser?.loginId ||
+          review.managerName === (managerUser?.aliasLoginName || managerUser?.fullName);
+
+        if (!isMappedByEmployeeId && !isMappedByManagerName && !isDirectEvaluator) {
+          throw new ForbiddenException("You do not have access to this employee's review.");
+        }
+      }
+
+      const sanitized = this.sanitizeReview(review);
+      const [empDetail, userRecord] = await Promise.all([
+        this.employeeDetailsRepository.findOne({ where: { employeeId: review.employeeId } }),
+        this.userRepository.findOne({ where: { loginId: review.employeeId } }),
+      ]);
+
+      const isManagerEmployee =
+        userRecord?.userType === UserType.MANAGER ||
+        (empDetail?.designation && empDetail.designation.toLowerCase().includes('manager'));
+
+      return {
+        ...sanitized,
+        employeeName: empDetail?.fullName || review.employeeId,
+        employeeRole: isManagerEmployee ? 'MANAGER' : 'EMPLOYEE',
+        department: empDetail?.department || 'Engineering',
+        designation: empDetail?.designation || (isManagerEmployee ? 'Manager' : 'Employee'),
+        evaluatorName: review.evaluatorName || (review.reviewStatus ? review.managerName : null),
+        evaluatorRole: review.evaluatorRole || (review.reviewStatus ? (review.managerName === 'CEO & Admin' ? 'CEO' : 'MANAGER') : null),
+        evaluatorId: review.evaluatorId || null,
+      };
+    } catch (error: any) {
+      this.logger.error(`[getSubmissionById] Error for id=${id}: ${error.message}`, error.stack);
+      if (error instanceof HttpException) throw error;
+      throw new HttpException(
+        error.message || 'Failed to fetch submission details',
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
     }
-
-    // Ensure this manager is actually allowed to see this employee's review —
-    // prevents fetching another manager's team member by guessing/incrementing
-    // the numeric id in the URL.
-    const { employeeIds, managerNames } = await this.getMappedEmployeeIds(managerUser);
-    const isMappedByEmployeeId = employeeIds.includes(review.employeeId);
-    const isMappedByManagerName = managerNames.includes((review as any).managerName);
-    if (!isMappedByEmployeeId && !isMappedByManagerName) {
-      throw new ForbiddenException("You do not have access to this employee's review.");
-    }
-
-    const sanitized = this.sanitizeReview(review);
-    const empDetail = await this.employeeDetailsRepository.findOne({ where: { employeeId: review.employeeId } });
-
-    return {
-      ...sanitized,
-      employeeName: empDetail?.fullName || review.employeeId,
-      department: empDetail?.department || 'Engineering',
-      designation: empDetail?.designation || 'Employee',
-    };
   }
 
   /**
-   * Get single submission details by employeeId instead of the row's numeric id.
-   * An employee may have multiple review rows (one per quarter), so `quarter`
-   * narrows it down; without it, the latest matching row (highest id) is returned.
-   * Same manager-scoping guard as getSubmissionById.
+   * Get single submission details by employeeId.
    */
-  async getSubmissionByEmployeeId(managerUser: any, employeeId: string, quarter?: string) {
-    const { employeeIds, managerNames } = await this.getMappedEmployeeIds(managerUser);
+  async getSubmissionByEmployeeId(managerUser: any, employeeId: string, quarter?: string, revealToken?: string) {
+    try {
+      const isPrivileged = this.isPrivilegedUser(managerUser);
 
-    const whereConditions: any = quarter ? { employeeId, quarter } : { employeeId };
+      const whereConditions: any = quarter ? { employeeId, quarter } : { employeeId };
 
-    const review = await this.quarterlyReviewRepository.findOne({
-      where: whereConditions,
-      order: { id: 'DESC' },
-    });
+      let review = await this.quarterlyReviewRepository.findOne({
+        where: whereConditions,
+        order: { id: 'DESC' },
+      });
 
-    if (!review) {
-      throw new NotFoundException(`Quarterly review for employee ID ${employeeId} not found.`);
+      if (!review && !isNaN(Number(employeeId))) {
+        review = await this.quarterlyReviewRepository.findOne({
+          where: { id: Number(employeeId) },
+        });
+      }
+
+      if (!review) {
+        const assignment = await this.assignmentRepository.findOne({
+          where: quarter ? { employeeId, quarter } : { employeeId },
+          order: { id: 'DESC' },
+        });
+
+        if (assignment) {
+          const empDetail = await this.employeeDetailsRepository.findOne({
+            where: { employeeId },
+          });
+
+          return {
+            id: assignment.id,
+            assignmentId: assignment.id,
+            employeeId: assignment.employeeId,
+            employeeName: empDetail?.fullName || assignment.employeeName,
+            department: empDetail?.department || 'Engineering',
+            designation: empDetail?.designation || 'Employee',
+            quarter: assignment.quarter,
+            status: 'Assigned',
+            reviewStatus: null,
+            overview: null,
+            achievements: [],
+            challenges: [],
+            learningGoals: [],
+            projects: [],
+            teamContribution: [],
+            companyEnvironment: null,
+            submittedDate: null,
+            reviewedOn: null,
+            lastModified: assignment.assignedAt,
+            finalRating: null,
+            actionType: 'view',
+            actionLabel: 'Assigned',
+            managerName: assignment.assignedByName,
+            deadlineAt: assignment.deadlineAt,
+            assignedAt: assignment.assignedAt,
+          };
+        }
+
+        throw new NotFoundException(`Quarterly review for employee ID ${employeeId} not found.`);
+      }
+
+      if (!isPrivileged) {
+        const { employeeIds, managerNames } = await this.getMappedEmployeeIds(managerUser);
+        const isMappedByEmployeeId = employeeIds.includes(review.employeeId);
+        const isMappedByManagerName = managerNames.some(
+          (mName) =>
+            mName &&
+            review.managerName &&
+            (mName.toLowerCase() === review.managerName.toLowerCase() ||
+              review.managerName.toLowerCase().includes(mName.toLowerCase())),
+        );
+        const isDirectEvaluator =
+          review.evaluatorId === managerUser?.loginId ||
+          review.managerName === managerUser?.loginId ||
+          review.managerName === (managerUser?.aliasLoginName || managerUser?.fullName);
+
+        if (!isMappedByEmployeeId && !isMappedByManagerName && !isDirectEvaluator) {
+          throw new ForbiddenException("You do not have access to this employee's review.");
+        }
+      }
+
+      const sanitized = this.sanitizeReview(review);
+      const displayStatus = this.getDisplayStatus(review);
+      const isEvaluated = displayStatus === 'Reviewed' || displayStatus === 'Completed';
+      const hasFinalRating = isEvaluated && Boolean(review.finalRating);
+      const isTokenValid = Boolean(
+        revealToken && review.id && isRevealTokenValid(revealToken, review.id, review.employeeId),
+      );
+      const isEvaluator = Boolean(
+        managerUser &&
+        (this.isPrivilegedUser(managerUser) ||
+          review.evaluatorId === managerUser.loginId ||
+          review.managerName === managerUser.loginId ||
+          (managerUser.aliasLoginName && review.managerName === managerUser.aliasLoginName) ||
+          (managerUser.fullName && review.managerName === managerUser.fullName) ||
+          (review.evaluatorName && (review.evaluatorName === managerUser.aliasLoginName || review.evaluatorName === managerUser.fullName)))
+      );
+      const shouldHideRating = hasFinalRating && !isEvaluator && !isTokenValid;
+
+      const [empDetail, userRecord] = await Promise.all([
+        this.employeeDetailsRepository.findOne({ where: { employeeId: review.employeeId } }),
+        this.userRepository.findOne({ where: { loginId: review.employeeId } }),
+      ]);
+
+      const isManagerEmployee =
+        userRecord?.userType === UserType.MANAGER ||
+        (empDetail?.designation && empDetail.designation.toLowerCase().includes('manager'));
+
+      return {
+        ...sanitized,
+        finalRating: shouldHideRating ? null : sanitized.finalRating,
+        ratings: shouldHideRating ? null : sanitized.ratings,
+        isFinalRatingHidden: shouldHideRating,
+        hasFinalRating,
+        employeeName: empDetail?.fullName || review.employeeId,
+        employeeRole: isManagerEmployee ? 'MANAGER' : 'EMPLOYEE',
+        department: empDetail?.department || 'Engineering',
+        designation: empDetail?.designation || (isManagerEmployee ? 'Manager' : 'Employee'),
+        evaluatorName: review.evaluatorName || (review.reviewStatus ? review.managerName : null),
+        evaluatorRole: review.evaluatorRole || (review.reviewStatus ? (review.managerName === 'CEO & Admin' ? 'CEO' : 'MANAGER') : null),
+        evaluatorId: review.evaluatorId || null,
+      };
+    } catch (error: any) {
+      this.logger.error(`[getSubmissionByEmployeeId] Error for employeeId=${employeeId}: ${error.message}`, error.stack);
+      if (error instanceof HttpException) throw error;
+      throw new HttpException(
+        error.message || 'Failed to fetch employee submission details',
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
     }
-
-    const isMappedByEmployeeId = employeeIds.includes(review.employeeId);
-    const isMappedByManagerName = managerNames.includes((review as any).managerName);
-    if (!isMappedByEmployeeId && !isMappedByManagerName) {
-      throw new ForbiddenException("You do not have access to this employee's review.");
-    }
-
-    const sanitized = this.sanitizeReview(review);
-    const empDetail = await this.employeeDetailsRepository.findOne({ where: { employeeId: review.employeeId } });
-
-    return {
-      ...sanitized,
-      employeeName: empDetail?.fullName || review.employeeId,
-      department: empDetail?.department || 'Engineering',
-      designation: empDetail?.designation || 'Employee',
-    };
   }
 
-  /** Manager evaluate employee quarterly review */
+  /** Evaluate employee or manager quarterly review */
   async evaluateReview(managerUser: any, id: number, dto: ManagerEvaluationDto, isDraft: boolean = false) {
     try {
       if (!id || isNaN(id)) {
@@ -593,7 +1213,7 @@ export class ManagerQuarterlyReviewService implements OnModuleInit {
       }
 
       const reviewStatus = isDraft
-        ? (dto.reviewStatus || ReviewStatus.IN_REVIEW)
+        ? (dto.reviewStatus || ReviewStatus.DRAFT)
         : (dto.reviewStatus || ReviewStatus.REVIEWED);
 
       if (dto.quarter?.trim()) {
@@ -610,22 +1230,151 @@ export class ManagerQuarterlyReviewService implements OnModuleInit {
       review.finalRating = dto.finalRating !== undefined ? dto.finalRating : review.finalRating;
       review.reviewStatus = reviewStatus;
       review.reviewedOn = new Date();
-      review.status = isDraft ? ReviewStatus.IN_REVIEW : ReviewStatus.APPROVED;
+      review.status = isDraft ? ReviewStatus.DRAFT : ReviewStatus.APPROVED;
+
+      // Track evaluator identity and role
+      const evaluatorName =
+        managerUser?.aliasLoginName || managerUser?.fullName || managerUser?.name || managerUser?.loginId || 'Evaluator';
+      review.evaluatorName = evaluatorName;
+      review.evaluatorRole = managerUser?.userType || 'MANAGER';
+      review.evaluatorId = managerUser?.loginId || null;
 
       const updated = await this.quarterlyReviewRepository.save(review);
-      this.logger.log(`Manager evaluated review id=${id}, status=${updated.reviewStatus}, finalRating=${updated.finalRating}`);
+      this.logger.log(
+        `Review id=${id} evaluated by ${evaluatorName} (${review.evaluatorRole}), status=${updated.reviewStatus}, finalRating=${updated.finalRating}`,
+      );
 
       if (!isDraft) {
         await this.sendQuarterlyReviewNotificationEmail(managerUser, updated, dto);
+
+        // 1. Send in-app notification to the Employee
+        try {
+          await this.notificationsService.createNotification({
+            employeeId: updated.employeeId,
+            title: 'Quarterly Review Evaluated',
+            message: `Your manager ${evaluatorName} has completed and submitted your Quarterly Review evaluation for ${updated.quarter}.`,
+            type: 'success',
+          });
+          this.logger.log(`Created in-app notification for employee ${updated.employeeId} on review evaluation`);
+        } catch (empNotifErr: any) {
+          this.logger.warn(`Could not create notification for employee ${updated.employeeId}: ${empNotifErr.message}`);
+        }
+
+        // 2. Send in-app notification to the Manager / Evaluator
+        if (managerUser?.loginId && managerUser.loginId !== updated.employeeId) {
+          try {
+            const empDetail = await this.employeeDetailsRepository.findOne({
+              where: { employeeId: updated.employeeId },
+            });
+            const empName = empDetail?.fullName || updated.employeeId;
+            await this.notificationsService.createNotification({
+              employeeId: managerUser.loginId,
+              title: 'Quarterly Review Evaluated',
+              message: `You have completed and submitted the evaluation for ${empName} (${updated.quarter}).`,
+              type: 'info',
+            });
+            this.logger.log(`Created in-app notification for manager ${managerUser.loginId}`);
+          } catch (mgrNotifErr: any) {
+            this.logger.warn(`Could not create notification for manager ${managerUser.loginId}: ${mgrNotifErr.message}`);
+          }
+        }
+
+        // 3. Send in-app notification and email to Admin and CEO
+        try {
+          const userRepo = this.quarterlyReviewRepository.manager.getRepository(User);
+          const adminCeoUsers = await userRepo.find({
+            where: [
+              { userType: UserType.ADMIN },
+              { userType: UserType.CEO },
+              { role: UserType.ADMIN },
+              { role: UserType.CEO },
+            ],
+          }).catch(() => []);
+
+          const adminCeoIds = new Set<string>(['Admin', 'CEO']);
+          const adminCeoEmails = new Set<string>();
+
+          for (const u of adminCeoUsers) {
+            if (u.loginId && u.loginId !== managerUser?.loginId) {
+              adminCeoIds.add(u.loginId);
+            }
+          }
+
+          const adminCeoEmployees = await this.employeeDetailsRepository.find({
+            where: [
+              { designation: Like('%Admin%') },
+              { designation: Like('%CEO%') },
+            ],
+          }).catch(() => []);
+
+          for (const emp of adminCeoEmployees) {
+            if (emp.employeeId && emp.employeeId !== managerUser?.loginId) {
+              adminCeoIds.add(emp.employeeId);
+              if (emp.email) adminCeoEmails.add(emp.email);
+            }
+          }
+
+          if (adminCeoIds.size > 0) {
+            const extraEmps = await this.employeeDetailsRepository.find({
+              where: { employeeId: In(Array.from(adminCeoIds)) },
+            }).catch(() => []);
+            for (const emp of extraEmps) {
+              if (emp.email) adminCeoEmails.add(emp.email);
+            }
+          }
+
+          const empDetail = await this.employeeDetailsRepository.findOne({
+            where: { employeeId: updated.employeeId },
+          });
+          const empName = empDetail?.fullName || updated.employeeId;
+
+          // Dispatch in-app notifications to Admin and CEO
+          for (const recipientId of adminCeoIds) {
+            try {
+              await this.notificationsService.createNotification({
+                employeeId: recipientId,
+                title: 'Quarterly Review Evaluated',
+                message: `${evaluatorName} has completed and submitted the evaluation for ${empName} (${updated.quarter}).`,
+                type: 'info',
+              });
+              this.logger.log(`Created in-app notification for Admin/CEO ${recipientId}`);
+            } catch (adminNotifErr: any) {
+              this.logger.warn(`Could not create notification for Admin/CEO ${recipientId}: ${adminNotifErr.message}`);
+            }
+          }
+
+          // Dispatch email notifications to Admin and CEO
+          for (const adminEmail of adminCeoEmails) {
+            try {
+              const quarter = updated.quarter || 'Quarterly Review';
+              const subject = `Quarterly Performance Review Completed - ${empName} (${quarter})`;
+              const text = `Hello,\n\n${evaluatorName} has completed and submitted the quarterly review evaluation for ${empName} (${quarter}).\n\nFinal Performance Rating: ${updated.finalRating || dto.finalRating || 'N/A'}\n\nRegards,\nWorkSphere Team`;
+              const htmlContent = getAppraisalQuarterEvaluatedTemplate({
+                employeeName: empName,
+                quarter,
+                managerName: evaluatorName,
+                finalRating: updated.finalRating || dto.finalRating || undefined,
+                strengths: dto.strengths || updated.strengths || undefined,
+                improvements: dto.improvements || updated.improvements || undefined,
+                remarks: dto.remarks || updated.remarks || undefined,
+                portalUrl: process.env.FRONTEND_URL || 'https://worksphere.inventech-developer.in',
+              });
+              await this.emailService.sendEmail(adminEmail, subject, text, htmlContent);
+              this.logger.log(`Queued review evaluation email for Admin/CEO (${adminEmail})`);
+            } catch (adminMailErr: any) {
+              this.logger.warn(`Could not send review evaluation email to Admin/CEO: ${adminMailErr.message}`);
+            }
+          }
+        } catch (adminResolveErr: any) {
+          this.logger.warn(`Could not resolve or notify Admin/CEO on review evaluation: ${adminResolveErr.message}`);
+        }
       }
 
       return this.getSubmissionById(managerUser, updated.id);
     } catch (err: any) {
-      // Log the real underlying error (visible in your NestJS terminal) instead of
-      // letting it surface only as a generic "Internal server error" on the frontend.
+      // Log the real underlying error instead of exposing only a generic frontend 500.
       this.logger.error(`evaluateReview failed for id=${id}: ${err.message}`, err.stack);
 
-      // Preserve intended HTTP status codes (400/404) instead of masking everything as 500
       if (err instanceof HttpException) {
         throw err;
       }
@@ -672,36 +1421,16 @@ export class ManagerQuarterlyReviewService implements OnModuleInit {
 
       const frontendUrl = process.env.FRONTEND_URL || 'https://worksphere.inventech-developer.in';
 
-      const htmlContent = `
-        <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; max-width: 600px; margin: auto; padding: 40px; border: 1px solid #e0e0e0; border-radius: 12px; background-color: #ffffff; box-shadow: 0 4px 10px rgba(0,0,0,0.05);">
-          <div style="text-align: center; margin-bottom: 30px; border-bottom: 2px solid #6366f1; padding-bottom: 15px;">
-            <h2 style="color: #4f46e5; margin: 0; font-size: 24px;">Quarterly Review Submitted</h2>
-            <p style="color: #6b7280; font-size: 14px; margin-top: 5px;">${quarter}</p>
-          </div>
-          <p style="color: #374151; font-size: 16px; line-height: 1.5;">Dear <strong>${employeeName}</strong>,</p>
-          <p style="color: #374151; font-size: 16px; line-height: 1.5;">
-            Your manager, <strong>${managerName}</strong>, has completed and submitted your Quarterly Review evaluation for <strong>${quarter}</strong>.
-          </p>
-          
-          <div style="background-color: #f8fafc; border-left: 4px solid #6366f1; padding: 16px; border-radius: 6px; margin: 24px 0;">
-            <p style="margin: 0 0 10px 0; color: #1e293b; font-size: 15px;"><strong>Final Performance Rating:</strong> <span style="color: #4f46e5; font-size: 17px; font-weight: bold;">${finalRating}</span></p>
-            ${strengths !== 'N/A' ? `<p style="margin: 8px 0; color: #334155; font-size: 14px;"><strong>Performance Strengths:</strong><br>${strengths.replace(/\n/g, '<br>')}</p>` : ''}
-            ${improvements !== 'N/A' ? `<p style="margin: 8px 0; color: #334155; font-size: 14px;"><strong>Areas for Improvement:</strong><br>${improvements.replace(/\n/g, '<br>')}</p>` : ''}
-            ${remarks !== 'N/A' ? `<p style="margin: 8px 0; color: #334155; font-size: 14px;"><strong>Manager Remarks:</strong><br>${remarks.replace(/\n/g, '<br>')}</p>` : ''}
-          </div>
-
-          <p style="color: #374151; font-size: 15px; line-height: 1.5;">
-            You can log into Worksphere portal to view your complete quarterly review feedback and rating breakdown.
-          </p>
-
-          <div style="text-align: center; margin: 35px 0;">
-            <a href="${frontendUrl}" style="background-color: #4f46e5; color: white; padding: 14px 28px; text-decoration: none; border-radius: 6px; font-weight: 600; font-size: 16px; display: inline-block;">View Quarterly Review</a>
-          </div>
-
-          <hr style="border: 0; border-top: 1px solid #eee; margin: 30px 0;">
-          <p style="font-size: 12px; color: #9ca3af; text-align: center;">This is an automated notification from Worksphere Appraisal System. Please do not reply directly to this email.</p>
-        </div>
-      `;
+      const htmlContent = getAppraisalQuarterEvaluatedTemplate({
+        employeeName,
+        quarter,
+        managerName,
+        finalRating,
+        strengths,
+        improvements,
+        remarks,
+        portalUrl: frontendUrl,
+      });
 
       await this.emailService.sendEmail(
         empDetail.email,
@@ -721,4 +1450,130 @@ export class ManagerQuarterlyReviewService implements OnModuleInit {
     }
   }
 
+  /**
+   * Get all review assignments created by or accessible to the manager.
+   * Privileged users (Admin, CEO) can view all assignments or filter by quarter.
+   */
+  async getAssignedReviews(managerUser: any, quarter?: string): Promise<any[]> {
+    try {
+      const isPrivileged = this.isPrivilegedUser(managerUser);
+      const managerLoginId = managerUser?.loginId || '';
+      const managerFullName = managerUser?.aliasLoginName || managerUser?.fullName || managerUser?.name || managerLoginId;
+
+      this.logger.log(
+        `[getAssignedReviews] manager='${managerLoginId}', role='${managerUser?.userType}', quarter='${quarter || 'all'}'`,
+      );
+
+      let assignments: ReviewAssignment[] = [];
+
+      if (isPrivileged) {
+        const qb = this.assignmentRepository.createQueryBuilder('assignment').orderBy('assignment.id', 'DESC');
+        if (quarter?.trim()) {
+          qb.andWhere('assignment.quarter = :quarter', { quarter: quarter.trim() });
+        }
+        assignments = await qb.getMany();
+      } else {
+        const { employeeIds: mappedEmployeeIds } = await this.getMappedEmployeeIds(managerUser);
+
+        const qb = this.assignmentRepository.createQueryBuilder('assignment');
+        if (mappedEmployeeIds && mappedEmployeeIds.length > 0) {
+          qb.where(
+            '(assignment.assignedById = :managerLoginId OR assignment.assignedByName = :managerFullName OR assignment.employeeId IN (:...mappedEmployeeIds))',
+            { managerLoginId, managerFullName, mappedEmployeeIds },
+          );
+        } else {
+          qb.where(
+            '(assignment.assignedById = :managerLoginId OR assignment.assignedByName = :managerFullName)',
+            { managerLoginId, managerFullName },
+          );
+        }
+
+        if (quarter?.trim()) {
+          qb.andWhere('assignment.quarter = :quarter', { quarter: quarter.trim() });
+        }
+
+        qb.orderBy('assignment.id', 'DESC');
+        assignments = await qb.getMany();
+      }
+
+      if (!assignments || assignments.length === 0) {
+        return [];
+      }
+
+      const employeeIds = Array.from(new Set(assignments.map((a) => a.employeeId)));
+      const quarters = Array.from(new Set(assignments.map((a) => a.quarter)));
+
+      const [employees, reviews] = await Promise.all([
+        this.employeeDetailsRepository.find({
+          where: { employeeId: In(employeeIds) },
+        }),
+        this.quarterlyReviewRepository.find({
+          where: {
+            employeeId: In(employeeIds),
+            quarter: In(quarters),
+          },
+        }),
+      ]);
+
+      const empMap = new Map(employees.map((e) => [e.employeeId, e]));
+      const reviewMap = new Map(
+        reviews.map((r) => [`${r.employeeId}_${r.quarter}`, r]),
+      );
+
+      const now = new Date();
+
+      return assignments.map((assignment) => {
+        const emp = empMap.get(assignment.employeeId);
+        const review = reviewMap.get(`${assignment.employeeId}_${assignment.quarter}`);
+
+        const isDeadlinePassed = now > new Date(assignment.deadlineAt);
+        let liveStatus = assignment.status;
+        if (
+          assignment.isAccessOpen === 1 &&
+          isDeadlinePassed &&
+          assignment.status !== AssignmentStatus.SUBMITTED &&
+          assignment.status !== AssignmentStatus.COMPLETED
+        ) {
+          liveStatus = AssignmentStatus.AUTO_SUBMITTED;
+        }
+
+        return {
+          id: assignment.id,
+          assignmentId: assignment.id,
+          employeeId: assignment.employeeId,
+          employeeName: emp?.fullName || assignment.employeeName || assignment.employeeId,
+          designation: emp?.designation || 'Team Member',
+          department: emp?.department || '—',
+          email: emp?.email || null,
+          quarter: assignment.quarter,
+          financialYear: assignment.financialYear || null,
+          assignedById: assignment.assignedById,
+          assignedByName: assignment.assignedByName,
+          assignedByRole: assignment.assignedByRole,
+          assignedAt: assignment.assignedAt,
+          deadlineAt: assignment.deadlineAt,
+          assignmentStatus: liveStatus,
+          status: liveStatus,
+          isAccessOpen: Boolean(assignment.isAccessOpen),
+          isDeadlinePassed,
+          accessRequestEligibleUntil: assignment.accessRequestEligibleUntil,
+          notes: assignment.notes || null,
+          reviewId: review ? review.id : null,
+          reviewStatus: review ? (review.status || 'DRAFT') : 'NOT_STARTED',
+          isSubmitted: review ? review.status !== ReviewStatus.DRAFT : false,
+          submittedAt: review?.submittedDate || null,
+          finalRating: review?.finalRating || null,
+          averageRating: review?.averageRating != null ? parseFloat(String(review.averageRating)) : null,
+          canEvaluate: review ? (review.status === ReviewStatus.SUBMITTED || review.status === ReviewStatus.IN_REVIEW || review.status === ReviewStatus.AUTO_SUBMITTED) : false,
+        };
+      });
+    } catch (error: any) {
+      this.logger.error(`[getAssignedReviews] Error: ${error.message}`, error.stack);
+      if (error instanceof HttpException) throw error;
+      throw new HttpException(
+        error.message || 'Failed to fetch assigned reviews',
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
+  }
 }

@@ -5,6 +5,9 @@ import { ReviewStatus } from '../enums/quarterly-review.enum';
 
 export class ProjectItemDto {
   @IsOptional()
+  id?: number | string;
+
+  @IsOptional()
   @IsString()
   @ApiProperty({ description: 'Project Title' })
   projectTitle?: string;
@@ -26,6 +29,9 @@ export class ProjectItemDto {
 
 export class ReviewItemDto {
   @IsOptional()
+  id?: number | string;
+
+  @IsOptional()
   @IsString()
   @ApiProperty({ description: 'Title of project/goal' })
   title?: string;
@@ -37,6 +43,9 @@ export class ReviewItemDto {
 }
 
 export class TeamContributionItemDto {
+  @IsOptional()
+  id?: number | string;
+
   @IsOptional()
   @IsString()
   @ApiProperty({ description: 'Category name' })
@@ -69,20 +78,42 @@ export class CompanyEnvironmentDto {
 }
 
 export class CreateQuarterlyReviewDto {
+  @IsOptional()
+  id?: number;
+
+  @IsOptional()
+  @IsString()
+  employeeId?: string;
+
+  @IsOptional()
+  @IsString()
+  @ApiProperty({ description: 'Reviewing Manager Name' })
+  managerName?: string;
+
   @IsNotEmpty()
   @IsString()
   @ApiProperty({ description: 'Quarter (e.g. Q1 FY2026-27)' })
   quarter: string;
 
   @IsOptional()
-  @IsDateString()
   @ApiProperty({ description: 'Quarter start date (YYYY-MM-DD)', required: false })
   startDate?: string;
 
   @IsOptional()
-  @IsDateString()
   @ApiProperty({ description: 'Quarter end date (YYYY-MM-DD)', required: false })
   endDate?: string;
+
+  @IsOptional()
+  @ApiProperty({ description: 'Assignment ID', required: false })
+  assignmentId?: any;
+
+  @IsOptional()
+  @ApiProperty({ description: 'Assignment object', required: false })
+  assignment?: any;
+
+  @IsOptional()
+  @ApiProperty({ description: 'Financial year', required: false })
+  financialYear?: string;
 
   @IsNotEmpty()
   @IsEnum(ReviewStatus)
@@ -92,10 +123,6 @@ export class CreateQuarterlyReviewDto {
   @IsOptional()
   @IsString()
   @ApiProperty({ description: 'Overview text' })
-  @IsNotEmpty({ message: 'Please provide your overview summary.' })
-  // @MinLength(10, {
-  //   message: 'Overview must be at least 10 characters long.',
-  // })
   @MaxLength(2000, {
     message: 'Overview cannot exceed 2000 characters.',
   })
@@ -131,4 +158,82 @@ export class CreateQuarterlyReviewDto {
   @Type(() => CompanyEnvironmentDto)
   @ApiProperty({ type: CompanyEnvironmentDto, description: 'Company Environment details' })
   companyEnvironment?: CompanyEnvironmentDto;
+
+  @IsOptional()
+  submittedDate?: any;
+
+  @IsOptional()
+  reviewStatus?: string;
+
+  @IsOptional()
+  finalRating?: any;
+
+  @IsOptional()
+  ratings?: any;
+
+  @IsOptional()
+  strengths?: string;
+
+  @IsOptional()
+  improvements?: string;
+
+  @IsOptional()
+  remarks?: string;
+
+  @IsOptional()
+  evaluatorName?: string;
+
+  @IsOptional()
+  evaluatorRole?: string;
+
+  @IsOptional()
+  evaluatorId?: string;
+
+  @IsOptional()
+  autoSubmitted?: number;
+
+  @IsOptional()
+  accessUntil?: any;
+
+  @IsOptional()
+  isReopened?: number;
+
+  @IsOptional()
+  accessRequest?: any;
+
+  @IsOptional()
+  createdAt?: any;
+
+  @IsOptional()
+  updatedAt?: any;
+
+  @IsOptional()
+  createdBy?: string;
+
+  @IsOptional()
+  updatedBy?: string;
+
+  @IsOptional()
+  deadlineAt?: any;
+
+  @IsOptional()
+  accessRequestEligibleUntil?: any;
+
+  @IsOptional()
+  submissionType?: string;
+
+  @IsOptional()
+  selfRating?: any;
+
+  @IsOptional()
+  activeManagerName?: string;
+
+  @IsOptional()
+  reviewId?: any;
+
+  @IsOptional()
+  key?: any;
+
+  @IsOptional()
+  _id?: any;
 }

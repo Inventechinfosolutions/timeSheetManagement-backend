@@ -6,4 +6,5 @@ export * from './return.template';
 export * from './general-notification.template';
 export * from './employee-receipt.template';
 export * from './confirmation.template';
+export * from './appraisal-quarter.template';
 

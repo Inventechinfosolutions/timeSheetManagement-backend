@@ -6,5 +6,5 @@ export enum ReviewStatus {
   APPROVED = 'Approved',
   COMPLETED = 'Completed',
   NOT_STARTED = 'Not Started',
+  AUTO_SUBMITTED = 'Auto Submitted',
 }
-

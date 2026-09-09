@@ -16,6 +16,9 @@ export class QuarterlyReview extends BaseEntity {
   @Column({ name: 'quarter', type: 'varchar', length: 50 })
   quarter!: string;
 
+  @Column({ name: 'financial_year', type: 'varchar', length: 50, nullable: true })
+  financialYear!: string | null;
+
   @Column({ name: 'start_date', type: 'date', nullable: true })
   startDate!: string | null;
 
@@ -26,7 +29,7 @@ export class QuarterlyReview extends BaseEntity {
     name: 'status',
     type: 'varchar',
     length: 50,
-    default: ReviewStatus.DRAFT,
+    default: ReviewStatus.NOT_STARTED,
   })
   status!: ReviewStatus;
 
@@ -74,4 +77,33 @@ export class QuarterlyReview extends BaseEntity {
 
   @Column({ name: 'remarks', type: 'text', nullable: true })
   remarks!: string | null;
+
+  @Column({ name: 'evaluator_name', type: 'varchar', length: 150, nullable: true })
+  evaluatorName: string | null;
+
+  @Column({ name: 'evaluator_role', type: 'varchar', length: 50, nullable: true })
+  evaluatorRole: string | null;
+
+  @Column({ name: 'auto_submitted', type: 'tinyint', default: 0 })
+  autoSubmitted: number;
+
+  @Column({ name: 'access_until', type: 'timestamp', nullable: true })
+  accessUntil: Date | null;
+
+  @Column({ name: 'is_reopened', type: 'tinyint', default: 0 })
+  isReopened: number;
+  @Column({ name: 'evaluator_id', type: 'varchar', length: 100, nullable: true })
+  evaluatorId: string | null;
+
+  @Column({ name: 'assignment_id', type: 'int', nullable: true })
+  assignmentId: number | null;
+
+  @Column({ name: 'submission_type', type: 'varchar', length: 50, nullable: true })
+  submissionType: string | null;
+
+  @Column({ name: 'deadline_at', type: 'timestamp', nullable: true })
+  deadlineAt: Date | null;
+
+  @Column({ name: 'access_request_eligible_until', type: 'timestamp', nullable: true })
+  accessRequestEligibleUntil: Date | null;
 }
