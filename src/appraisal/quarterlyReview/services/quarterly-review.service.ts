@@ -33,6 +33,12 @@ import {
   getAppraisalQuarterSubmittedEmployeeTemplate,
   getAppraisalQuarterSubmittedManagerTemplate,
 } from '../../../common/mail/templates';
+import {
+  assertAssignmentDateRange,
+  isBeforeAssignmentWindow,
+  toEndOfDayIst,
+  toStartOfDayIst,
+} from '../utils/assignment-deadline.utils';
 
 @Injectable()
 export class QuarterlyReviewService {
@@ -179,6 +185,9 @@ export class QuarterlyReviewService {
       return true;
     }
     if (assignment) {
+      if (isBeforeAssignmentWindow(assignment.startDate, now)) {
+        return false;
+      }
       if (Boolean(assignment.isAccessOpen) && now <= new Date(assignment.deadlineAt)) {
         return true;
       }
@@ -1124,6 +1133,7 @@ export class QuarterlyReviewService {
           assignedByName: a.assignedByName,
           assignedByRole: a.assignedByRole,
           assignedAt: a.assignedAt,
+          startDate: a.startDate,
           deadlineAt: a.deadlineAt,
           status: liveStatus,
           isAccessOpen: Boolean(a.isAccessOpen),
@@ -1212,8 +1222,21 @@ export class QuarterlyReviewService {
       }
 
       const assignedAt = new Date();
-      // 3 days (72 hours) window
-      const deadlineAt = new Date(assignedAt.getTime() + 72 * 60 * 60 * 1000);
+      let deadlineAt: Date;
+      let windowStartDate: string | null = dto.startDate ? dto.startDate.trim().slice(0, 10) : null;
+
+      if (dto.startDate && dto.endDate) {
+        try {
+          assertAssignmentDateRange(dto.startDate, dto.endDate);
+        } catch (dateErr: any) {
+          throw new BadRequestException(dateErr.message || 'Invalid assignment date range.');
+        }
+        deadlineAt = toEndOfDayIst(dto.endDate);
+      } else if (dto.endDate) {
+        deadlineAt = toEndOfDayIst(dto.endDate);
+      } else {
+        deadlineAt = new Date(assignedAt.getTime() + 72 * 60 * 60 * 1000);
+      }
 
       const savedAssignments: ReviewAssignment[] = [];
       const empRepo = this.quarterlyReviewRepository.manager.getRepository(EmployeeDetails);
@@ -1257,9 +1280,14 @@ export class QuarterlyReviewService {
           assignedByRole: assignerRole as any,
           assignedAt,
           deadlineAt,
+          startDate: windowStartDate,
           status: AssignmentStatus.ASSIGNED,
           isAccessOpen: 1,
           accessRequestEligibleUntil: null,
+          reminder2dSentAt: null,
+          reminder1dSentAt: null,
+          reminderTodaySentAt: null,
+          deadlineExpiredNotifiedAt: null,
           notes: dto.notes || null,
           createdBy: assignerName,
           updatedBy: assignerName,
@@ -1304,7 +1332,7 @@ export class QuarterlyReviewService {
           await this.notificationsService.createNotification({
             employeeId: targetEmployeeId,
             title: `Quarterly Review Assigned: ${canonicalQuarter}`,
-            message: `Your ${assignerRole.toLowerCase()} ${assignerName} has assigned the ${canonicalQuarter} review. Please complete and submit it within 3 days (Deadline: ${deadlineAt.toLocaleDateString('en-IN')}).`,
+            message: `Your ${assignerRole.toLowerCase()} ${assignerName} has assigned the ${canonicalQuarter} review. Please complete and submit it by ${deadlineAt.toLocaleDateString('en-IN')}.`,
             type: 'alert',
           });
 
@@ -1317,6 +1345,7 @@ export class QuarterlyReviewService {
               assignedByName: assignerName,
               assignedByRole: assignerRole,
               deadlineAt,
+              startDate: windowStartDate || undefined,
               financialYear,
               notes: dto.notes || null,
             });
@@ -1362,21 +1391,6 @@ export class QuarterlyReviewService {
         order: { id: 'DESC' },
       });
 
-      const now = new Date();
-      for (const a of assignments) {
-        if (
-          a.isAccessOpen === 1 &&
-          now > new Date(a.deadlineAt) &&
-          a.status !== AssignmentStatus.SUBMITTED &&
-          a.status !== AssignmentStatus.COMPLETED
-        ) {
-          a.status = AssignmentStatus.AUTO_SUBMITTED;
-          a.isAccessOpen = 0;
-          a.accessRequestEligibleUntil = new Date(now.getTime() + 24 * 60 * 60 * 1000);
-          await this.assignmentRepository.save(a);
-        }
-      }
-
       return assignments.map((a) => ({
         id: a.id,
         employeeId: a.employeeId,
@@ -1387,6 +1401,7 @@ export class QuarterlyReviewService {
         assignedByName: a.assignedByName,
         assignedByRole: a.assignedByRole,
         assignedAt: a.assignedAt,
+        startDate: a.startDate,
         deadlineAt: a.deadlineAt,
         status: a.status,
         isAccessOpen: Boolean(a.isAccessOpen),
@@ -1461,6 +1476,12 @@ export class QuarterlyReviewService {
       }
 
       const hasActiveExtension = (existing?.accessUntil && now <= new Date(existing.accessUntil)) || Boolean(existing?.isReopened);
+      if (assignment && isBeforeAssignmentWindow(assignment.startDate, now) && !hasActiveExtension) {
+        const opensOn = toStartOfDayIst(assignment.startDate as string);
+        throw new ForbiddenException(
+          `This quarterly review opens on ${opensOn.toLocaleDateString('en-IN')}. You can complete it only within the assigned date range.`,
+        );
+      }
       const hasAssignmentOpen = assignment && (
         Boolean(assignment.isAccessOpen) ||
         !assignment.deadlineAt ||
@@ -1827,6 +1848,13 @@ export class QuarterlyReviewService {
     const assignmentRecord = await this.assignmentRepository.findOne({
       where: { employeeId, quarter: canonicalQuarter },
     });
+
+    if (assignmentRecord && isBeforeAssignmentWindow(assignmentRecord.startDate)) {
+      const opensOn = toStartOfDayIst(assignmentRecord.startDate as string);
+      throw new ForbiddenException(
+        `This quarterly review opens on ${opensOn.toLocaleDateString('en-IN')}. You can complete it only within the assigned date range.`,
+      );
+    }
 
     if (existingReview) {
       const isAlreadySubmitted =

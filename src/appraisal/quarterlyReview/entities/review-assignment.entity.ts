@@ -79,4 +79,20 @@ export class ReviewAssignment extends BaseEntity {
    */
   @Column({ name: 'start_date', type: 'date', nullable: true })
   startDate!: string | null;
+
+  /** Set when the 2-day approaching reminder (email + inbox) was sent. */
+  @Column({ name: 'reminder_2d_sent_at', type: 'timestamp', nullable: true })
+  reminder2dSentAt!: Date | null;
+
+  /** Set when the 1-day approaching reminder (email + inbox) was sent. */
+  @Column({ name: 'reminder_1d_sent_at', type: 'timestamp', nullable: true })
+  reminder1dSentAt!: Date | null;
+
+  /** Set when the same-day approaching reminder (email + inbox) was sent. */
+  @Column({ name: 'reminder_today_sent_at', type: 'timestamp', nullable: true })
+  reminderTodaySentAt!: Date | null;
+
+  /** Set when the deadline-expired / request-access-again warning was sent. */
+  @Column({ name: 'deadline_expired_notified_at', type: 'timestamp', nullable: true })
+  deadlineExpiredNotifiedAt!: Date | null;
 }

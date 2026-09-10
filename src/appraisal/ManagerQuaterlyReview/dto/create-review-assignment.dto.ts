@@ -69,7 +69,7 @@ export class CreateReviewAssignmentDto {
   startDate!: string;
 
   @ApiProperty({
-    description: 'End date (deadline) of the review period (ISO 8601 date string).',
+    description: 'End date (deadline) of the review period (YYYY-MM-DD). Stored as 23:59:59 IST that day.',
     example: '2026-09-30',
   })
   @IsDateString({}, { message: 'endDate must be a valid ISO 8601 date string (YYYY-MM-DD)' })

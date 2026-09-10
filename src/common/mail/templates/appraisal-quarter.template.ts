@@ -688,3 +688,207 @@ export const getAppraisalQuarterEvaluatedTemplate = (
   return baseLayout(content, `Quarterly Review Evaluation Completed: ${data.quarter}`, `Quarterly Review — ${data.quarter}`);
 };
 
+export interface AppraisalQuarterDeadlineReminderParams {
+  employeeName: string;
+  quarter: string;
+  deadlineAt: Date;
+  startDate?: string | Date;
+  remainingLabel: string;
+  urgencyLabel: string;
+  portalUrl?: string;
+}
+
+export const getAppraisalQuarterDeadlineApproachingTemplate = (
+  data: AppraisalQuarterDeadlineReminderParams,
+): string => {
+  const portalUrl = data.portalUrl || process.env.FRONTEND_URL || 'https://worksphere.inventech-developer.in';
+
+  const deadlineDateStr = data.deadlineAt.toLocaleDateString('en-IN', {
+    weekday: 'long',
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+  });
+
+  const deadlineTimeStr = data.deadlineAt.toLocaleTimeString('en-IN', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true,
+  });
+
+  const content = `
+    <table width="100%" border="0" cellspacing="0" cellpadding="0" style="background: linear-gradient(135deg, #fff7ed 0%, #fef3c7 100%); border: 1px solid #fed7aa; border-radius: 14px; margin-bottom: 28px;">
+      <tr>
+        <td align="center" style="padding: 26px 24px;">
+          <p style="font-family: sans-serif; font-size: 32px; margin: 0 0 8px 0;">⏰</p>
+          <p style="font-family: sans-serif; font-size: 22px; font-weight: 800; color: #9a3412; margin: 0 0 6px 0;">Deadline is completing ${data.urgencyLabel}</p>
+          <p style="font-family: sans-serif; font-size: 14px; color: #4b5563; margin: 0;">Please submit your ${data.quarter} quarterly review before the window closes.</p>
+        </td>
+      </tr>
+    </table>
+
+    <p style="font-family: sans-serif; font-size: 15px; color: #374151; line-height: 1.7; margin: 0 0 24px 0;">
+      Hello <strong>${data.employeeName}</strong>,<br>
+      Your quarterly review for <strong>${data.quarter}</strong> is still incomplete. The submission deadline is completing <strong>${data.remainingLabel}</strong>.
+      If you do not submit in time, the review will be locked and you will need to <strong>request access again</strong>.
+    </p>
+
+    <table width="100%" border="0" cellspacing="0" cellpadding="0" style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 14px; margin-bottom: 24px;">
+      <tr>
+        <td style="padding: 24px;">
+          <table width="100%" border="0" cellspacing="0" cellpadding="0">
+            <tr>
+              <td width="160" style="padding-bottom: 14px; font-family: sans-serif; font-size: 13px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.3px; vertical-align: top;">Quarter</td>
+              <td style="padding-bottom: 14px; font-family: sans-serif; font-size: 14px; font-weight: 700; color: #1f2937; vertical-align: top;">
+                <span style="background-color: #ffedd5; color: #9a3412; padding: 4px 12px; border-radius: 999px; font-size: 13px; font-weight: 800;">${data.quarter}</span>
+              </td>
+            </tr>
+            <tr>
+              <td width="160" style="font-family: sans-serif; font-size: 13px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.3px; vertical-align: top;">Submission Deadline</td>
+              <td style="font-family: sans-serif; font-size: 14px; font-weight: 700; color: #dc2626; vertical-align: top;">
+                ${deadlineDateStr} at ${deadlineTimeStr}
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+
+    <table width="100%" border="0" cellspacing="0" cellpadding="0" style="background-color: #fff7ed; border: 1px solid #fed7aa; border-radius: 10px; margin-bottom: 24px;">
+      <tr>
+        <td style="padding: 14px 18px;">
+          <p style="font-family: sans-serif; font-size: 13px; color: #92400e; margin: 0; line-height: 1.6;">
+            <span style="font-weight: 800;">⚠️ Warning:</span> Complete and submit your self-assessment now. After the deadline you cannot edit the form unless an access request is approved.
+          </p>
+        </td>
+      </tr>
+    </table>
+
+    <table width="100%" border="0" cellspacing="0" cellpadding="0" style="margin: 32px 0 24px 0;">
+      <tr>
+        <td align="center">
+          <a href="${portalUrl}"
+             style="background-color: #ea580c; color: #ffffff; text-decoration: none;
+                    padding: 14px 40px; border-radius: 8px;
+                    font-family: sans-serif; font-size: 15px; font-weight: 800; display: inline-block;
+                    letter-spacing: 0.3px;">
+            COMPLETE MY REVIEW →
+          </a>
+        </td>
+      </tr>
+    </table>
+  `;
+
+  return baseLayout(content, `Quarterly Review Deadline Completing: ${data.quarter}`, `Quarterly Review — ${data.quarter}`);
+};
+
+export interface AppraisalQuarterDeadlineExpiredParams {
+  employeeName: string;
+  quarter: string;
+  deadlineAt: Date;
+  accessEligibleUntil?: Date | null;
+  portalUrl?: string;
+}
+
+export const getAppraisalQuarterDeadlineExpiredTemplate = (
+  data: AppraisalQuarterDeadlineExpiredParams,
+): string => {
+  const portalUrl = data.portalUrl || process.env.FRONTEND_URL || 'https://worksphere.inventech-developer.in';
+
+  const deadlineDateStr = data.deadlineAt.toLocaleDateString('en-IN', {
+    weekday: 'long',
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+  });
+
+  const deadlineTimeStr = data.deadlineAt.toLocaleTimeString('en-IN', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true,
+  });
+
+  const eligibleUntilStr = data.accessEligibleUntil
+    ? data.accessEligibleUntil.toLocaleDateString('en-IN', {
+        weekday: 'long',
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric',
+      }) +
+      ' at ' +
+      data.accessEligibleUntil.toLocaleTimeString('en-IN', {
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: true,
+      })
+    : 'the next 24 hours';
+
+  const content = `
+    <table width="100%" border="0" cellspacing="0" cellpadding="0" style="background: linear-gradient(135deg, #fef2f2 0%, #ffe4e6 100%); border: 1px solid #fecaca; border-radius: 14px; margin-bottom: 28px;">
+      <tr>
+        <td align="center" style="padding: 26px 24px;">
+          <p style="font-family: sans-serif; font-size: 32px; margin: 0 0 8px 0;">🚫</p>
+          <p style="font-family: sans-serif; font-size: 22px; font-weight: 800; color: #991b1b; margin: 0 0 6px 0;">Deadline completed</p>
+          <p style="font-family: sans-serif; font-size: 14px; color: #4b5563; margin: 0;">Your ${data.quarter} review window has closed. Request access again to continue.</p>
+        </td>
+      </tr>
+    </table>
+
+    <p style="font-family: sans-serif; font-size: 15px; color: #374151; line-height: 1.7; margin: 0 0 24px 0;">
+      Hello <strong>${data.employeeName}</strong>,<br>
+      The deadline for your <strong>${data.quarter}</strong> quarterly review is completed. The form is now locked and any saved progress was auto-submitted.
+    </p>
+
+    <table width="100%" border="0" cellspacing="0" cellpadding="0" style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 14px; margin-bottom: 24px;">
+      <tr>
+        <td style="padding: 24px;">
+          <table width="100%" border="0" cellspacing="0" cellpadding="0">
+            <tr>
+              <td width="160" style="padding-bottom: 14px; font-family: sans-serif; font-size: 13px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.3px; vertical-align: top;">Quarter</td>
+              <td style="padding-bottom: 14px; font-family: sans-serif; font-size: 14px; font-weight: 700; color: #1f2937; vertical-align: top;">
+                <span style="background-color: #fee2e2; color: #991b1b; padding: 4px 12px; border-radius: 999px; font-size: 13px; font-weight: 800;">${data.quarter}</span>
+              </td>
+            </tr>
+            <tr>
+              <td width="160" style="padding-bottom: 14px; font-family: sans-serif; font-size: 13px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.3px; vertical-align: top;">Deadline</td>
+              <td style="padding-bottom: 14px; font-family: sans-serif; font-size: 14px; font-weight: 700; color: #dc2626; vertical-align: top;">
+                ${deadlineDateStr} at ${deadlineTimeStr}
+              </td>
+            </tr>
+            <tr>
+              <td width="160" style="font-family: sans-serif; font-size: 13px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.3px; vertical-align: top;">Request Access Until</td>
+              <td style="font-family: sans-serif; font-size: 14px; color: #1f2937; vertical-align: top;">${eligibleUntilStr}</td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+
+    <table width="100%" border="0" cellspacing="0" cellpadding="0" style="background-color: #fef2f2; border: 1px solid #fecaca; border-radius: 10px; margin-bottom: 24px;">
+      <tr>
+        <td style="padding: 14px 18px;">
+          <p style="font-family: sans-serif; font-size: 13px; color: #991b1b; margin: 0; line-height: 1.6;">
+            <span style="font-weight: 800;">⚠️ Action required:</span> To edit or complete this review, open your Appraisal Dashboard and click <strong>Request Access</strong>. Your manager / admin must approve the request before the form reopens.
+          </p>
+        </td>
+      </tr>
+    </table>
+
+    <table width="100%" border="0" cellspacing="0" cellpadding="0" style="margin: 32px 0 24px 0;">
+      <tr>
+        <td align="center">
+          <a href="${portalUrl}"
+             style="background-color: #dc2626; color: #ffffff; text-decoration: none;
+                    padding: 14px 40px; border-radius: 8px;
+                    font-family: sans-serif; font-size: 15px; font-weight: 800; display: inline-block;
+                    letter-spacing: 0.3px;">
+            REQUEST ACCESS AGAIN →
+          </a>
+        </td>
+      </tr>
+    </table>
+  `;
+
+  return baseLayout(content, `Quarterly Review Deadline Completed: ${data.quarter}`, `Quarterly Review — ${data.quarter}`);
+};
+

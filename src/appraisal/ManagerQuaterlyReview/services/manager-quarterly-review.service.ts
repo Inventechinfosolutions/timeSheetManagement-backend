@@ -20,6 +20,7 @@ import { CreateReviewAssignmentDto } from '../dto/create-review-assignment.dto';
 
 import { ReviewAssignment, AssignmentStatus } from '../../quarterlyReview/entities/review-assignment.entity';
 import { isRevealTokenValid } from '../../quarterlyReview/utils/rating-reveal.utils';
+import { assertAssignmentDateRange, toEndOfDayIst } from '../../quarterlyReview/utils/assignment-deadline.utils';
 
 /** Filters + pagination params accepted by getTeamSubmissions */
 export interface TeamSubmissionsFilters {
@@ -1805,8 +1806,14 @@ export class ManagerQuarterlyReviewService {
     const empDetailMap = new Map(employeeDetails.map((e) => [e.employeeId, e]));
 
     // ── 5. Build assignment rows ─────────────────────────────────────────────
+    try {
+      assertAssignmentDateRange(dto.startDate, dto.endDate);
+    } catch (dateErr: any) {
+      throw new BadRequestException(dateErr.message || 'Invalid assignment date range.');
+    }
+
     const now = new Date();
-    const endDateObj = new Date(dto.endDate);
+    const endDateObj = toEndOfDayIst(dto.endDate);
     const toCreate: ReviewAssignment[] = [];
     const skippedIds: string[] = [];
 
@@ -1830,6 +1837,11 @@ export class ManagerQuarterlyReviewService {
         existingAssignment.status = AssignmentStatus.ASSIGNED;
         existingAssignment.isAccessOpen = 1;
         existingAssignment.notes = dto.description;
+        existingAssignment.reminder2dSentAt = null;
+        existingAssignment.reminder1dSentAt = null;
+        existingAssignment.reminderTodaySentAt = null;
+        existingAssignment.deadlineExpiredNotifiedAt = null;
+        existingAssignment.accessRequestEligibleUntil = null;
         existingAssignment.updatedBy = managerFullName;
         const updated = await this.assignmentRepository.save(existingAssignment);
         toCreate.push(updated);
@@ -1883,6 +1895,10 @@ export class ManagerQuarterlyReviewService {
         notes: dto.description,
         assignmentMode: dto.mode as any,
         accessRequestEligibleUntil: null,
+        reminder2dSentAt: null,
+        reminder1dSentAt: null,
+        reminderTodaySentAt: null,
+        deadlineExpiredNotifiedAt: null,
       });
 
       toCreate.push(assignment);
@@ -2016,4 +2032,4 @@ export class ManagerQuarterlyReviewService {
       assignments: assignmentResponseRows,
     };
   }
-}
+}

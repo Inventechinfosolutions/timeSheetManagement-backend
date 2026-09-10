@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsNotEmpty, IsOptional, IsString } from 'class-validator';
+import { IsDateString, IsNotEmpty, IsOptional, IsString } from 'class-validator';
 
 export class AssignQuarterlyReviewDto {
   @IsOptional()
@@ -29,6 +29,16 @@ export class AssignQuarterlyReviewDto {
   @IsString()
   @ApiProperty({ description: 'Optional instructions or assignment notes' })
   notes?: string;
+
+  @IsOptional()
+  @IsDateString({}, { message: 'startDate must be a valid ISO 8601 date string (YYYY-MM-DD)' })
+  @ApiProperty({ description: 'Review window start date (YYYY-MM-DD)', required: false })
+  startDate?: string;
+
+  @IsOptional()
+  @IsDateString({}, { message: 'endDate must be a valid ISO 8601 date string (YYYY-MM-DD)' })
+  @ApiProperty({ description: 'Review window deadline date (YYYY-MM-DD)', required: false })
+  endDate?: string;
 }
 
 export class ActionAccessRequestDto {
