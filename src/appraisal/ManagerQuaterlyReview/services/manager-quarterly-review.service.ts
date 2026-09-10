@@ -7,10 +7,11 @@ import { EmployeeDetails } from '../../../employeeTimeSheet/entities/employeeDet
 import { User } from '../../../users/entities/user.entity';
 import { UserType } from '../../../users/enums/user-type.enum';
 import { ManagerEvaluationDto } from '../dto/manager-evaluation.dto';
-import { ReviewStatus } from '../../quarterlyReview/enums/quarterly-review.enum';
+import { ReviewStatus, AssignmentMode } from '../../quarterlyReview/enums/quarterly-review.enum';
 import { EmailService } from '../../../email/email.service';
 import { NotificationsService } from '../../../notifications/Services/notifications.service';
 import { getAppraisalQuarterEvaluatedTemplate } from '../../../common/mail/templates';
+import { CreateReviewAssignmentDto } from '../dto/create-review-assignment.dto';
 
 import { ReviewAssignment, AssignmentStatus } from '../../quarterlyReview/entities/review-assignment.entity';
 import { isRevealTokenValid } from '../../quarterlyReview/utils/rating-reveal.utils';
@@ -1706,4 +1707,162 @@ export class ManagerQuarterlyReviewService {
       );
     }
   }
-}
+
+  /**
+   * Create review assignment(s) from the manager "+ Create" modal.
+   *
+   * - mode INDIVIDUAL: assigns only to the supplied employeeIds (validated against mapped employees).
+   * - mode ALL: resolves all employees mapped to this manager (or all employees for admin/CEO).
+   *
+   * Duplicate assignments (same employeeId + quarter string) are silently skipped
+   * and counted in `skipped` so the frontend can surface the information.
+   */
+  async createReviewAssignment(
+    managerUser: any,
+    dto: CreateReviewAssignmentDto,
+  ): Promise<{ created: number; skipped: number; assignments: any[] }> {
+    const managerLoginId: string = managerUser?.loginId || '';
+    const managerFullName: string =
+      managerUser?.aliasLoginName || managerUser?.fullName || managerUser?.name || managerLoginId;
+    const managerRole: string = (managerUser?.userType || managerUser?.role || 'MANAGER').toUpperCase();
+    const isPrivileged = this.isPrivilegedUser(managerUser);
+
+    // ── 1. Resolve target employee IDs ──────────────────────────────────────
+    let targetEmployeeIds: string[] = [];
+
+    if (dto.mode === AssignmentMode.INDIVIDUAL) {
+      const rawIds = (dto.employeeIds ?? []).map((id) => String(id).trim()).filter(Boolean);
+      if (rawIds.length === 0) {
+        throw new BadRequestException('At least one employeeId must be provided when mode is INDIVIDUAL.');
+      }
+
+      if (!isPrivileged) {
+        const { employeeIds: mappedIds } = await this.getMappedEmployeeIds(managerUser);
+        const mappedSet = new Set(mappedIds);
+        const unauthorized = rawIds.filter((id) => !mappedSet.has(id));
+        if (unauthorized.length > 0) {
+          throw new ForbiddenException(
+            `The following employee IDs are not mapped to your account: ${unauthorized.join(', ')}`,
+          );
+        }
+      }
+      targetEmployeeIds = rawIds;
+    } else {
+      // ALL mode
+      if (isPrivileged) {
+        const all = await this.employeeDetailsRepository.find({ select: ['employeeId'] });
+        targetEmployeeIds = all.map((e) => e.employeeId).filter((id) => Boolean(id) && id !== managerLoginId);
+      } else {
+        const { employeeIds: mappedIds } = await this.getMappedEmployeeIds(managerUser);
+        targetEmployeeIds = mappedIds;
+      }
+
+      if (targetEmployeeIds.length === 0) {
+        throw new BadRequestException('No team members are mapped to your account. Cannot assign to all.');
+      }
+    }
+
+    // ── 2. Build canonical quarter string e.g. "Q2 FY2026-27" ───────────────
+    const financialYear = (dto.financialYear || '').trim();
+    const canonicalQuarter = `${dto.quarter} ${financialYear}`.trim();
+
+    // ── 3. Detect duplicates ─────────────────────────────────────────────────
+    const existingAssignments = await this.assignmentRepository.find({
+      where: { employeeId: In(targetEmployeeIds), quarter: canonicalQuarter },
+      select: ['employeeId'],
+    });
+    const alreadyAssignedSet = new Set(existingAssignments.map((a) => a.employeeId));
+
+    // ── 4. Fetch employee details for enrichment ─────────────────────────────
+    const employeeDetails = await this.employeeDetailsRepository.find({
+      where: { employeeId: In(targetEmployeeIds) },
+    });
+    const empDetailMap = new Map(employeeDetails.map((e) => [e.employeeId, e]));
+
+    // ── 5. Build assignment rows ─────────────────────────────────────────────
+    const now = new Date();
+    const endDateObj = new Date(dto.endDate);
+    const toCreate: ReviewAssignment[] = [];
+    const skippedIds: string[] = [];
+
+    for (const empId of targetEmployeeIds) {
+      if (alreadyAssignedSet.has(empId)) {
+        skippedIds.push(empId);
+        this.logger.log(`[createReviewAssignment] Skipping ${empId} — already assigned for ${canonicalQuarter}`);
+        continue;
+      }
+
+      const empDetail = empDetailMap.get(empId);
+      const assignment = this.assignmentRepository.create({
+        employeeId: empId,
+        employeeName: empDetail?.fullName || empId,
+        quarter: canonicalQuarter,
+        financialYear,
+        assignedById: managerLoginId,
+        assignedByName: managerFullName,
+        assignedByRole: (managerRole as 'MANAGER' | 'ADMIN' | 'CEO') || 'MANAGER',
+        assignedAt: now,
+        deadlineAt: endDateObj,
+        startDate: dto.startDate,
+        status: AssignmentStatus.ASSIGNED,
+        isAccessOpen: 1,
+        notes: dto.description,
+        assignmentMode: dto.mode as any,
+        accessRequestEligibleUntil: null,
+      });
+
+      toCreate.push(assignment);
+    }
+
+    let savedAssignments: ReviewAssignment[] = [];
+    if (toCreate.length > 0) {
+      savedAssignments = await this.assignmentRepository.save(toCreate);
+      this.logger.log(
+        `[createReviewAssignment] Created ${savedAssignments.length} assignment(s) for ${canonicalQuarter} by ${managerLoginId}`,
+      );
+    }
+
+    // ── 6. Send in-app notifications ─────────────────────────────────────────
+    for (const saved of savedAssignments) {
+      try {
+        await this.notificationsService.createNotification({
+          employeeId: saved.employeeId,
+          title: 'Quarterly Review Assigned',
+          message: `Your manager ${managerFullName} has assigned you a quarterly review for ${canonicalQuarter}. Please complete it by ${dto.endDate}.`,
+          type: 'info',
+        });
+      } catch (notifErr: any) {
+        this.logger.warn(
+          `[createReviewAssignment] Could not notify employee ${saved.employeeId}: ${notifErr.message}`,
+        );
+      }
+    }
+
+    // ── 7. Build response ────────────────────────────────────────────────────
+    const assignmentResponseRows = savedAssignments.map((a) => {
+      const emp = empDetailMap.get(a.employeeId);
+      return {
+        id: a.id,
+        employeeId: a.employeeId,
+        employeeName: emp?.fullName || a.employeeName || a.employeeId,
+        designation: emp?.designation || 'Employee',
+        department: emp?.department || '—',
+        quarter: a.quarter,
+        financialYear: a.financialYear,
+        status: a.status,
+        assignmentMode: a.assignmentMode,
+        assignedAt: a.assignedAt,
+        startDate: a.startDate,
+        deadlineAt: a.deadlineAt,
+        notes: a.notes,
+        assignedByName: a.assignedByName,
+      };
+    });
+
+    return {
+      created: savedAssignments.length,
+      skipped: skippedIds.length,
+      assignments: assignmentResponseRows,
+    };
+  }
+}

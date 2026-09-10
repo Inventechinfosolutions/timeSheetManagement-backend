@@ -1,5 +1,6 @@
 import { Entity, Column, PrimaryGeneratedColumn } from 'typeorm';
 import { BaseEntity } from '../../../common/core/models/base.entity';
+import { AssignmentMode } from '../enums/quarterly-review.enum';
 
 export enum AssignmentStatus {
   ASSIGNED = 'ASSIGNED',
@@ -58,4 +59,24 @@ export class ReviewAssignment extends BaseEntity {
 
   @Column({ name: 'notes', type: 'text', nullable: true })
   notes!: string | null;
+
+  /**
+   * Tracks whether this assignment was created for an individual employee
+   * or broadcast to all mapped team members at once.
+   */
+  @Column({
+    name: 'assignment_mode',
+    type: 'varchar',
+    length: 20,
+    default: AssignmentMode.INDIVIDUAL,
+    nullable: true,
+  })
+  assignmentMode!: AssignmentMode;
+
+  /**
+   * The start of the review period (chosen by the manager in the create form).
+   * The deadline / end-of-period is stored in deadlineAt.
+   */
+  @Column({ name: 'start_date', type: 'date', nullable: true })
+  startDate!: string | null;
 }

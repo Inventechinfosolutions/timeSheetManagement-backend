@@ -16,6 +16,7 @@ import {
 import { JwtAuthGuard } from '../../../auth/guards/jwt-auth.guard';
 import { ManagerQuarterlyReviewService } from '../services/manager-quarterly-review.service';
 import { ManagerEvaluationDto } from '../dto/manager-evaluation.dto';
+import { CreateReviewAssignmentDto } from '../dto/create-review-assignment.dto';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 
 @ApiTags('Manager Quarterly Review')
@@ -317,6 +318,36 @@ export class ManagerQuarterlyReviewController {
       if (error instanceof HttpException) throw error;
       throw new HttpException(
         error.message || 'Failed to save draft evaluation',
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
+  }
+
+  @Post('assignments/create')
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({
+    summary: 'Create review assignment(s) — INDIVIDUAL (specific employees) or ALL (entire team)',
+  })
+  async createReviewAssignment(
+    @Req() req: any,
+    @Body() dto: CreateReviewAssignmentDto,
+  ) {
+    try {
+      this.logger.log(
+        `Manager ${req.user?.loginId} creating review assignment — mode=${dto.mode}, quarter=${dto.quarter}, financialYear=${dto.financialYear}`,
+      );
+      const result = await this.managerQuarterlyReviewService.createReviewAssignment(req.user, dto);
+      return {
+        success: true,
+        statusCode: HttpStatus.CREATED,
+        message: `${result.created} assignment(s) created, ${result.skipped} skipped (already assigned for this quarter).`,
+        data: result,
+      };
+    } catch (error: any) {
+      this.logger.error(`[createReviewAssignment] Error: ${error.message}`, error.stack);
+      if (error instanceof HttpException) throw error;
+      throw new HttpException(
+        error.message || 'Failed to create review assignment',
         HttpStatus.INTERNAL_SERVER_ERROR,
       );
     }
