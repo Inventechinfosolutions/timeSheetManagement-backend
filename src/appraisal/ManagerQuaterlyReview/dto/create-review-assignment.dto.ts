@@ -52,13 +52,13 @@ export class CreateReviewAssignmentDto {
   @IsNotEmpty()
   quarter!: QuarterLabel;
 
-  @ApiProperty({
-    description: 'Financial year in the format FY<YYYY>-<YY>, e.g. FY2026-27.',
+  @ApiPropertyOptional({
+    description: 'Financial year in the format FY<YYYY>-<YY>, e.g. FY2026-27. Defaults to current FY if omitted.',
     example: 'FY2026-27',
   })
   @IsString()
-  @IsNotEmpty({ message: 'financialYear is required' })
-  financialYear!: string;
+  @IsOptional()
+  financialYear?: string;
 
   @ApiProperty({
     description: 'Start date of the review period (ISO 8601 date string).',

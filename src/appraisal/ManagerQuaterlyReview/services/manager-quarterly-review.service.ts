@@ -2,6 +2,7 @@ import { Injectable, NotFoundException, ForbiddenException, BadRequestException,
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In, Like } from 'typeorm';
 import { QuarterlyReview } from '../../quarterlyReview/entities/quarterly-review.entity';
+import { QuarterlyReviewAccessRequest, AccessRequestStatus } from '../../quarterlyReview/entities/quarterly-review-access-request.entity';
 import { ManagerMapping, ManagerMappingStatus } from '../../../managerMapping/entities/managerMapping.entity';
 import { EmployeeDetails } from '../../../employeeTimeSheet/entities/employeeDetails.entity';
 import { User } from '../../../users/entities/user.entity';
@@ -10,7 +11,11 @@ import { ManagerEvaluationDto } from '../dto/manager-evaluation.dto';
 import { ReviewStatus, AssignmentMode } from '../../quarterlyReview/enums/quarterly-review.enum';
 import { EmailService } from '../../../email/email.service';
 import { NotificationsService } from '../../../notifications/Services/notifications.service';
-import { getAppraisalQuarterEvaluatedTemplate } from '../../../common/mail/templates';
+import {
+  getAppraisalQuarterEvaluatedTemplate,
+  getAppraisalQuarterAssignedTemplate,
+  getAppraisalQuarterAssignedManagerTemplate,
+} from '../../../common/mail/templates';
 import { CreateReviewAssignmentDto } from '../dto/create-review-assignment.dto';
 
 import { ReviewAssignment, AssignmentStatus } from '../../quarterlyReview/entities/review-assignment.entity';
@@ -1763,15 +1768,35 @@ export class ManagerQuarterlyReviewService {
     }
 
     // ── 2. Build canonical quarter string e.g. "Q2 FY2026-27" ───────────────
-    const financialYear = (dto.financialYear || '').trim();
+    let financialYear = (dto.financialYear || '').trim();
+    if (!financialYear) {
+      const now = new Date();
+      const yr = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
+      financialYear = `FY${yr}-${String(yr + 1).slice(2)}`;
+    }
     const canonicalQuarter = `${dto.quarter} ${financialYear}`.trim();
 
-    // ── 3. Detect duplicates ─────────────────────────────────────────────────
+    // ── 3. Detect duplicates & access requests ──────────────────────────────
     const existingAssignments = await this.assignmentRepository.find({
       where: { employeeId: In(targetEmployeeIds), quarter: canonicalQuarter },
-      select: ['employeeId'],
     });
-    const alreadyAssignedSet = new Set(existingAssignments.map((a) => a.employeeId));
+    const existingAssignmentMap = new Map(existingAssignments.map((a) => [a.employeeId, a]));
+
+    const accessRequestRepo = this.quarterlyReviewRepository.manager.getRepository(QuarterlyReviewAccessRequest);
+    const accessRequests = await accessRequestRepo.find({
+      where: { employeeId: In(targetEmployeeIds) },
+      order: { id: 'DESC' },
+    });
+    const accessRequestMap = new Map<string, QuarterlyReviewAccessRequest>();
+    for (const ar of accessRequests) {
+      const qNorm = (ar.quarter || '').trim().toUpperCase();
+      const cNorm = canonicalQuarter.trim().toUpperCase();
+      const qCode = qNorm.match(/Q[1-4]/i)?.[0]?.toUpperCase();
+      const cCode = cNorm.match(/Q[1-4]/i)?.[0]?.toUpperCase();
+      if ((qNorm === cNorm || (qCode && qCode === cCode)) && !accessRequestMap.has(ar.employeeId)) {
+        accessRequestMap.set(ar.employeeId, ar);
+      }
+    }
 
     // ── 4. Fetch employee details for enrichment ─────────────────────────────
     const employeeDetails = await this.employeeDetailsRepository.find({
@@ -1786,9 +1811,58 @@ export class ManagerQuarterlyReviewService {
     const skippedIds: string[] = [];
 
     for (const empId of targetEmployeeIds) {
-      if (alreadyAssignedSet.has(empId)) {
-        skippedIds.push(empId);
-        this.logger.log(`[createReviewAssignment] Skipping ${empId} — already assigned for ${canonicalQuarter}`);
+      const existingAssignment = existingAssignmentMap.get(empId);
+      const accessReq = accessRequestMap.get(empId);
+
+      if (existingAssignment) {
+        if (!accessReq) {
+          skippedIds.push(empId);
+          this.logger.log(`[createReviewAssignment] Skipping ${empId} — already assigned for ${canonicalQuarter} without access request`);
+          continue;
+        }
+
+        // Employee has an access request for this quarter: renew assignment & approve request
+        existingAssignment.deadlineAt = endDateObj;
+        existingAssignment.startDate = dto.startDate;
+        existingAssignment.assignedAt = now;
+        existingAssignment.assignedById = managerLoginId;
+        existingAssignment.assignedByName = managerFullName;
+        existingAssignment.status = AssignmentStatus.ASSIGNED;
+        existingAssignment.isAccessOpen = 1;
+        existingAssignment.notes = dto.description;
+        existingAssignment.updatedBy = managerFullName;
+        const updated = await this.assignmentRepository.save(existingAssignment);
+        toCreate.push(updated);
+
+        if (accessReq.status === AccessRequestStatus.PENDING) {
+          accessReq.status = AccessRequestStatus.APPROVED;
+          accessReq.approvedById = managerLoginId;
+          accessReq.approvedByName = managerFullName;
+          accessReq.approvedAt = now;
+          accessReq.extensionDeadline = endDateObj;
+          accessReq.accessUntil = endDateObj;
+          accessReq.remarks = dto.description || 'Access re-assigned by manager';
+          accessReq.updatedBy = managerFullName;
+          await accessRequestRepo.save(accessReq);
+        }
+
+        let review = await this.quarterlyReviewRepository.findOne({
+          where: [
+            { employeeId: empId, quarter: canonicalQuarter },
+            { employeeId: empId, quarter: dto.quarter },
+          ],
+        });
+        if (review) {
+          review.deadlineAt = endDateObj;
+          review.accessUntil = endDateObj;
+          review.isReopened = 1;
+          review.autoSubmitted = 0;
+          if (review.status === ReviewStatus.AUTO_SUBMITTED) {
+            review.status = ReviewStatus.DRAFT;
+          }
+          review.updatedBy = managerFullName;
+          await this.quarterlyReviewRepository.save(review);
+        }
         continue;
       }
 
@@ -1822,18 +1896,95 @@ export class ManagerQuarterlyReviewService {
       );
     }
 
-    // ── 6. Send in-app notifications ─────────────────────────────────────────
+    // ── 6. Send notifications & emails ─────────────────────────────────────
+    const frontendUrl = process.env.FRONTEND_URL || 'https://worksphere.inventech-developer.in';
+    const successfullyAssignedEmployees: { id: string; name: string }[] = [];
+
     for (const saved of savedAssignments) {
+      const emp = empDetailMap.get(saved.employeeId);
+      const empName = emp?.fullName || saved.employeeName || saved.employeeId;
+      successfullyAssignedEmployees.push({ id: saved.employeeId, name: empName });
+
+      // In-app notification
       try {
         await this.notificationsService.createNotification({
           employeeId: saved.employeeId,
-          title: 'Quarterly Review Assigned',
-          message: `Your manager ${managerFullName} has assigned you a quarterly review for ${canonicalQuarter}. Please complete it by ${dto.endDate}.`,
+          title: `Quarterly Review Assigned: ${canonicalQuarter}`,
+          message: `Your manager ${managerFullName} has assigned you a quarterly review for ${canonicalQuarter}. Please complete it by ${endDateObj.toLocaleDateString('en-IN')}.`,
           type: 'info',
         });
       } catch (notifErr: any) {
         this.logger.warn(
           `[createReviewAssignment] Could not notify employee ${saved.employeeId}: ${notifErr.message}`,
+        );
+      }
+
+      // Email notification to employee
+      try {
+        let empEmail = emp?.email;
+        if (!empEmail) {
+          const empRec = await this.employeeDetailsRepository.findOne({ where: { employeeId: saved.employeeId } });
+          empEmail = empRec?.email;
+        }
+
+        if (empEmail) {
+          const subject = `Quarterly Review Assigned: ${canonicalQuarter}`;
+          const plainText = `Congratulations ${empName}, your quarterly review for ${canonicalQuarter} has been assigned by ${managerFullName} (${managerRole}). Please log in to WorkSphere and complete your self-assessment before the deadline: ${endDateObj.toLocaleDateString('en-IN')} ${endDateObj.toLocaleTimeString('en-IN')}.`;
+          const htmlContent = getAppraisalQuarterAssignedTemplate({
+            employeeName: empName,
+            quarter: canonicalQuarter,
+            assignedByName: managerFullName,
+            assignedByRole: managerRole,
+            deadlineAt: endDateObj,
+            startDate: dto.startDate,
+            financialYear,
+            notes: dto.description || null,
+            portalUrl: frontendUrl,
+          });
+          await this.emailService.sendEmail(empEmail, subject, plainText, htmlContent);
+          this.logger.log(`[createReviewAssignment] Sent assignment email to employee ${saved.employeeId} (${empEmail})`);
+        } else {
+          this.logger.warn(`[createReviewAssignment] No email address found for employee ${saved.employeeId}`);
+        }
+      } catch (mailErr: any) {
+        this.logger.warn(
+          `[createReviewAssignment] Could not send assignment email to employee ${saved.employeeId}: ${mailErr.message}`,
+        );
+      }
+    }
+
+    // Confirmation email to Manager / Assigner
+    if (savedAssignments.length > 0) {
+      try {
+        let managerEmail = managerUser?.email;
+        if (!managerEmail && managerLoginId) {
+          const empRec = await this.employeeDetailsRepository.findOne({ where: { employeeId: managerLoginId } });
+          managerEmail = empRec?.email;
+        }
+
+        if (managerEmail) {
+          const empNamesList = successfullyAssignedEmployees.map((e) => `${e.name} (${e.id})`);
+          const subject = `Quarterly Review Assignment Confirmed: ${canonicalQuarter}`;
+          const plainText = `Hello ${managerFullName},\n\nYou have successfully assigned quarterly appraisal reviews for ${canonicalQuarter} to ${savedAssignments.length} employee(s):\n${empNamesList.join('\n')}\n\nSubmission Deadline: ${endDateObj.toLocaleDateString('en-IN')} ${endDateObj.toLocaleTimeString('en-IN')}.\n\nRegards,\nWorkSphere Team`;
+          const htmlContent = getAppraisalQuarterAssignedManagerTemplate({
+            managerName: managerFullName,
+            quarter: canonicalQuarter,
+            assignedCount: savedAssignments.length,
+            assignedEmployeeNames: empNamesList,
+            deadlineAt: endDateObj,
+            startDate: dto.startDate,
+            financialYear,
+            notes: dto.description || null,
+            portalUrl: frontendUrl,
+          });
+          await this.emailService.sendEmail(managerEmail, subject, plainText, htmlContent);
+          this.logger.log(`[createReviewAssignment] Sent confirmation email to manager ${managerLoginId} (${managerEmail})`);
+        } else {
+          this.logger.warn(`[createReviewAssignment] No email address found for manager ${managerLoginId}`);
+        }
+      } catch (mgrMailErr: any) {
+        this.logger.warn(
+          `[createReviewAssignment] Could not send confirmation email to manager ${managerLoginId}: ${mgrMailErr.message}`,
         );
       }
     }

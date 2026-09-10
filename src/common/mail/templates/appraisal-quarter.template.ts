@@ -6,6 +6,7 @@ export interface AppraisalQuarterAssignedParams {
   assignedByName: string;
   assignedByRole: string;
   deadlineAt: Date;
+  startDate?: string | Date;
   financialYear?: string;
   notes?: string | null;
   portalUrl?: string;
@@ -14,7 +15,7 @@ export interface AppraisalQuarterAssignedParams {
 export const getAppraisalQuarterAssignedTemplate = (
   data: AppraisalQuarterAssignedParams,
 ): string => {
-  const portalUrl = data.portalUrl || 'https://worksphere.inventech-developer.in';
+  const portalUrl = data.portalUrl || process.env.FRONTEND_URL || 'https://worksphere.inventech-developer.in';
 
   const deadlineDateStr = data.deadlineAt.toLocaleDateString('en-IN', {
     weekday: 'long',
@@ -28,6 +29,15 @@ export const getAppraisalQuarterAssignedTemplate = (
     minute: '2-digit',
     hour12: true,
   });
+
+  const startDateStr = data.startDate
+    ? new Date(data.startDate).toLocaleDateString('en-IN', {
+        weekday: 'long',
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric',
+      })
+    : '';
 
   const assignerRoleLabel =
     data.assignedByRole === 'ADMIN'
@@ -102,6 +112,11 @@ export const getAppraisalQuarterAssignedTemplate = (
               <td width="160" style="padding-bottom: 14px; font-family: sans-serif; font-size: 13px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.3px; vertical-align: top;">Assigned By</td>
               <td style="padding-bottom: 14px; font-family: sans-serif; font-size: 14px; color: #1f2937; vertical-align: top;">${data.assignedByName} <span style="color: #6b7280; font-size: 12px;">(${assignerRoleLabel})</span></td>
             </tr>
+            ${startDateStr ? `
+            <tr>
+              <td width="160" style="padding-bottom: 14px; font-family: sans-serif; font-size: 13px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.3px; vertical-align: top;">Start Date</td>
+              <td style="padding-bottom: 14px; font-family: sans-serif; font-size: 14px; color: #1f2937; vertical-align: top;">${startDateStr}</td>
+            </tr>` : ''}
             <tr>
               <td width="160" style="font-family: sans-serif; font-size: 13px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.3px; vertical-align: top;">Submission Deadline</td>
               <td style="font-family: sans-serif; font-size: 14px; font-weight: 700; color: #dc2626; vertical-align: top;">
@@ -119,7 +134,7 @@ export const getAppraisalQuarterAssignedTemplate = (
       <tr>
         <td style="padding: 14px 18px;">
           <p style="font-family: sans-serif; font-size: 13px; color: #92400e; margin: 0; line-height: 1.6;">
-            <span style="font-weight: 800;">⚠️ Important:</span> You have <strong>3 days</strong> to complete and submit your self-appraisal.
+            <span style="font-weight: 800;">⚠️ Important:</span> You have until the submission deadline to complete and submit your self-appraisal.
             Reviews not submitted by the deadline will be <strong>auto-submitted</strong> with the progress saved up to that point.
           </p>
         </td>
@@ -187,17 +202,6 @@ export const getAppraisalQuarterAssignedTemplate = (
     <table width="100%" border="0" cellspacing="0" cellpadding="0" style="margin: 32px 0 24px 0;">
       <tr>
         <td align="center">
-          <!--[if mso]>
-          <v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" href="${portalUrl}"
-            style="height:48px;v-text-anchor:middle;width:260px;" arcsize="10%"
-            fillcolor="#2563eb" stroke="f">
-            <w:anchorlock/>
-            <center style="color:#ffffff;font-family:sans-serif;font-size:15px;font-weight:bold;">
-              START MY REVIEW →
-            </center>
-          </v:roundrect>
-          <![endif]-->
-          <![if !mso]>
           <a href="${portalUrl}"
              style="background-color: #2563eb; color: #ffffff; text-decoration: none;
                     padding: 14px 40px; border-radius: 8px;
@@ -205,7 +209,6 @@ export const getAppraisalQuarterAssignedTemplate = (
                     letter-spacing: 0.3px;">
             START MY REVIEW →
           </a>
-          <![endif]>
         </td>
       </tr>
     </table>
@@ -216,6 +219,165 @@ export const getAppraisalQuarterAssignedTemplate = (
   `;
 
   return baseLayout(content, `Quarterly Review Assigned: ${data.quarter}`, `Quarterly Review — ${data.quarter}`);
+};
+
+export interface AppraisalQuarterAssignedManagerParams {
+  managerName: string;
+  quarter: string;
+  assignedCount: number;
+  assignedEmployeeNames?: string[];
+  deadlineAt: Date;
+  startDate?: string | Date;
+  financialYear?: string;
+  notes?: string | null;
+  portalUrl?: string;
+}
+
+export const getAppraisalQuarterAssignedManagerTemplate = (
+  data: AppraisalQuarterAssignedManagerParams,
+): string => {
+  const portalUrl = data.portalUrl || process.env.FRONTEND_URL || 'https://worksphere.inventech-developer.in';
+
+  const deadlineDateStr = data.deadlineAt.toLocaleDateString('en-IN', {
+    weekday: 'long',
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+  });
+
+  const deadlineTimeStr = data.deadlineAt.toLocaleTimeString('en-IN', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true,
+  });
+
+  const startDateStr = data.startDate
+    ? new Date(data.startDate).toLocaleDateString('en-IN', {
+        weekday: 'long',
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric',
+      })
+    : '';
+
+  const notesHtml = data.notes
+    ? `
+    <table width="100%" border="0" cellspacing="0" cellpadding="0" style="margin-top: 20px; background-color: #eff6ff; border: 1px solid #bfdbfe; border-radius: 10px;">
+      <tr>
+        <td style="padding: 16px 20px;">
+          <p style="font-family: sans-serif; font-size: 13px; font-weight: 700; color: #1e40af; text-transform: uppercase; margin: 0 0 6px 0;">
+            <span style="margin-right: 6px;">📝</span> Description / Instructions
+          </p>
+          <p style="font-family: sans-serif; font-size: 14px; color: #374151; line-height: 1.6; margin: 0;">${data.notes}</p>
+        </td>
+      </tr>
+    </table>`
+    : '';
+
+  const empList = data.assignedEmployeeNames && data.assignedEmployeeNames.length > 0
+    ? data.assignedEmployeeNames
+    : [];
+
+  const empListDisplay = empList.length > 0
+    ? empList.length <= 8
+      ? empList.join(', ')
+      : `${empList.slice(0, 8).join(', ')} and ${empList.length - 8} more`
+    : `${data.assignedCount} team member${data.assignedCount > 1 ? 's' : ''}`;
+
+  const content = `
+    <!-- Confirmation Banner -->
+    <table width="100%" border="0" cellspacing="0" cellpadding="0" style="background: linear-gradient(135deg, #dbeafe 0%, #ede9fe 100%); border: 1px solid #bfdbfe; border-radius: 14px; margin-bottom: 28px;">
+      <tr>
+        <td align="center" style="padding: 26px 24px;">
+          <p style="font-family: sans-serif; font-size: 32px; margin: 0 0 8px 0;">📋</p>
+          <p style="font-family: sans-serif; font-size: 22px; font-weight: 800; color: #1e40af; margin: 0 0 6px 0;">Reviews Assigned Successfully</p>
+          <p style="font-family: sans-serif; font-size: 14px; color: #4b5563; margin: 0;">Quarterly Appraisal Reviews for ${data.quarter} have been assigned.</p>
+        </td>
+      </tr>
+    </table>
+
+    <p style="font-family: sans-serif; font-size: 15px; color: #374151; line-height: 1.7; margin: 0 0 24px 0;">
+      Hello <strong>${data.managerName}</strong>,<br>
+      You have successfully assigned the <strong>${data.quarter}</strong> quarterly appraisal review to <strong>${data.assignedCount} team member${data.assignedCount > 1 ? 's' : ''}</strong>.
+      All assigned employees have been notified to complete their self-assessments before the deadline.
+    </p>
+
+    <!-- Details Card -->
+    <table width="100%" border="0" cellspacing="0" cellpadding="0" style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 14px; margin-bottom: 24px;">
+      <tr>
+        <td style="padding: 24px;">
+          <table width="100%" border="0" cellspacing="0" cellpadding="0" style="margin-bottom: 18px;">
+            <tr>
+              <td style="font-family: sans-serif; font-size: 13px; font-weight: 800; color: #1e40af; text-transform: uppercase; letter-spacing: 0.5px;">
+                <span style="font-size: 16px; margin-right: 8px;">📊</span> Assignment Summary
+              </td>
+            </tr>
+          </table>
+
+          <table width="100%" border="0" cellspacing="0" cellpadding="0">
+            <tr>
+              <td width="160" style="padding-bottom: 14px; font-family: sans-serif; font-size: 13px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.3px; vertical-align: top;">Quarter</td>
+              <td style="padding-bottom: 14px; font-family: sans-serif; font-size: 14px; font-weight: 700; color: #1f2937; vertical-align: top;">
+                <span style="background-color: #dbeafe; color: #1e40af; padding: 4px 12px; border-radius: 999px; font-size: 13px; font-weight: 800;">${data.quarter}</span>
+              </td>
+            </tr>
+            ${data.financialYear ? `
+            <tr>
+              <td width="160" style="padding-bottom: 14px; font-family: sans-serif; font-size: 13px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.3px; vertical-align: top;">Financial Year</td>
+              <td style="padding-bottom: 14px; font-family: sans-serif; font-size: 14px; color: #1f2937; vertical-align: top;">${data.financialYear}</td>
+            </tr>` : ''}
+            <tr>
+              <td width="160" style="padding-bottom: 14px; font-family: sans-serif; font-size: 13px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.3px; vertical-align: top;">Assigned Members</td>
+              <td style="padding-bottom: 14px; font-family: sans-serif; font-size: 14px; color: #1f2937; vertical-align: top; line-height: 1.5;">
+                <strong>${data.assignedCount} member${data.assignedCount > 1 ? 's' : ''}</strong>: ${empListDisplay}
+              </td>
+            </tr>
+            ${startDateStr ? `
+            <tr>
+              <td width="160" style="padding-bottom: 14px; font-family: sans-serif; font-size: 13px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.3px; vertical-align: top;">Start Date</td>
+              <td style="padding-bottom: 14px; font-family: sans-serif; font-size: 14px; color: #1f2937; vertical-align: top;">${startDateStr}</td>
+            </tr>` : ''}
+            <tr>
+              <td width="160" style="font-family: sans-serif; font-size: 13px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.3px; vertical-align: top;">Submission Deadline</td>
+              <td style="font-family: sans-serif; font-size: 14px; font-weight: 700; color: #dc2626; vertical-align: top;">
+                ${deadlineDateStr} at ${deadlineTimeStr}
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+
+    <!-- Info Note -->
+    <table width="100%" border="0" cellspacing="0" cellpadding="0" style="background-color: #eff6ff; border: 1px solid #bfdbfe; border-radius: 10px; margin-bottom: 24px;">
+      <tr>
+        <td style="padding: 14px 18px;">
+          <p style="font-family: sans-serif; font-size: 13px; color: #1e40af; margin: 0; line-height: 1.6;">
+            <span style="font-weight: 800;">ℹ️ Next Steps:</span> Assigned members have received their email invitations. Once an employee submits their self-review, you will receive an email notification to review and evaluate their submission.
+          </p>
+        </td>
+      </tr>
+    </table>
+
+    ${notesHtml}
+
+    <!-- CTA Button -->
+    <table width="100%" border="0" cellspacing="0" cellpadding="0" style="margin: 32px 0 24px 0;">
+      <tr>
+        <td align="center">
+          <a href="${portalUrl}"
+             style="background-color: #2563eb; color: #ffffff; text-decoration: none;
+                    padding: 14px 40px; border-radius: 8px;
+                    font-family: sans-serif; font-size: 15px; font-weight: 800; display: inline-block;
+                    letter-spacing: 0.3px;">
+            VIEW REVIEW BOARD →
+          </a>
+        </td>
+      </tr>
+    </table>
+  `;
+
+  return baseLayout(content, `Quarterly Review Assignment Confirmed: ${data.quarter}`, `Quarterly Review — ${data.quarter}`);
 };
 
 export interface AppraisalQuarterSubmittedEmployeeParams {
