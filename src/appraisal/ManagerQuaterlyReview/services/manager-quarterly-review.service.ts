@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, ForbiddenException, BadRequestException, Logger, HttpException, HttpStatus, OnModuleInit } from '@nestjs/common';
+import { Injectable, NotFoundException, ForbiddenException, BadRequestException, Logger, HttpException, HttpStatus } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In, Like } from 'typeorm';
 import { QuarterlyReview } from '../../quarterlyReview/entities/quarterly-review.entity';
@@ -24,7 +24,6 @@ import { AssignmentStatus } from '../../quarterlyReview/enums/quarterly-review.e
 import { isRevealTokenValid } from '../../quarterlyReview/utils/rating-reveal.utils';
 import { assertAssignmentDateRange, toStartOfDayIst, toEndOfDayIst, computeAssignmentDeadline } from '../../quarterlyReview/utils/assignment-deadline.utils';
 import { getDynamicCurrentFinancialYear } from '../../../master/service/master-financial-year.service';
-import { runQuarterlyReviewSchemaMigration } from '../../quarterlyReview/utils/quarterly-review-schema.migration';
 
 /** Filters + pagination params accepted by getTeamSubmissions */
 export interface TeamSubmissionsFilters {
@@ -47,7 +46,7 @@ export interface PaginatedResult<T> {
 }
 
 @Injectable()
-export class ManagerQuarterlyReviewService implements OnModuleInit {
+export class ManagerQuarterlyReviewService {
   private readonly logger = new Logger(ManagerQuarterlyReviewService.name);
 
   constructor(
@@ -66,13 +65,6 @@ export class ManagerQuarterlyReviewService implements OnModuleInit {
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
   ) { }
-
-  async onModuleInit() {
-    await runQuarterlyReviewSchemaMigration(
-      this.quarterlyReviewRepository.manager.connection,
-    );
-  }
-
 
   /** Check if the user has privileged access (Admin or CEO). */
   private isPrivilegedUser(user: any): boolean {

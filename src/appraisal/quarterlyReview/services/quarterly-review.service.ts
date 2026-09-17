@@ -11,7 +11,6 @@ import {
   Logger,
   HttpException,
   HttpStatus,
-  OnModuleInit,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, Like, In } from 'typeorm';
@@ -50,10 +49,9 @@ import {
   toDateOnly,
 } from '../utils/assignment-deadline.utils';
 import { getDynamicCurrentFinancialYear } from '../../../master/service/master-financial-year.service';
-import { runQuarterlyReviewSchemaMigration } from '../utils/quarterly-review-schema.migration';
 
 @Injectable()
-export class QuarterlyReviewService implements OnModuleInit {
+export class QuarterlyReviewService {
   private readonly logger = new Logger(QuarterlyReviewService.name);
 
   constructor(
@@ -68,13 +66,6 @@ export class QuarterlyReviewService implements OnModuleInit {
     private readonly notificationsService: NotificationsService,
     private readonly mailService: MailService,
   ) { }
-
-  async onModuleInit() {
-    await runQuarterlyReviewSchemaMigration(
-      this.quarterlyReviewRepository.manager.connection,
-    );
-  }
-
 
   getCurrentQuarter(): string {
     try {
