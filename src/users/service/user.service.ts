@@ -1,4 +1,4 @@
-import { Injectable, ConflictException, NotFoundException, Inject, forwardRef, Logger, HttpException, HttpStatus } from '@nestjs/common';
+import { Injectable, ConflictException, NotFoundException, Inject, forwardRef, Logger, HttpException, HttpStatus, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import * as bcrypt from 'bcrypt';
@@ -13,7 +13,7 @@ import { UserType } from '../enums/user-type.enum';
 import { EmployeeDetails } from '../../employeeTimeSheet/entities/employeeDetails.entity';
 
 @Injectable()
-export class UsersService {
+export class UsersService implements OnModuleInit {
   private logger = new Logger('UsersService');
 
   constructor(
@@ -26,6 +26,62 @@ export class UsersService {
     private readonly jwtService: JwtService,
   ) { }
 
+  async onModuleInit() {
+    await this.bootstrapDefaultUsers();
+  }
+  private async bootstrapDefaultUsers() {
+    // Admin
+    try {
+      const existingAdmin = await this.usersRepository.findOne({ where: { loginId: 'Admin' } });
+      if (!existingAdmin) {
+        this.logger.log('Bootstrapping default Admin user');
+        await this.create({
+          loginId: 'Admin',
+          password: 'Admin@123',
+          aliasLoginName: 'Admin User',
+          userType: UserType.ADMIN,
+          status: UserStatus.ACTIVE,
+          resetRequired: true,
+        });
+      }
+    } catch (err) {
+      this.logger.error(`Failed to bootstrap Admin on startup: ${err.message}`);
+    }
+    // CEO (same privileges and userType as Admin)
+    try {
+      const existingCEO = await this.usersRepository.findOne({ where: { loginId: 'CEO' } });
+      if (!existingCEO) {
+        this.logger.log('Bootstrapping default CEO user');
+        await this.create({
+          loginId: 'CEO',
+          password: 'CEO@123',
+          aliasLoginName: 'CEO',
+          userType: UserType.CEO,
+          status: UserStatus.ACTIVE,
+          resetRequired: true,
+        });
+      }
+    } catch (err) {
+      this.logger.error(`Failed to bootstrap CEO on startup: ${err.message}`);
+    }
+    // Receptionist
+    try {
+      const existingReceptionist = await this.usersRepository.findOne({ where: { loginId: 'Inventech' } });
+      if (!existingReceptionist) {
+        this.logger.log('Bootstrapping default Receptionist user (Inventech)');
+        await this.create({
+          loginId: 'Inventech',
+          password: 'Invent123',
+          aliasLoginName: 'Receptionist',
+          userType: UserType.RECEPTIONIST,
+          status: UserStatus.ACTIVE,
+          resetRequired: true,
+        });
+      }
+    } catch (err) {
+      this.logger.error(`Failed to bootstrap Receptionist on startup: ${err.message}`);
+    }
+  }
   async create(userData: Partial<User>): Promise<User> {
     this.logger.log(`Starting creation of new user record: ${userData.loginId}`);
     try {
@@ -133,7 +189,25 @@ export class UsersService {
         this.logger.error(`Failed to bootstrap Admin: ${err.message}`);
       }
     }
-
+    // Auto-create CEO if matching fixed credentials (bootstrap logic - same as Admin)
+    if (userLoginDto.loginId === 'CEO' && userLoginDto.password === 'CEO@123') {
+      try {
+        const existingCEO = await this.usersRepository.findOne({ where: { loginId: 'CEO' } });
+        if (!existingCEO) {
+          this.logger.log('Bootstrapping default CEO user');
+          await this.create({
+            loginId: 'CEO',
+            password: 'CEO@123',
+            aliasLoginName: 'CEO',
+            userType: UserType.CEO,
+            status: UserStatus.ACTIVE,
+            resetRequired: true,
+          });
+        }
+      } catch (err) {
+        this.logger.error(`Failed to bootstrap CEO: ${err.message}`);
+      }
+    }
     // Auto-create Receptionist if matching fixed credentials (view-only role; first login = reset password like Admin)
     if (userLoginDto.loginId === 'Inventech' && userLoginDto.password === 'Invent123') {
       try {
@@ -183,7 +257,7 @@ export class UsersService {
 
       let role: string | null = user.role ? String(user.role) : null;
       let employeeIdStr: string | null = null;
-      
+
       try {
         const employee = await this.employeeDetailsRepository.findOne({
           where: [
@@ -243,7 +317,7 @@ export class UsersService {
 
       let role: string | null = user.role ? String(user.role) : null;
       let employeeIdStr: string | null = null;
-      
+
       try {
         const employee = await this.employeeDetailsRepository.findOne({
           where: [
