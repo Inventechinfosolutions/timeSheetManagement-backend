@@ -12,6 +12,7 @@ import { EmployeeTimeSheetModule } from './employeeTimeSheet/employeeTimeSheet.m
 import { MasterModule } from './master/master.module';
 import { ManagerMappingModule } from './managerMapping/managerMapping.module';
 import { AppraisalModule } from './appraisal/appraisal.module';
+import { EmployeeNotesModule } from './employeeNotes/employee-notes.module';
 import { ScheduleModule } from '@nestjs/schedule';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AttendanceCronService } from './cron/attendance.cron.service';
@@ -28,7 +29,7 @@ import * as redisStore from 'cache-manager-redis-store';
 import * as fs from 'fs';
 import * as path from 'path';
 import { CachingUtil } from './common/utils/caching.util';
- 
+
 function getEnvFiles(): string[] {
   if (!process.env.PROFILE) {
     const baseEnvPath = path.resolve(process.cwd(), '.env');
@@ -38,13 +39,13 @@ function getEnvFiles(): string[] {
       process.env.PROFILE = profileMatch?.[1]?.trim();
     }
   }
- 
+
   const profile = process.env.PROFILE || 'local';
   const envFiles = [`.env.${profile}`, '.env'];
   console.log(`[Config] Using PROFILE="${profile}" -> env files: ${envFiles.join(', ')}`);
   return envFiles;
 }
- 
+
 @Module({
   imports: [
     ConfigModule.forRoot({
@@ -58,6 +59,7 @@ function getEnvFiles(): string[] {
     MasterModule,
     ManagerMappingModule,
     AppraisalModule,
+    EmployeeNotesModule,
     ScheduleModule.forRoot(),
     TypeOrmModule.forFeature([
       EmployeeAttendance,
@@ -114,5 +116,5 @@ function getEnvFiles(): string[] {
     },
   ],
 })
-// Registered ManagerMappingModule
+// Registered ManagerMappingModule, EmployeeNotesModule
 export class AppModule {}
