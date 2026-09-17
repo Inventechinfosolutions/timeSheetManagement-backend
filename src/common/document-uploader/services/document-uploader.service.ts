@@ -165,11 +165,24 @@ export class DocumentUploaderService {
                     docDetails.entityId = e.entityId;
                     docDetails.refType = e.refType;
                     docDetails.refId = e.refId;
-                    docDetails.name = metadata.filename;
-                    docDetails.key = metadata.id;
+                    docDetails.name = metadata.filename && metadata.filename !== 'unknown' ? metadata.filename : (metadata.id || e.id);
+                    docDetails.key = metadata.id || s3Key;
                     docDetails.createdAt = e.createdAt;
                     docs.push(docDetails);
-                } catch (error) {
+                } catch (error: any) {
+                    const isNotFound =
+                        error?.status === HttpStatus.NOT_FOUND ||
+                        error?.name === 'NotFound' ||
+                        error?.name === 'NoSuchKey' ||
+                        error?.message?.includes('not found') ||
+                        error?.response?.statusCode === HttpStatus.NOT_FOUND;
+
+                    if (isNotFound) {
+                        this.logger.warn(`Removing orphaned object_store record ${e.id} because file is missing from storage`);
+                        await this.documentRepo.delete(e.id).catch(() => null);
+                        continue;
+                    }
+
                     if (
                         error instanceof HttpException &&
                         error.getStatus() === HttpStatus.SERVICE_UNAVAILABLE
@@ -180,16 +193,6 @@ export class DocumentUploaderService {
                         documentId: e.id,
                         error: error.message,
                     });
-                    // When S3 is unreachable (e.g. ETIMEDOUT), still add doc from DB so caller can try download and return 503 instead of 404
-                    const fallback = new DocumentDetailsDto();
-                    fallback.key = e.s3Key || e.id;
-                    fallback.name = e.id;
-                    fallback.entityType = e.entityType;
-                    fallback.entityId = e.entityId;
-                    fallback.refType = e.refType;
-                    fallback.refId = e.refId;
-                    fallback.createdAt = e.createdAt;
-                    docs.push(fallback);
                 }
             }
 
@@ -210,29 +213,35 @@ export class DocumentUploaderService {
         try {
             this.logger.log(`Attempting to delete document with key: ${key}`);
             const doc = await this.documentRepo.findOne({
-                where: { id: key },
+                where: [{ id: key }, { s3Key: key }],
             });
 
             if (!doc) {
                 this.logger.warn(`Document not found with key: ${key}`);
-                throw new HttpException(
-                    `Document with ID ${key} not found`,
-                    HttpStatus.NOT_FOUND,
-                );
+                return { message: 'Document not found or already deleted' };
             }
 
-            await this.deleteMinioDoc(key);
-            await this.documentRepo.delete(key);
+            const docId = doc.id;
+            const actualS3Key = doc.s3Key || doc.id || key;
+
+            try {
+                await this.deleteMinioDoc(actualS3Key);
+            } catch (storageErr: any) {
+                this.logger.warn(`Storage deletion note for key ${actualS3Key}: ${storageErr.message}`);
+            }
+
+            await this.documentRepo.delete({ id: docId });
 
             this.logger.debug(`Successfully deleted document with key: ${key}`);
-            return;
-        } catch (error) {
+            return { message: 'Document deleted successfully' };
+        } catch (error: any) {
             this.logger.error(
                 `Failed to delete document with key ${key}: ${error.message}`,
             );
+            if (error instanceof HttpException) throw error;
             throw new HttpException(
-                `Document with ID ${key} not found`,
-                HttpStatus.NOT_FOUND,
+                'Failed to delete document',
+                HttpStatus.INTERNAL_SERVER_ERROR,
             );
         }
     }

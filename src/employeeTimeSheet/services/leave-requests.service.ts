@@ -1574,8 +1574,10 @@ export class LeaveRequestsService {
       const isPrivileged =
         user &&
         (user.userType === UserType.ADMIN ||
+          user.userType === UserType.CEO ||
           user.userType === UserType.MANAGER ||
           roleUpper.includes(UserType.ADMIN) ||
+          roleUpper.includes(UserType.CEO) ||
           roleUpper.includes('MNG') ||
           roleUpper.includes(UserType.MANAGER));
 
@@ -2305,7 +2307,7 @@ export class LeaveRequestsService {
         }
         if (
           (!reviewerEmail || !reviewerEmail.includes('@')) &&
-          reviewedBy === UserType.ADMIN
+          (reviewedBy === UserType.ADMIN || reviewedBy === UserType.CEO)
         ) {
           reviewerEmail = process.env.ADMIN_EMAIL || process.env.SMTP_USERNAME;
         }
@@ -3193,7 +3195,7 @@ export class LeaveRequestsService {
         }
         if (
           (!reviewerEmail || !reviewerEmail.includes('@')) &&
-          reviewedBy === UserType.ADMIN
+          (reviewedBy === UserType.ADMIN || reviewedBy === UserType.CEO)
         ) {
           reviewerEmail = process.env.ADMIN_EMAIL || process.env.SMTP_USERNAME;
         }
@@ -3450,8 +3452,10 @@ export class LeaveRequestsService {
       const isPrivileged =
         user &&
         (user.userType === UserType.ADMIN ||
+          user.userType === UserType.CEO ||
           user.userType === UserType.MANAGER ||
           roleUpper.includes(UserType.ADMIN) ||
+          roleUpper.includes(UserType.CEO) ||
           roleUpper.includes('MNG') ||
           roleUpper.includes(UserType.MANAGER));
 
