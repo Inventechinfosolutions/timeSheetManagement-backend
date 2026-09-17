@@ -1,4 +1,4 @@
-import { Injectable, Logger, NotFoundException, OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { v4 as uuidv4 } from 'uuid';
@@ -7,64 +7,13 @@ import { CreateEmployeeNoteDto } from './dto/create-employee-note.dto';
 import { UpdateEmployeeNoteDto, AddProjectRowDto } from './dto/update-employee-note.dto';
 
 @Injectable()
-export class EmployeeNotesService implements OnModuleInit {
+export class EmployeeNotesService {
   private readonly logger = new Logger(EmployeeNotesService.name);
 
   constructor(
     @InjectRepository(EmployeeNote)
     private readonly employeeNoteRepo: Repository<EmployeeNote>,
   ) {}
-
-  // ---------------------------------------------------------------------------
-  // DB bootstrap – run once at startup to ensure table + columns exist
-  // ---------------------------------------------------------------------------
-  async onModuleInit() {
-    try {
-      // Create table if not exists (columns match entity exactly)
-      await this.employeeNoteRepo.query(`
-        CREATE TABLE IF NOT EXISTS \`employee_notes\` (
-          \`id\`             varchar(36)   NOT NULL,
-          \`employee_id\`    varchar(255)  NOT NULL,
-          \`parent_note_id\` varchar(255)  NULL,
-          \`projectName\`    varchar(255)  NULL DEFAULT '',
-          \`title\`          varchar(255)  NOT NULL DEFAULT '',
-          \`category\`       varchar(255)  NOT NULL DEFAULT 'Personal Note',
-          \`folder\`         varchar(255)  NULL DEFAULT 'General',
-          \`content\`        longtext      NULL,
-          \`rows\`           longtext      NULL,
-          \`files\`          longtext      NULL,
-          \`createdAt\`      datetime(6)   NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-          \`updatedAt\`      datetime(6)   NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
-          \`createdBy\`      varchar(255)  NULL,
-          \`updatedBy\`      varchar(255)  NULL,
-          PRIMARY KEY (\`id\`)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-      `);
-
-      // Safely add any missing columns that were introduced later
-      const safeAlter = async (sql: string) => {
-        try { await this.employeeNoteRepo.query(sql); } catch { /* column already exists */ }
-      };
-
-      await safeAlter('ALTER TABLE `employee_notes` ADD COLUMN `parent_note_id` varchar(255) NULL');
-      await safeAlter('ALTER TABLE `employee_notes` ADD COLUMN `projectName`    varchar(255) NULL DEFAULT ""');
-      await safeAlter('ALTER TABLE `employee_notes` ADD COLUMN `folder`         varchar(255) NULL DEFAULT "General"');
-      await safeAlter('ALTER TABLE `employee_notes` ADD COLUMN `files`          longtext     NULL');
-
-      // Ensure longtext types for large fields
-      await safeAlter('ALTER TABLE `employee_notes` MODIFY COLUMN `files`   longtext NULL');
-      await safeAlter('ALTER TABLE `employee_notes` MODIFY COLUMN `content` longtext NULL');
-      await safeAlter('ALTER TABLE `employee_notes` MODIFY COLUMN `rows`    longtext NULL');
-
-      // Back-fill createdBy / updatedBy where missing
-      await safeAlter('UPDATE `employee_notes` SET `createdBy` = `employee_id` WHERE `createdBy` IS NULL');
-      await safeAlter('UPDATE `employee_notes` SET `updatedBy` = `employee_id` WHERE `updatedBy` IS NULL');
-
-      this.logger.log('employee_notes table verified/created successfully with parent_note_id support.');
-    } catch (err: any) {
-      this.logger.error(`Failed to ensure employee_notes table: ${err.message}`);
-    }
-  }
 
   // ---------------------------------------------------------------------------
   // Helpers
@@ -103,17 +52,6 @@ export class EmployeeNotesService implements OnModuleInit {
         `findAllForEmployee failed for employeeId=${employeeId}: ${err instanceof Error ? err.message : err}`,
         err instanceof Error ? err.stack : undefined,
       );
-      // Attempt to recreate table on first-run race condition
-      if (err?.message?.includes("doesn't exist") || err?.code === 'ER_NO_SUCH_TABLE') {
-        try {
-          await this.onModuleInit();
-          const notes = await this.employeeNoteRepo.find({
-            where: { employeeId },
-            order: { updatedAt: 'DESC' },
-          });
-          return notes.map((n) => this.parseNote(n));
-        } catch { return []; }
-      }
       return [];
     }
   }
