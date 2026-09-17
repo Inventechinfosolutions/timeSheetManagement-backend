@@ -62,10 +62,14 @@ export class ManagerQuarterlyReviewController {
   async getFilterOptions(@Req() req: any) {
     try {
       const quarters = await this.managerQuarterlyReviewService.getQuarterOptions(req.user);
+      const fyData = this.managerQuarterlyReviewService.getFinancialYearOptions();
       return {
         success: true,
         statusCode: HttpStatus.OK,
-        data: { quarters },
+        data: {
+          quarters,
+          ...fyData,
+        },
       };
     } catch (error: any) {
       this.logger.error(`[getFilterOptions] Error: ${error.message}`, error.stack);
@@ -340,7 +344,8 @@ export class ManagerQuarterlyReviewController {
       return {
         success: true,
         statusCode: HttpStatus.CREATED,
-        message: `${result.created} assignment(s) created, ${result.skipped} skipped (already assigned for this quarter).`,
+        message: `${dto.quarter}-${dto.financialYear} assigned successfully`,
+
         data: result,
       };
     } catch (error: any) {

@@ -82,6 +82,9 @@ export class CreateQuarterlyReviewDto {
   id?: number;
 
   @IsOptional()
+  step?: number | string;
+
+  @IsOptional()
   @IsString()
   employeeId?: string;
 
@@ -116,9 +119,9 @@ export class CreateQuarterlyReviewDto {
   financialYear?: string;
 
   @IsNotEmpty()
-  @IsEnum(ReviewStatus)
-  @ApiProperty({ enum: ReviewStatus, description: 'Review status' })
-  status: ReviewStatus;
+  @IsString()
+  @ApiProperty({ description: 'Review status' })
+  status: ReviewStatus | string;
 
   @IsOptional()
   @IsString()

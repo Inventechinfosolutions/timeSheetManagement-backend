@@ -62,7 +62,7 @@ export class ManagerEvaluationDto {
 
   @IsOptional()
   @IsString()
-  @ApiProperty({ description: 'Review status (e.g. In Review, Reviewed, Approved)' })
+  @ApiProperty({ description: 'Review status (e.g. Pending, Under Review, Reviewed)' })
   reviewStatus?: string;
 
   @IsOptional()

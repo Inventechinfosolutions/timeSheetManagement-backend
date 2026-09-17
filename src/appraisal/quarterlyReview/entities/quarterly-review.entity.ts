@@ -1,6 +1,6 @@
 import { Entity, Column, PrimaryGeneratedColumn } from 'typeorm';
 import { BaseEntity } from '../../../common/core/models/base.entity';
-import { ReviewStatus } from '../enums/quarterly-review.enum';
+import { ReviewStatus, AppraisalReviewStatus } from '../enums/quarterly-review.enum';
 
 // ---------------------------------------------------------------------------
 // QuarterlyReview
@@ -19,17 +19,14 @@ export class QuarterlyReview extends BaseEntity {
   @Column({ name: 'financial_year', type: 'varchar', length: 50, nullable: true })
   financialYear!: string | null;
 
-  @Column({ name: 'start_date', type: 'date', nullable: true })
-  startDate!: string | null;
-
-  @Column({ name: 'end_date', type: 'date', nullable: true })
-  endDate!: string | null;
+  @Column({ name: 'assigned_at', type: 'timestamp', nullable: true })
+  assignedAt!: Date | null;
 
   @Column({
     name: 'status',
     type: 'varchar',
     length: 50,
-    default: ReviewStatus.NOT_STARTED,
+    default: ReviewStatus.ASSIGNED,
   })
   status!: ReviewStatus;
 
@@ -57,8 +54,14 @@ export class QuarterlyReview extends BaseEntity {
   @Column({ name: 'manager_name', type: 'varchar', length: 150, nullable: true })
   managerName!: string | null;
 
-  @Column({ name: 'review_status', type: 'varchar', length: 50, nullable: true })
-  reviewStatus!: string | null;
+  @Column({
+    name: 'review_status',
+    type: 'varchar',
+    length: 50,
+    nullable: true,
+    default: AppraisalReviewStatus.ASSIGNED,
+  })
+  reviewStatus!: AppraisalReviewStatus | string | null;
 
   @Column({ name: 'final_rating', type: 'varchar', length: 100, nullable: true })
   finalRating!: string | null;
@@ -106,4 +109,7 @@ export class QuarterlyReview extends BaseEntity {
 
   @Column({ name: 'access_request_eligible_until', type: 'timestamp', nullable: true })
   accessRequestEligibleUntil: Date | null;
+
+  @Column({ name: 'notes', type: 'text', nullable: true })
+  notes!: string | null;
 }

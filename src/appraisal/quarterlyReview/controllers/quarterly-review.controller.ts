@@ -1,8 +1,8 @@
-import { Controller, Get, Post, Delete, Body, Param, Query, Req, Res, UseGuards, HttpStatus, HttpCode, Logger, UseInterceptors, UploadedFiles, HttpException } from '@nestjs/common';
+import { Controller, Get, Post, Put, Patch, Delete, Body, Param, Query, Req, Res, UseGuards, HttpStatus, HttpCode, Logger, UseInterceptors, UploadedFiles, HttpException } from '@nestjs/common';
 import { JwtAuthGuard } from '../../../auth/guards/jwt-auth.guard';
 import { QuarterlyReviewService } from '../services/quarterly-review.service';
 import { CreateQuarterlyReviewDto } from '../dto/create-quarterly-review.dto';
-import { RequestQuarterlyReviewAccessDto, RejectAccessRequestDto } from '../dto/request-access.dto';
+import { RequestQuarterlyReviewAccessDto, RejectAccessRequestDto, ApproveAccessRequestDto } from '../dto/request-access.dto';
 import { AssignQuarterlyReviewDto, ActionAccessRequestDto } from '../dto/assign-quarterly-review.dto';
 import { RevealRatingDto } from '../dto/reveal-rating.dto';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
@@ -24,7 +24,7 @@ export class QuarterlyReviewController {
     private readonly quarterlyReviewService: QuarterlyReviewService,
     private readonly documentUploaderService: DocumentUploaderService,
     private readonly fileService: FileService,
-  ) {}
+  ) { }
 
   @Get('current-quarter')
   @ApiOperation({ summary: 'Get current quarter name' })
@@ -49,9 +49,13 @@ export class QuarterlyReviewController {
   @Get('assignable-employees')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Get list of employees assignable by the current user' })
-  async getAssignableEmployees(@Req() req: any, @Query('quarter') quarter?: string) {
+  async getAssignableEmployees(
+    @Req() req: any,
+    @Query('quarter') quarter?: string,
+    @Query('mode') mode?: string,
+  ) {
     try {
-      const list = await this.quarterlyReviewService.getAssignableEmployees(req.user, quarter);
+      const list = await this.quarterlyReviewService.getAssignableEmployees(req.user, quarter, mode);
       return {
         success: true,
         statusCode: HttpStatus.OK,
@@ -174,21 +178,234 @@ export class QuarterlyReviewController {
     }
   }
 
-  @Get('quarter/:quarter')
-  @ApiOperation({ summary: 'Get quarterly review by quarter' })
-  async findOne(@Req() req: any, @Param('quarter') quarter: string) {
+  @Get('four-quarters-ratings')
+  @ApiOperation({ summary: 'Get all four quarters with their ratings for a financial year' })
+  async getFourQuartersRatings(
+    @Req() req: any,
+    @Query('financialYear') financialYear?: string,
+    @Query('employeeId') employeeId?: string,
+  ) {
     try {
-      const employeeId = req.user.loginId;
       const revealToken = (req.headers['x-reveal-token'] as string) || undefined;
-      this.logger.log(`Fetching review for employee ${employeeId}, quarter ${quarter}`);
-      const review = await this.quarterlyReviewService.findOneByQuarter(employeeId, quarter, revealToken);
+      const result = await this.quarterlyReviewService.getFourQuartersRatings(
+        req.user,
+        employeeId,
+        financialYear,
+        revealToken,
+      );
       return {
         success: true,
         statusCode: HttpStatus.OK,
-        data: review,
+        data: result,
+      };
+    } catch (error: any) {
+      this.logger.error(`[getFourQuartersRatings] Error: ${error.message}`, error.stack);
+      if (error instanceof HttpException) throw error;
+      throw new HttpException(
+        error.message || 'Failed to fetch four quarters ratings',
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
+  }
+
+  @Get('quarter/:quarter')
+  @ApiOperation({ summary: 'Get quarterly review by quarter' })
+  async findOne(
+    @Req() req: any,
+    @Param('quarter') quarter: string,
+    @Query('step') step?: string | number,
+  ) {
+    try {
+      const employeeId = req.user.loginId;
+      const revealToken = (req.headers['x-reveal-token'] as string) || undefined;
+      this.logger.log(`Fetching review for employee ${employeeId}, quarter ${quarter}, step: ${step ?? 'none'}`);
+      const review = await this.quarterlyReviewService.findOneByQuarter(employeeId, quarter, revealToken);
+      const effectiveStep = step !== undefined ? Number(step) : undefined;
+      return {
+        success: true,
+        statusCode: HttpStatus.OK,
+        data: review ? { ...review, ...(effectiveStep !== undefined ? { step: effectiveStep } : {}) } : review,
       };
     } catch (error: any) {
       this.logger.error(`[findOne] Error: ${error.message}`, error.stack);
+      if (error instanceof HttpException) throw error;
+      throw new HttpException(
+        error.message || 'Failed to fetch quarterly review',
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
+  }
+
+  // ── Access Requests (Manager / Admin / CEO) ─────────────────────────────────
+  // IMPORTANT: These static routes must remain ABOVE @Get([':id', ...]) to prevent
+  // NestJS wildcard collisions where 'access-requests' gets matched as id='access-requests'.
+
+  @Get('access-requests')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Get quarterly review access requests for viewer' })
+  async getAccessRequests(
+    @Req() req: any,
+    @Query('quarter') quarter?: string,
+    @Query('status') status?: string,
+  ) {
+    try {
+      const viewerId = req.user.loginId;
+      const viewerName = req.user.aliasLoginName || req.user.userName || viewerId;
+      const rawRole = String(req.user.userType || req.user.role || '').toUpperCase();
+      const isManager = rawRole === 'MANAGER' || (req.user.designation && req.user.designation.toLowerCase().includes('manager'));
+      const viewerRole = rawRole === 'ADMIN' ? 'ADMIN' : rawRole === 'CEO' ? 'CEO' : isManager ? 'MANAGER' : 'EMPLOYEE';
+
+      this.logger.log(`Fetching access requests for viewer ${viewerId} (${viewerRole}, statusFilter=${status || 'all'})`);
+      const requests = await this.quarterlyReviewService.getAccessRequests(viewerId, viewerRole, viewerName, quarter, status, req.user);
+      return {
+        success: true,
+        statusCode: HttpStatus.OK,
+        data: requests,
+      };
+    } catch (error: any) {
+      this.logger.error(`[getAccessRequests] Error: ${error.message}`, error.stack);
+      if (error instanceof HttpException) throw error;
+      throw new HttpException(
+        error.message || 'Failed to fetch access requests',
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
+  }
+
+  @Post('access-requests/:id/action')
+  @Patch('access-requests/:id/action')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Approve or reject review access request' })
+  async actionAccessRequest(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body() dto: ActionAccessRequestDto,
+  ) {
+    try {
+      this.logger.log(`Actioning access request ${id} with action ${dto.action} by ${req.user.loginId}`);
+      const result = await this.quarterlyReviewService.actionAccessRequest(+id, req.user, dto);
+      return {
+        success: true,
+        statusCode: HttpStatus.OK,
+        message: result.message,
+        data: result.data,
+      };
+    } catch (error: any) {
+      this.logger.error(`[actionAccessRequest] Error: ${error.message}`, error.stack);
+      if (error instanceof HttpException) throw error;
+      throw new HttpException(
+        error.message || 'Failed to action access request',
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
+  }
+
+  @Post('access-requests/:id/approve')
+  @Patch('access-requests/:id/approve')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Approve access request and grant 2 days access' })
+  async approveAccessRequest(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body() dto?: ApproveAccessRequestDto,
+  ) {
+    try {
+      const approverId = req.user.loginId;
+      const approverName = req.user.aliasLoginName || req.user.userName || approverId;
+      const rawRole = String(req.user.userType || req.user.role || '').toUpperCase();
+      const isManager = rawRole === 'MANAGER' || (req.user.designation && req.user.designation.toLowerCase().includes('manager'));
+      const approverRole = rawRole === 'ADMIN' ? 'ADMIN' : rawRole === 'CEO' ? 'CEO' : isManager ? 'MANAGER' : 'EMPLOYEE';
+
+      this.logger.log(`Approver ${approverId} (${approverRole}) approving request ${id} with remarks="${dto?.remarks || ''}"`);
+      const result = await this.quarterlyReviewService.approveAccessRequest(
+        +id,
+        approverId,
+        approverName,
+        approverRole,
+        dto?.remarks,
+        dto?.extensionHours,
+      );
+      return {
+        success: true,
+        statusCode: HttpStatus.OK,
+        message: result.message,
+        data: result.data,
+      };
+    } catch (error: any) {
+      this.logger.error(`[approveAccessRequest] Error: ${error.message}`, error.stack);
+      if (error instanceof HttpException) throw error;
+      throw new HttpException(
+        error.message || 'Failed to approve access request',
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
+  }
+
+  @Post('access-requests/:id/reject')
+  @Patch('access-requests/:id/reject')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Reject access request' })
+  async rejectAccessRequest(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body() dto?: RejectAccessRequestDto,
+  ) {
+    try {
+      const approverId = req.user.loginId;
+      const approverName = req.user.aliasLoginName || req.user.userName || approverId;
+      const rawRole = String(req.user.userType || req.user.role || '').toUpperCase();
+      const isManager = rawRole === 'MANAGER' || (req.user.designation && req.user.designation.toLowerCase().includes('manager'));
+      const approverRole = rawRole === 'ADMIN' ? 'ADMIN' : rawRole === 'CEO' ? 'CEO' : isManager ? 'MANAGER' : 'EMPLOYEE';
+
+      const comment = dto?.remarks || dto?.rejectionReason;
+      this.logger.log(`Approver ${approverId} (${approverRole}) rejecting request ${id} with comment="${comment || ''}"`);
+      const result = await this.quarterlyReviewService.rejectAccessRequest(
+        +id,
+        approverId,
+        approverName,
+        approverRole,
+        comment,
+      );
+      return {
+        success: true,
+        statusCode: HttpStatus.OK,
+        message: result.message,
+        data: result.data,
+      };
+    } catch (error: any) {
+      this.logger.error(`[rejectAccessRequest] Error: ${error.message}`, error.stack);
+      if (error instanceof HttpException) throw error;
+      throw new HttpException(
+        error.message || 'Failed to reject access request',
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
+  }
+
+  // ── End Access Requests ───────────────────────────────────────────────────────
+
+  @Get([':id', 'detail/:id'])
+  @ApiOperation({ summary: 'Get quarterly review by ID or Quarter' })
+  async findOneById(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Query('step') step?: string | number,
+  ) {
+    try {
+      const employeeId = req.user.loginId;
+      const revealToken = (req.headers['x-reveal-token'] as string) || undefined;
+      this.logger.log(`Fetching review for employee ${employeeId}, id/quarter ${id}, step: ${step ?? 'none'}`);
+      const review = !isNaN(Number(id))
+        ? await this.quarterlyReviewService.findOneById(employeeId, Number(id), revealToken)
+        : await this.quarterlyReviewService.findOneByQuarter(employeeId, id, revealToken);
+      const effectiveStep = step !== undefined ? Number(step) : undefined;
+      return {
+        success: true,
+        statusCode: HttpStatus.OK,
+        data: review ? { ...review, ...(effectiveStep !== undefined ? { step: effectiveStep } : {}) } : review,
+      };
+    } catch (error: any) {
+      this.logger.error(`[findOneById] Error: ${error.message}`, error.stack);
       if (error instanceof HttpException) throw error;
       throw new HttpException(
         error.message || 'Failed to fetch quarterly review',
@@ -224,16 +441,21 @@ export class QuarterlyReviewController {
   @Post()
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Create or update quarterly review (Save Draft or Submit)' })
-  async saveOrSubmit(@Req() req: any, @Body() dto: CreateQuarterlyReviewDto) {
+  async saveOrSubmit(
+    @Req() req: any,
+    @Body() dto: CreateQuarterlyReviewDto,
+    @Query('step') step?: string | number,
+  ) {
     try {
       const employeeId = req.user.loginId;
       const username = req.user.aliasLoginName || employeeId;
-      this.logger.log(`Saving or submitting quarterly review for employee ${employeeId}`);
-      const review = await this.quarterlyReviewService.saveOrSubmit(employeeId, dto, username);
+      this.logger.log(`Saving or submitting quarterly review for employee ${employeeId}, step: ${step ?? 'none'}`);
+      const review = await this.quarterlyReviewService.saveOrSubmit(employeeId, dto, username, step);
+      const effectiveStep = step !== undefined ? Number(step) : (dto?.step !== undefined ? Number(dto.step) : undefined);
       return {
         success: true,
         statusCode: HttpStatus.OK,
-        data: review,
+        data: review ? { ...review, ...(effectiveStep !== undefined ? { step: effectiveStep } : {}) } : review,
       };
     } catch (error: any) {
       this.logger.error(`[saveOrSubmit] Error: ${error.message}`, error.stack);
@@ -241,6 +463,73 @@ export class QuarterlyReviewController {
       if (httpStatus) throw error;
       throw new HttpException(
         error.message || 'Failed to save/submit quarterly review',
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
+  }
+
+  @Put(':id')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Update quarterly review by ID (Save Draft or Submit)' })
+  async updateById(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body() dto: CreateQuarterlyReviewDto,
+    @Query('step') step?: string | number,
+  ) {
+    try {
+      const employeeId = req.user.loginId;
+      const username = req.user.aliasLoginName || employeeId;
+      const numericId = !isNaN(Number(id)) ? Number(id) : dto.id;
+      const quarterToUse = dto.quarter || (!isNaN(Number(id)) ? undefined : id);
+      const review = await this.quarterlyReviewService.saveOrSubmit(
+        employeeId,
+        { ...dto, ...(numericId ? { id: numericId } : {}), ...(quarterToUse ? { quarter: quarterToUse } : {}) },
+        username,
+        step,
+      );
+      const effectiveStep = step !== undefined ? Number(step) : (dto?.step !== undefined ? Number(dto.step) : undefined);
+      return {
+        success: true,
+        statusCode: HttpStatus.OK,
+        data: review ? { ...review, ...(effectiveStep !== undefined ? { step: effectiveStep } : {}) } : review,
+      };
+    } catch (error: any) {
+      this.logger.error(`[updateById] Error: ${error.message}`, error.stack);
+      const httpStatus = error instanceof HttpException ? error.getStatus() : (typeof error?.getStatus === 'function' ? error.getStatus() : null);
+      if (httpStatus) throw error;
+      throw new HttpException(
+        error.message || 'Failed to update quarterly review',
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
+  }
+
+  @Put()
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Update quarterly review (Save Draft or Submit)' })
+  async update(
+    @Req() req: any,
+    @Body() dto: CreateQuarterlyReviewDto,
+    @Query('step') step?: string | number,
+  ) {
+    try {
+      const employeeId = req.user.loginId;
+      const username = req.user.aliasLoginName || employeeId;
+      this.logger.log(`Updating quarterly review for employee ${employeeId}, step: ${step ?? 'none'}`);
+      const review = await this.quarterlyReviewService.saveOrSubmit(employeeId, dto, username, step);
+      const effectiveStep = step !== undefined ? Number(step) : (dto?.step !== undefined ? Number(dto.step) : undefined);
+      return {
+        success: true,
+        statusCode: HttpStatus.OK,
+        data: review ? { ...review, ...(effectiveStep !== undefined ? { step: effectiveStep } : {}) } : review,
+      };
+    } catch (error: any) {
+      this.logger.error(`[update] Error: ${error.message}`, error.stack);
+      const httpStatus = error instanceof HttpException ? error.getStatus() : (typeof error?.getStatus === 'function' ? error.getStatus() : null);
+      if (httpStatus) throw error;
+      throw new HttpException(
+        error.message || 'Failed to update quarterly review',
         HttpStatus.INTERNAL_SERVER_ERROR,
       );
     }
@@ -540,7 +829,7 @@ export class QuarterlyReviewController {
       const result = await this.quarterlyReviewService.requestAccess(
         employeeId,
         dto.quarter,
-        dto.reason || '',
+        dto.reason || dto.description || '',
         userRole,
         username,
         dto.assignmentId ? Number(dto.assignmentId) : undefined,
@@ -557,129 +846,6 @@ export class QuarterlyReviewController {
       if (httpStatus) throw error;
       throw new HttpException(
         error.message || 'Failed to request review access',
-        HttpStatus.INTERNAL_SERVER_ERROR,
-      );
-    }
-  }
-
-  @Get('access-requests')
-  @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Get quarterly review access requests for viewer' })
-  async getAccessRequests(@Req() req: any, @Query('quarter') quarter?: string) {
-    try {
-      const viewerId = req.user.loginId;
-      const viewerName = req.user.aliasLoginName || req.user.userName || viewerId;
-      const rawRole = String(req.user.userType || req.user.role || '').toUpperCase();
-      const isManager = rawRole === 'MANAGER' || (req.user.designation && req.user.designation.toLowerCase().includes('manager'));
-      const viewerRole = rawRole === 'ADMIN' ? 'ADMIN' : rawRole === 'CEO' ? 'CEO' : isManager ? 'MANAGER' : 'EMPLOYEE';
-
-      this.logger.log(`Fetching access requests for viewer ${viewerId} (${viewerRole})`);
-      const requests = await this.quarterlyReviewService.getAccessRequests(viewerId, viewerRole, viewerName, quarter);
-      return {
-        success: true,
-        statusCode: HttpStatus.OK,
-        data: requests,
-      };
-    } catch (error: any) {
-      this.logger.error(`[getAccessRequests] Error: ${error.message}`, error.stack);
-      if (error instanceof HttpException) throw error;
-      throw new HttpException(
-        error.message || 'Failed to fetch access requests',
-        HttpStatus.INTERNAL_SERVER_ERROR,
-      );
-    }
-  }
-
-  @Post('access-requests/:id/action')
-  @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Approve or reject review access request' })
-  async actionAccessRequest(
-    @Req() req: any,
-    @Param('id') id: string,
-    @Body() dto: ActionAccessRequestDto,
-  ) {
-    try {
-      this.logger.log(`Actioning access request ${id} with action ${dto.action} by ${req.user.loginId}`);
-      const result = await this.quarterlyReviewService.actionAccessRequest(+id, req.user, dto);
-      return {
-        success: true,
-        statusCode: HttpStatus.OK,
-        message: result.message,
-        data: result.data,
-      };
-    } catch (error: any) {
-      this.logger.error(`[actionAccessRequest] Error: ${error.message}`, error.stack);
-      if (error instanceof HttpException) throw error;
-      throw new HttpException(
-        error.message || 'Failed to action access request',
-        HttpStatus.INTERNAL_SERVER_ERROR,
-      );
-    }
-  }
-
-  @Post('access-requests/:id/approve')
-  @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Approve access request and grant 2 days access' })
-  async approveAccessRequest(@Req() req: any, @Param('id') id: string) {
-    try {
-      const approverId = req.user.loginId;
-      const approverName = req.user.aliasLoginName || req.user.userName || approverId;
-      const rawRole = String(req.user.userType || req.user.role || '').toUpperCase();
-      const isManager = rawRole === 'MANAGER' || (req.user.designation && req.user.designation.toLowerCase().includes('manager'));
-      const approverRole = rawRole === 'ADMIN' ? 'ADMIN' : rawRole === 'CEO' ? 'CEO' : isManager ? 'MANAGER' : 'EMPLOYEE';
-
-      this.logger.log(`Approver ${approverId} (${approverRole}) approving request ${id}`);
-      const result = await this.quarterlyReviewService.approveAccessRequest(+id, approverId, approverName, approverRole);
-      return {
-        success: true,
-        statusCode: HttpStatus.OK,
-        message: result.message,
-        data: result.data,
-      };
-    } catch (error: any) {
-      this.logger.error(`[approveAccessRequest] Error: ${error.message}`, error.stack);
-      if (error instanceof HttpException) throw error;
-      throw new HttpException(
-        error.message || 'Failed to approve access request',
-        HttpStatus.INTERNAL_SERVER_ERROR,
-      );
-    }
-  }
-
-  @Post('access-requests/:id/reject')
-  @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Reject access request' })
-  async rejectAccessRequest(
-    @Req() req: any,
-    @Param('id') id: string,
-    @Body() dto: RejectAccessRequestDto,
-  ) {
-    try {
-      const approverId = req.user.loginId;
-      const approverName = req.user.aliasLoginName || req.user.userName || approverId;
-      const rawRole = String(req.user.userType || req.user.role || '').toUpperCase();
-      const isManager = rawRole === 'MANAGER' || (req.user.designation && req.user.designation.toLowerCase().includes('manager'));
-      const approverRole = rawRole === 'ADMIN' ? 'ADMIN' : rawRole === 'CEO' ? 'CEO' : isManager ? 'MANAGER' : 'EMPLOYEE';
-
-      this.logger.log(`Approver ${approverId} (${approverRole}) rejecting request ${id}`);
-      const result = await this.quarterlyReviewService.rejectAccessRequest(
-        +id,
-        approverId,
-        approverName,
-        approverRole,
-        dto.rejectionReason,
-      );
-      return {
-        success: true,
-        statusCode: HttpStatus.OK,
-        message: result.message,
-        data: result.data,
-      };
-    } catch (error: any) {
-      this.logger.error(`[rejectAccessRequest] Error: ${error.message}`, error.stack);
-      if (error instanceof HttpException) throw error;
-      throw new HttpException(
-        error.message || 'Failed to reject access request',
         HttpStatus.INTERNAL_SERVER_ERROR,
       );
     }

@@ -13,6 +13,11 @@ export class RequestQuarterlyReviewAccessDto {
   reason?: string;
 
   @IsOptional()
+  @IsString()
+  @ApiProperty({ description: 'Alternative field for reason/description', required: false })
+  description?: string;
+
+  @IsOptional()
   @ApiProperty({ description: 'Assignment ID', required: false })
   assignmentId?: any;
 
@@ -33,9 +38,25 @@ export class RequestQuarterlyReviewAccessDto {
   id?: any;
 }
 
+export class ApproveAccessRequestDto {
+  @IsOptional()
+  @IsString()
+  @ApiProperty({ description: 'Approver comment or remarks', required: false })
+  remarks?: string;
+
+  @IsOptional()
+  @ApiProperty({ description: 'Hours of extension if approved (default 48)', required: false })
+  extensionHours?: number;
+}
+
 export class RejectAccessRequestDto {
   @IsOptional()
   @IsString()
   @ApiProperty({ description: 'Reason for rejecting request' })
   rejectionReason?: string;
+
+  @IsOptional()
+  @IsString()
+  @ApiProperty({ description: 'Remarks or rejection comment', required: false })
+  remarks?: string;
 }

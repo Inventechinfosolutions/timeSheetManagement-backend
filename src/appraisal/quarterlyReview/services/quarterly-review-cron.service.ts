@@ -2,10 +2,11 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In, LessThanOrEqual, MoreThan } from 'typeorm';
-import { ReviewAssignment, AssignmentStatus } from '../entities/review-assignment.entity';
+import { ReviewAssignment } from '../entities/review-assignment.entity';
 import { QuarterlyReview } from '../entities/quarterly-review.entity';
 import { QuarterlyReviewAccessRequest, AccessRequestStatus } from '../entities/quarterly-review-access-request.entity';
-import { ReviewStatus } from '../enums/quarterly-review.enum';
+import { ReviewStatus, AppraisalReviewStatus, AssignmentStatus } from '../enums/quarterly-review.enum';
+
 import { NotificationsService } from '../../../notifications/Services/notifications.service';
 import { MailService } from '../../../common/mail/mail.service';
 import {
@@ -21,8 +22,6 @@ import {
 
 const OPEN_ASSIGNMENT_STATUSES = [
   AssignmentStatus.ASSIGNED,
-  AssignmentStatus.IN_PROGRESS,
-  AssignmentStatus.DRAFT,
 ];
 
 @Injectable()
@@ -159,7 +158,7 @@ export class QuarterlyReviewCronService {
       employeeName,
       quarter: assignment.quarter,
       deadlineAt: deadline,
-      startDate: assignment.startDate || undefined,
+      startDate: assignment.assignedAt ? new Date(assignment.assignedAt).toISOString().slice(0, 10) : undefined,
       remainingLabel: copy.remainingLabel,
       urgencyLabel: copy.urgencyLabel,
     });
@@ -209,11 +208,12 @@ export class QuarterlyReviewCronService {
 
           if (review) {
             if (
-              review.status !== ReviewStatus.SUBMITTED &&
-              review.status !== ReviewStatus.APPROVED &&
-              review.status !== ReviewStatus.COMPLETED
+              review.status !== ReviewStatus.AWAITING_REVIEW &&
+              review.status !== ReviewStatus.UNDER_REVIEW &&
+              review.status !== ReviewStatus.REVIEWED
             ) {
               review.status = ReviewStatus.AUTO_SUBMITTED;
+              review.reviewStatus = AppraisalReviewStatus.AWAITING_REVIEW;
               review.autoSubmitted = 1;
               review.submissionType = 'AUTO';
               review.submittedDate = now;
@@ -228,6 +228,7 @@ export class QuarterlyReviewCronService {
               employeeId: assignment.employeeId,
               quarter: assignment.quarter,
               status: ReviewStatus.AUTO_SUBMITTED,
+              reviewStatus: AppraisalReviewStatus.AWAITING_REVIEW,
               autoSubmitted: 1,
               submissionType: 'AUTO',
               submittedDate: now,

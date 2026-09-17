@@ -9,17 +9,29 @@ import { MasterDepartmentController } from './controller/master-department.contr
 import { DocumentUploaderModule } from '../common/document-uploader/document-uploader.module';
 import { FileService } from '../common/core/utils/fileType.utils';
 
+import { MasterFinancialYearService } from './service/master-financial-year.service';
+import { MasterFinancialYearController } from './controller/master-financial-year.controller';
+
 @Module({
   imports: [
     TypeOrmModule.forFeature([MasterHolidays, MasterDepartment]),
     DocumentUploaderModule,
   ],
-  controllers: [MasterHolidayController, MasterDepartmentController],
+  controllers: [
+    MasterHolidayController,
+    MasterDepartmentController,
+    MasterFinancialYearController,
+  ],
   providers: [
     MasterHolidayService,
     MasterDepartmentService,
+    MasterFinancialYearService,
     FileService,
   ],
-  exports: [MasterHolidayService, MasterDepartmentService],
+  exports: [
+    MasterHolidayService,
+    MasterDepartmentService,
+    MasterFinancialYearService,
+  ],
 })
 export class MasterModule {}

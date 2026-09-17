@@ -1,15 +1,8 @@
 import { Entity, Column, PrimaryGeneratedColumn } from 'typeorm';
 import { BaseEntity } from '../../../common/core/models/base.entity';
-import { AssignmentMode } from '../enums/quarterly-review.enum';
+import { AssignmentMode, AssignmentStatus } from '../enums/quarterly-review.enum';
 
-export enum AssignmentStatus {
-  ASSIGNED = 'ASSIGNED',
-  IN_PROGRESS = 'IN_PROGRESS',
-  DRAFT = 'DRAFT',
-  SUBMITTED = 'SUBMITTED',
-  AUTO_SUBMITTED = 'AUTO_SUBMITTED',
-  COMPLETED = 'COMPLETED',
-}
+
 
 @Entity('review_assignments')
 export class ReviewAssignment extends BaseEntity {
@@ -21,6 +14,9 @@ export class ReviewAssignment extends BaseEntity {
 
   @Column({ name: 'employee_name', type: 'varchar', length: 150, nullable: true })
   employeeName!: string | null;
+
+  @Column({ name: 'role', type: 'varchar', length: 50, nullable: true })
+  role!: string | null;
 
   @Column({ name: 'quarter', type: 'varchar', length: 50 })
   quarter!: string;
@@ -72,13 +68,6 @@ export class ReviewAssignment extends BaseEntity {
     nullable: true,
   })
   assignmentMode!: AssignmentMode;
-
-  /**
-   * The start of the review period (chosen by the manager in the create form).
-   * The deadline / end-of-period is stored in deadlineAt.
-   */
-  @Column({ name: 'start_date', type: 'date', nullable: true })
-  startDate!: string | null;
 
   /** Set when the 2-day approaching reminder (email + inbox) was sent. */
   @Column({ name: 'reminder_2d_sent_at', type: 'timestamp', nullable: true })

@@ -1,21 +1,50 @@
 export enum ReviewStatus {
-  DRAFT = 'Draft',
-  SUBMITTED = 'Submitted',
-  IN_REVIEW = 'In Review',
+  INITIAL = 'INITIAL',
+  DRAFT = 'DRAFT',
+  ASSIGNED = 'Assigned',
+  AWAITING_REVIEW = 'Awaiting Review',
+  UNDER_REVIEW = 'Under Review',
   REVIEWED = 'Reviewed',
-  APPROVED = 'Approved',
-  COMPLETED = 'Completed',
-  NOT_STARTED = 'Not Started',
+  // Pre-submission review aliases
+  Initial = 'Initial',
+  Draft = 'Draft',
+  SUBMITTED = 'Submitted',
+  SUBMITTED_ALIAS = 'SUBMITTED',
   AUTO_SUBMITTED = 'Auto Submitted',
+  AUTO_SUBMITTED_ALIAS = 'AUTO_SUBMITTED',
+  NOT_STARTED = 'Assigned',
+  IN_REVIEW = 'Under Review',
+  COMPLETED = 'Reviewed',
+  APPROVED = 'Reviewed',
+}
+
+export enum AppraisalReviewStatus {
+  ASSIGNED = 'Assigned',
+  AWAITING_REVIEW = 'Awaiting Review',
+  UNDER_REVIEW = 'Under Review',
+  REVIEWED = 'Reviewed',
+}
+
+export enum AssignmentStatus {
+  ASSIGNED = 'ASSIGNED',
+  AWAITING_REVIEW = 'AWAITING_REVIEW',
+  UNDER_REVIEW = 'UNDER_REVIEW',
+  REVIEWED = 'REVIEWED',
+  // Legacy aliases mapped to canonical values
+  IN_PROGRESS = 'ASSIGNED',
+  DRAFT = 'ASSIGNED',
+  SUBMITTED = 'AWAITING_REVIEW',
+  AUTO_SUBMITTED = 'AWAITING_REVIEW',
+  COMPLETED = 'REVIEWED',
 }
 
 /** Filter values accepted by the manager submissions endpoint via ?status= */
 export enum DisplayStatusFilter {
   ALL = 'ALL',
   ASSIGNED = 'ASSIGNED',
-  PENDING = 'PENDING',
-  IN_REVIEW = 'IN_REVIEW',
-  COMPLETED = 'COMPLETED',
+  AWAITING_REVIEW = 'AWAITING_REVIEW',
+  UNDER_REVIEW = 'UNDER_REVIEW',
+  REVIEWED = 'REVIEWED',
 }
 
 /**
@@ -37,3 +66,4 @@ export enum QuarterLabel {
   Q3 = 'Q3',
   Q4 = 'Q4',
 }
+

@@ -69,7 +69,7 @@ export const getAppraisalQuarterAssignedTemplate = (
       <tr>
         <td align="center" style="padding: 26px 24px;">
           <p style="font-family: sans-serif; font-size: 32px; margin: 0 0 8px 0;">🎉</p>
-          <p style="font-family: sans-serif; font-size: 22px; font-weight: 800; color: #1e40af; margin: 0 0 6px 0;">Congratulations, ${data.employeeName}!</p>
+          <p style="font-family: sans-serif; font-size: 22px; font-weight: 800; color: #1e40af; margin: 0 0 6px 0;">Congratulations, ${data.employeeName}</p>
           <p style="font-family: sans-serif; font-size: 14px; color: #4b5563; margin: 0;">Your Quarterly Appraisal Review has been assigned.</p>
         </td>
       </tr>
@@ -77,7 +77,7 @@ export const getAppraisalQuarterAssignedTemplate = (
 
     <p style="font-family: sans-serif; font-size: 15px; color: #374151; line-height: 1.7; margin: 0 0 24px 0;">
       Your <strong>${data.assignedByRole === 'MANAGER' ? 'Manager' : assignerRoleLabel}</strong>,
-      <strong>${data.assignedByName}</strong>, has assigned your performance appraisal review for the quarter.
+      <strong>${data.assignedByName}</strong>, has assigned your performance appraisal review for the quarter <strong>${data.quarter}</strong>.
       Please log in to WorkSphere and complete your self-assessment before the deadline.
     </p>
 
@@ -891,4 +891,345 @@ export const getAppraisalQuarterDeadlineExpiredTemplate = (
 
   return baseLayout(content, `Quarterly Review Deadline Completed: ${data.quarter}`, `Quarterly Review — ${data.quarter}`);
 };
+
+export interface AppraisalQuarterAccessRequestedParams {
+  employeeName: string;
+  employeeId: string;
+  userRole: string;
+  quarter: string;
+  reason?: string | null;
+  requestedAt?: Date;
+  portalUrl?: string;
+}
+
+export const getAppraisalQuarterAccessRequestedTemplate = (
+  data: AppraisalQuarterAccessRequestedParams,
+): string => {
+  const portalUrl = data.portalUrl || process.env.FRONTEND_URL || 'https://worksphere.inventech-developer.in';
+  const reqDateStr = (data.requestedAt || new Date()).toLocaleDateString('en-IN', {
+    weekday: 'long',
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+  });
+  const reqTimeStr = (data.requestedAt || new Date()).toLocaleTimeString('en-IN', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true,
+  });
+  const roleLabel = data.userRole === 'MANAGER' ? 'Manager' : 'Employee';
+
+  const content = `
+    <!-- Notification Banner -->
+    <table width="100%" border="0" cellspacing="0" cellpadding="0" style="background: linear-gradient(135deg, #fef3c7 0%, #ede9fe 100%); border: 1px solid #fde68a; border-radius: 14px; margin-bottom: 28px;">
+      <tr>
+        <td align="center" style="padding: 26px 24px;">
+          <p style="font-family: sans-serif; font-size: 32px; margin: 0 0 8px 0;">🔑</p>
+          <p style="font-family: sans-serif; font-size: 22px; font-weight: 800; color: #92400e; margin: 0 0 6px 0;">Access Request Pending</p>
+          <p style="font-family: sans-serif; font-size: 14px; color: #4b5563; margin: 0;">${data.employeeName} has requested access to reopen their Quarterly Review.</p>
+        </td>
+      </tr>
+    </table>
+
+    <p style="font-family: sans-serif; font-size: 15px; color: #374151; line-height: 1.7; margin: 0 0 24px 0;">
+      Hello,<br>
+      <strong>${data.employeeName}</strong> (${roleLabel}, ID: ${data.employeeId}) has submitted an access request to reopen their appraisal review for <strong>${data.quarter}</strong>. Please log in to WorkSphere to review and approve or reject this request.
+    </p>
+
+    <!-- Details Card -->
+    <table width="100%" border="0" cellspacing="0" cellpadding="0" style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 14px; margin-bottom: 24px;">
+      <tr>
+        <td style="padding: 24px;">
+          <table width="100%" border="0" cellspacing="0" cellpadding="0" style="margin-bottom: 18px;">
+            <tr>
+              <td style="font-family: sans-serif; font-size: 13px; font-weight: 800; color: #92400e; text-transform: uppercase; letter-spacing: 0.5px;">
+                <span style="font-size: 16px; margin-right: 8px;">📋</span> Request Details
+              </td>
+            </tr>
+          </table>
+
+          <table width="100%" border="0" cellspacing="0" cellpadding="0">
+            <tr>
+              <td width="160" style="padding-bottom: 14px; font-family: sans-serif; font-size: 13px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.3px; vertical-align: top;">Requester</td>
+              <td style="padding-bottom: 14px; font-family: sans-serif; font-size: 14px; font-weight: 700; color: #1f2937; vertical-align: top;">${data.employeeName} (${data.employeeId})</td>
+            </tr>
+            <tr>
+              <td width="160" style="padding-bottom: 14px; font-family: sans-serif; font-size: 13px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.3px; vertical-align: top;">Role</td>
+              <td style="padding-bottom: 14px; font-family: sans-serif; font-size: 14px; font-weight: 700; color: #1f2937; vertical-align: top;">${roleLabel}</td>
+            </tr>
+            <tr>
+              <td width="160" style="padding-bottom: 14px; font-family: sans-serif; font-size: 13px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.3px; vertical-align: top;">Quarter</td>
+              <td style="padding-bottom: 14px; font-family: sans-serif; font-size: 14px; font-weight: 700; color: #1f2937; vertical-align: top;">
+                <span style="background-color: #dbeafe; color: #1e40af; padding: 4px 12px; border-radius: 999px; font-size: 13px; font-weight: 800;">${data.quarter}</span>
+              </td>
+            </tr>
+            <tr>
+              <td width="160" style="padding-bottom: 14px; font-family: sans-serif; font-size: 13px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.3px; vertical-align: top;">Reason</td>
+              <td style="padding-bottom: 14px; font-family: sans-serif; font-size: 14px; color: #374151; vertical-align: top; font-style: italic;">"${data.reason || 'No reason specified'}"</td>
+            </tr>
+            <tr>
+              <td width="160" style="font-family: sans-serif; font-size: 13px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.3px; vertical-align: top;">Requested On</td>
+              <td style="font-family: sans-serif; font-size: 14px; color: #1f2937; vertical-align: top;">${reqDateStr} at ${reqTimeStr}</td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+
+    <table width="100%" border="0" cellspacing="0" cellpadding="0" style="margin: 32px 0 24px 0;">
+      <tr>
+        <td align="center">
+          <a href="${portalUrl}"
+             style="background-color: #f59e0b; color: #ffffff; text-decoration: none;
+                    padding: 14px 40px; border-radius: 8px;
+                    font-family: sans-serif; font-size: 15px; font-weight: 800; display: inline-block;
+                    letter-spacing: 0.3px;">
+            REVIEW ACCESS REQUEST →
+          </a>
+        </td>
+      </tr>
+    </table>
+  `;
+
+  return baseLayout(content, `Quarterly Review Access Requested: ${data.quarter}`, `Quarterly Review — ${data.quarter}`);
+};
+
+export interface AppraisalQuarterAccessConfirmationParams {
+  employeeName: string;
+  quarter: string;
+  reason?: string | null;
+  portalUrl?: string;
+}
+
+export const getAppraisalQuarterAccessConfirmationTemplate = (
+  data: AppraisalQuarterAccessConfirmationParams,
+): string => {
+  const portalUrl = data.portalUrl || process.env.FRONTEND_URL || 'https://worksphere.inventech-developer.in';
+
+  const content = `
+    <!-- Confirmation Banner -->
+    <table width="100%" border="0" cellspacing="0" cellpadding="0" style="background: linear-gradient(135deg, #eff6ff 0%, #f5f3ff 100%); border: 1px solid #bfdbfe; border-radius: 14px; margin-bottom: 28px;">
+      <tr>
+        <td align="center" style="padding: 26px 24px;">
+          <p style="font-family: sans-serif; font-size: 32px; margin: 0 0 8px 0;">📬</p>
+          <p style="font-family: sans-serif; font-size: 22px; font-weight: 800; color: #1e40af; margin: 0 0 6px 0;">Access Request Submitted</p>
+          <p style="font-family: sans-serif; font-size: 14px; color: #4b5563; margin: 0;">Your request for ${data.quarter} has been submitted successfully.</p>
+        </td>
+      </tr>
+    </table>
+
+    <p style="font-family: sans-serif; font-size: 15px; color: #374151; line-height: 1.7; margin: 0 0 24px 0;">
+      Hello <strong>${data.employeeName}</strong>,<br>
+      Your access request to reopen your <strong>${data.quarter}</strong> quarterly appraisal review has been sent to your leadership team for approval. You will receive an email and notification once an action has been taken.
+    </p>
+
+    <!-- Details Card -->
+    <table width="100%" border="0" cellspacing="0" cellpadding="0" style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 14px; margin-bottom: 24px;">
+      <tr>
+        <td style="padding: 24px;">
+          <table width="100%" border="0" cellspacing="0" cellpadding="0">
+            <tr>
+              <td width="160" style="padding-bottom: 14px; font-family: sans-serif; font-size: 13px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.3px; vertical-align: top;">Quarter</td>
+              <td style="padding-bottom: 14px; font-family: sans-serif; font-size: 14px; font-weight: 700; color: #1f2937; vertical-align: top;">
+                <span style="background-color: #dbeafe; color: #1e40af; padding: 4px 12px; border-radius: 999px; font-size: 13px; font-weight: 800;">${data.quarter}</span>
+              </td>
+            </tr>
+            <tr>
+              <td width="160" style="padding-bottom: 14px; font-family: sans-serif; font-size: 13px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.3px; vertical-align: top;">Status</td>
+              <td style="padding-bottom: 14px; font-family: sans-serif; font-size: 14px; font-weight: 700; color: #d97706; vertical-align: top;">
+                <span style="background-color: #fef3c7; color: #b45309; padding: 4px 12px; border-radius: 999px; font-size: 13px; font-weight: 800;">Pending Approval</span>
+              </td>
+            </tr>
+            <tr>
+              <td width="160" style="font-family: sans-serif; font-size: 13px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.3px; vertical-align: top;">Reason Submitted</td>
+              <td style="font-family: sans-serif; font-size: 14px; color: #374151; vertical-align: top; font-style: italic;">"${data.reason || 'None provided'}"</td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+
+    <table width="100%" border="0" cellspacing="0" cellpadding="0" style="margin: 32px 0 24px 0;">
+      <tr>
+        <td align="center">
+          <a href="${portalUrl}"
+             style="background-color: #2563eb; color: #ffffff; text-decoration: none;
+                    padding: 14px 40px; border-radius: 8px;
+                    font-family: sans-serif; font-size: 15px; font-weight: 800; display: inline-block;
+                    letter-spacing: 0.3px;">
+            VIEW APPRAISAL DASHBOARD →
+          </a>
+        </td>
+      </tr>
+    </table>
+  `;
+
+  return baseLayout(content, `Access Request Submitted: ${data.quarter}`, `Quarterly Review — ${data.quarter}`);
+};
+
+export interface AppraisalQuarterAccessApprovedParams {
+  employeeName: string;
+  quarter: string;
+  approverName: string;
+  approverRole: string;
+  accessUntil: Date;
+  remarks?: string | null;
+  portalUrl?: string;
+}
+
+export const getAppraisalQuarterAccessApprovedTemplate = (
+  data: AppraisalQuarterAccessApprovedParams,
+): string => {
+  const portalUrl = data.portalUrl || process.env.FRONTEND_URL || 'https://worksphere.inventech-developer.in';
+  const deadlineDateStr = data.accessUntil.toLocaleDateString('en-IN', {
+    weekday: 'long',
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+  });
+  const deadlineTimeStr = data.accessUntil.toLocaleTimeString('en-IN', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true,
+  });
+
+  const content = `
+    <!-- Approval Banner -->
+    <table width="100%" border="0" cellspacing="0" cellpadding="0" style="background: linear-gradient(135deg, #dcfce7 0%, #ede9fe 100%); border: 1px solid #bbf7d0; border-radius: 14px; margin-bottom: 28px;">
+      <tr>
+        <td align="center" style="padding: 26px 24px;">
+          <p style="font-family: sans-serif; font-size: 32px; margin: 0 0 8px 0;">✅</p>
+          <p style="font-family: sans-serif; font-size: 22px; font-weight: 800; color: #15803d; margin: 0 0 6px 0;">Access Request Approved</p>
+          <p style="font-family: sans-serif; font-size: 14px; color: #4b5563; margin: 0;">Your Quarterly Review for ${data.quarter} has been reopened.</p>
+        </td>
+      </tr>
+    </table>
+
+    <p style="font-family: sans-serif; font-size: 15px; color: #374151; line-height: 1.7; margin: 0 0 24px 0;">
+      Hello <strong>${data.employeeName}</strong>,<br>
+      Your request to reopen the <strong>${data.quarter}</strong> quarterly appraisal review has been <strong>approved</strong> by <strong>${data.approverName}</strong> (${data.approverRole}). You can now edit and complete your submission before the new deadline.
+    </p>
+
+    <!-- Details Card -->
+    <table width="100%" border="0" cellspacing="0" cellpadding="0" style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 14px; margin-bottom: 24px;">
+      <tr>
+        <td style="padding: 24px;">
+          <table width="100%" border="0" cellspacing="0" cellpadding="0">
+            <tr>
+              <td width="160" style="padding-bottom: 14px; font-family: sans-serif; font-size: 13px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.3px; vertical-align: top;">Quarter</td>
+              <td style="padding-bottom: 14px; font-family: sans-serif; font-size: 14px; font-weight: 700; color: #1f2937; vertical-align: top;">
+                <span style="background-color: #dbeafe; color: #1e40af; padding: 4px 12px; border-radius: 999px; font-size: 13px; font-weight: 800;">${data.quarter}</span>
+              </td>
+            </tr>
+            <tr>
+              <td width="160" style="padding-bottom: 14px; font-family: sans-serif; font-size: 13px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.3px; vertical-align: top;">Approved By</td>
+              <td style="padding-bottom: 14px; font-family: sans-serif; font-size: 14px; font-weight: 700; color: #1f2937; vertical-align: top;">${data.approverName} (${data.approverRole})</td>
+            </tr>
+            <tr>
+              <td width="160" style="padding-bottom: 14px; font-family: sans-serif; font-size: 13px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.3px; vertical-align: top;">Access Granted Until</td>
+              <td style="padding-bottom: 14px; font-family: sans-serif; font-size: 14px; font-weight: 700; color: #16a34a; vertical-align: top;">
+                ${deadlineDateStr} at ${deadlineTimeStr}
+              </td>
+            </tr>
+            ${data.remarks ? `
+            <tr>
+              <td width="160" style="font-family: sans-serif; font-size: 13px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.3px; vertical-align: top;">Remarks</td>
+              <td style="font-family: sans-serif; font-size: 14px; color: #374151; vertical-align: top;">${data.remarks}</td>
+            </tr>` : ''}
+          </table>
+        </td>
+      </tr>
+    </table>
+
+    <table width="100%" border="0" cellspacing="0" cellpadding="0" style="margin: 32px 0 24px 0;">
+      <tr>
+        <td align="center">
+          <a href="${portalUrl}"
+             style="background-color: #16a34a; color: #ffffff; text-decoration: none;
+                    padding: 14px 40px; border-radius: 8px;
+                    font-family: sans-serif; font-size: 15px; font-weight: 800; display: inline-block;
+                    letter-spacing: 0.3px;">
+            OPEN QUARTERLY REVIEW →
+          </a>
+        </td>
+      </tr>
+    </table>
+  `;
+
+  return baseLayout(content, `Access Request Approved: ${data.quarter}`, `Quarterly Review — ${data.quarter}`);
+};
+
+export interface AppraisalQuarterAccessRejectedParams {
+  employeeName: string;
+  quarter: string;
+  approverName: string;
+  approverRole: string;
+  reason?: string | null;
+  portalUrl?: string;
+}
+
+export const getAppraisalQuarterAccessRejectedTemplate = (
+  data: AppraisalQuarterAccessRejectedParams,
+): string => {
+  const portalUrl = data.portalUrl || process.env.FRONTEND_URL || 'https://worksphere.inventech-developer.in';
+
+  const content = `
+    <!-- Rejection Banner -->
+    <table width="100%" border="0" cellspacing="0" cellpadding="0" style="background: linear-gradient(135deg, #fee2e2 0%, #ede9fe 100%); border: 1px solid #fecaca; border-radius: 14px; margin-bottom: 28px;">
+      <tr>
+        <td align="center" style="padding: 26px 24px;">
+          <p style="font-family: sans-serif; font-size: 32px; margin: 0 0 8px 0;">❌</p>
+          <p style="font-family: sans-serif; font-size: 22px; font-weight: 800; color: #991b1b; margin: 0 0 6px 0;">Access Request Rejected</p>
+          <p style="font-family: sans-serif; font-size: 14px; color: #4b5563; margin: 0;">Your access request for ${data.quarter} was not approved.</p>
+        </td>
+      </tr>
+    </table>
+
+    <p style="font-family: sans-serif; font-size: 15px; color: #374151; line-height: 1.7; margin: 0 0 24px 0;">
+      Hello <strong>${data.employeeName}</strong>,<br>
+      Your request to reopen the <strong>${data.quarter}</strong> quarterly appraisal review was rejected by <strong>${data.approverName}</strong> (${data.approverRole}).
+    </p>
+
+    <!-- Details Card -->
+    <table width="100%" border="0" cellspacing="0" cellpadding="0" style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 14px; margin-bottom: 24px;">
+      <tr>
+        <td style="padding: 24px;">
+          <table width="100%" border="0" cellspacing="0" cellpadding="0">
+            <tr>
+              <td width="160" style="padding-bottom: 14px; font-family: sans-serif; font-size: 13px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.3px; vertical-align: top;">Quarter</td>
+              <td style="padding-bottom: 14px; font-family: sans-serif; font-size: 14px; font-weight: 700; color: #1f2937; vertical-align: top;">
+                <span style="background-color: #fee2e2; color: #991b1b; padding: 4px 12px; border-radius: 999px; font-size: 13px; font-weight: 800;">${data.quarter}</span>
+              </td>
+            </tr>
+            <tr>
+              <td width="160" style="padding-bottom: 14px; font-family: sans-serif; font-size: 13px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.3px; vertical-align: top;">Actioned By</td>
+              <td style="padding-bottom: 14px; font-family: sans-serif; font-size: 14px; font-weight: 700; color: #1f2937; vertical-align: top;">${data.approverName} (${data.approverRole})</td>
+            </tr>
+            <tr>
+              <td width="160" style="font-family: sans-serif; font-size: 13px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.3px; vertical-align: top;">Reason / Remarks</td>
+              <td style="font-family: sans-serif; font-size: 14px; color: #374151; vertical-align: top; font-style: italic;">"${data.reason || 'None specified'}"</td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+
+    <table width="100%" border="0" cellspacing="0" cellpadding="0" style="margin: 32px 0 24px 0;">
+      <tr>
+        <td align="center">
+          <a href="${portalUrl}"
+             style="background-color: #2563eb; color: #ffffff; text-decoration: none;
+                    padding: 14px 40px; border-radius: 8px;
+                    font-family: sans-serif; font-size: 15px; font-weight: 800; display: inline-block;
+                    letter-spacing: 0.3px;">
+            VIEW APPRAISAL DASHBOARD →
+          </a>
+        </td>
+      </tr>
+    </table>
+  `;
+
+  return baseLayout(content, `Access Request Rejected: ${data.quarter}`, `Quarterly Review — ${data.quarter}`);
+};
+
 

@@ -9,12 +9,16 @@ export interface DeadlineReminderFlags {
   reminderTodaySentAt: Date | null;
 }
 
-/** Normalize a date-only or datetime value to YYYY-MM-DD. */
+/** Normalize a date-only or datetime value to YYYY-MM-DD in IST (+05:30). */
 export function toDateOnly(value: string | Date): string {
   if (value instanceof Date) {
-    const year = value.getFullYear();
-    const month = String(value.getMonth() + 1).padStart(2, '0');
-    const day = String(value.getDate()).padStart(2, '0');
+    if (Number.isNaN(value.getTime())) {
+      throw new Error(`Invalid date value: ${value}`);
+    }
+    const istDate = new Date(value.getTime() + (5 * 60 + 30) * 60 * 1000);
+    const year = istDate.getUTCFullYear();
+    const month = String(istDate.getUTCMonth() + 1).padStart(2, '0');
+    const day = String(istDate.getUTCDate()).padStart(2, '0');
     return `${year}-${month}-${day}`;
   }
   const trimmed = String(value).trim();
@@ -49,11 +53,56 @@ export function toEndOfDayIst(value: string | Date): Date {
   return new Date(`${toDateOnly(value)}T23:59:59.999${IST_OFFSET}`);
 }
 
+export function computeAssignmentDeadline(
+  startDate: string | Date | null | undefined,
+  endDate: string | Date | null | undefined,
+  now = new Date(),
+): {
+  assignedAt: Date;
+  deadlineAt: Date;
+  totalHours: number;
+  days: number;
+} {
+  const todayStr = toDateOnly(now);
+  const startStr = startDate ? toDateOnly(startDate) : todayStr;
+  const endStr = endDate ? toDateOnly(endDate) : startStr;
+
+  const startMidnight = new Date(`${startStr}T00:00:00.000${IST_OFFSET}`);
+  const endMidnight = new Date(`${endStr}T00:00:00.000${IST_OFFSET}`);
+
+  const diffDays = Math.round((endMidnight.getTime() - startMidnight.getTime()) / (24 * 60 * 60 * 1000));
+  const days = Math.max(1, diffDays);
+  const totalHours = days * 24;
+
+  let assignedAt: Date;
+  if (startStr <= todayStr) {
+    // Starting today or in the past: window starts NOW so full 24h per day is given
+    assignedAt = now;
+  } else {
+    // Starting in the future: window starts at 00:00:00 IST of startDate
+    assignedAt = startMidnight;
+  }
+
+  const deadlineAt = new Date(assignedAt.getTime() + totalHours * 60 * 60 * 1000);
+
+  return {
+    assignedAt,
+    deadlineAt,
+    totalHours,
+    days,
+  };
+}
+
 export function assertAssignmentDateRange(startDate: string, endDate: string): void {
-  const start = toStartOfDayIst(startDate);
-  const end = toEndOfDayIst(endDate);
-  if (end.getTime() < start.getTime()) {
-    throw new Error('End date (deadline) must be on or after the start date.');
+  const startStr = toDateOnly(startDate);
+  const endStr = toDateOnly(endDate);
+
+  if (endStr < startStr) {
+    throw new Error('End date (deadline) cannot be earlier than the start date.');
+  }
+
+  if (endStr === startStr) {
+    throw new Error('Please provide at least 24 hours of time. From Date and To Date cannot be the same.');
   }
 }
 
