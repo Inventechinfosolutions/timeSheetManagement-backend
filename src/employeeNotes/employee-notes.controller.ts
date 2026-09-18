@@ -25,6 +25,16 @@ export class EmployeeNotesController {
     return this.employeeNotesService.findAllForEmployee(employeeId);
   }
 
+  /** GET /employee-notes/:employeeId/:id  — get a single note by id */
+  @Get(':employeeId/:id')
+  @ApiOperation({ summary: 'Get a single note by id for an employee' })
+  async findOne(
+    @Param('employeeId') employeeId: string,
+    @Param('id') id: string,
+  ) {
+    return this.employeeNotesService.findOne(employeeId, id);
+  }
+
   /** POST /employee-notes  — create a new note */
   @Post()
   @ApiOperation({ summary: 'Create a new employee note' })
