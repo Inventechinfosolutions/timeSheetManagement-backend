@@ -8,7 +8,7 @@ import { EmployeeDetails } from '../../../employeeTimeSheet/entities/employeeDet
 import { User } from '../../../users/entities/user.entity';
 import { UserType } from '../../../users/enums/user-type.enum';
 import { ManagerEvaluationDto } from '../dto/manager-evaluation.dto';
-import { ReviewStatus, AssignmentMode, AppraisalReviewStatus } from '../../quarterlyReview/enums/quarterly-review.enum';
+import { ReviewStatus, AssignmentMode, AppraisalReviewStatus, DisplayStatusFilter } from '../../quarterlyReview/enums/quarterly-review.enum';
 import { EmailService } from '../../../email/email.service';
 import { NotificationsService } from '../../../notifications/Services/notifications.service';
 import {
@@ -245,96 +245,101 @@ export class ManagerQuarterlyReviewService {
     return (firstInitial + lastInitial).toUpperCase();
   }
 
-  private getDisplayStatus(review: QuarterlyReview, assignment?: ReviewAssignment | null): string {
-    const revStatus = (review.reviewStatus || '').trim().toLowerCase();
-    const st = (review.status || '').trim().toLowerCase();
+  private getDisplayStatus(review: QuarterlyReview, assignment?: ReviewAssignment | null): AppraisalReviewStatus {
+    const reviewStatusLower = (review.reviewStatus || '').trim().toLowerCase();
+    const statusLower = (review.status || '').trim().toLowerCase();
 
-    // 1. Completed / Reviewed by Manager/Admin/CEO -> Reviewed
+    // 1. Reviewed by Manager/Admin/CEO -> Reviewed
     if (
-      st === 'completed' ||
-      st === 'approved' ||
-      st === 'reviewed' ||
-      revStatus === 'reviewed' ||
-      revStatus === 'approved' ||
-      revStatus === 'completed'
+      review.status === ReviewStatus.REVIEWED ||
+      review.reviewStatus === AppraisalReviewStatus.REVIEWED ||
+      statusLower === AppraisalReviewStatus.REVIEWED.toLowerCase() ||
+      reviewStatusLower === AppraisalReviewStatus.REVIEWED.toLowerCase()
     ) {
-      return 'Reviewed';
+      return AppraisalReviewStatus.REVIEWED;
     }
 
     // 2. Saved as Draft by Manager/Admin/CEO during evaluation -> Under Review
     if (
-      revStatus === 'in review' ||
-      revStatus === 'under review' ||
-      revStatus === 'draft' ||
-      st === 'in review' ||
-      st === 'under review'
+      review.reviewStatus === AppraisalReviewStatus.UNDER_REVIEW ||
+      review.status === ReviewStatus.UNDER_REVIEW ||
+      reviewStatusLower === AppraisalReviewStatus.UNDER_REVIEW.toLowerCase() ||
+      statusLower === ReviewStatus.UNDER_REVIEW.toLowerCase()
     ) {
-      return 'Under Review';
+      return AppraisalReviewStatus.UNDER_REVIEW;
     }
 
     // 3. Submitted by Employee or Manager -> Awaiting Review
     if (
-      st === 'submitted' ||
-      st === 'auto submitted' ||
-      st === 'pending' ||
-      st === 'awaiting review' ||
-      st === 'awaiting_review' ||
-      revStatus === 'pending' ||
-      revStatus === 'awaiting review' ||
-      revStatus === 'awaiting_review' ||
+      review.status === ReviewStatus.SUBMITTED ||
+      review.status === ReviewStatus.AUTO_SUBMITTED ||
+      review.status === ReviewStatus.AWAITING_REVIEW ||
+      review.reviewStatus === AppraisalReviewStatus.AWAITING_REVIEW ||
+      statusLower === ReviewStatus.SUBMITTED.toLowerCase() ||
+      statusLower === ReviewStatus.AUTO_SUBMITTED.toLowerCase() ||
+      statusLower === ReviewStatus.AWAITING_REVIEW.toLowerCase() ||
+      reviewStatusLower === AppraisalReviewStatus.AWAITING_REVIEW.toLowerCase() ||
       Boolean(review.submittedDate)
     ) {
-      return 'Awaiting Review';
+      return AppraisalReviewStatus.AWAITING_REVIEW;
     }
 
     // 4. Assigned to employee -> Assigned
-    return 'Assigned';
+    return AppraisalReviewStatus.ASSIGNED;
   }
 
   /** Categorize a raw review or row into standard buckets strictly matching the 4 canonical statuses. */
-  private getStatusBucket(reviewRecord: any): 'assigned' | 'awaiting-review' | 'under-review' | 'reviewed' {
-    const revStatus = (reviewRecord.reviewStatus || '').trim().toLowerCase();
-    const st = (reviewRecord.status || '').trim().toLowerCase();
+  private getStatusBucket(reviewRecord: any): AppraisalReviewStatus {
+    const reviewStatusLower = (reviewRecord.reviewStatus || '').trim().toLowerCase();
+    const statusLower = (reviewRecord.status || '').trim().toLowerCase();
 
     if (
-      ['reviewed', 'approved', 'completed'].includes(revStatus) ||
-      ['reviewed', 'approved', 'completed'].includes(st)
+      reviewRecord.status === ReviewStatus.REVIEWED ||
+      reviewRecord.reviewStatus === AppraisalReviewStatus.REVIEWED ||
+      reviewStatusLower === AppraisalReviewStatus.REVIEWED.toLowerCase() ||
+      statusLower === AppraisalReviewStatus.REVIEWED.toLowerCase()
     ) {
-      return 'reviewed';
+      return AppraisalReviewStatus.REVIEWED;
     }
     if (
-      revStatus === 'in review' ||
-      revStatus === 'under review' ||
-      revStatus === 'draft' ||
-      st === 'in review' ||
-      st === 'under review'
+      reviewRecord.reviewStatus === AppraisalReviewStatus.UNDER_REVIEW ||
+      reviewRecord.status === ReviewStatus.UNDER_REVIEW ||
+      reviewStatusLower === AppraisalReviewStatus.UNDER_REVIEW.toLowerCase() ||
+      statusLower === ReviewStatus.UNDER_REVIEW.toLowerCase()
     ) {
-      return 'under-review';
+      return AppraisalReviewStatus.UNDER_REVIEW;
     }
     if (
-      revStatus === 'pending' ||
-      revStatus === 'awaiting review' ||
-      revStatus === 'awaiting_review' ||
-      st === 'pending' ||
-      st === 'awaiting review' ||
-      st === 'awaiting_review' ||
-      st === 'submitted' ||
-      st === ReviewStatus.SUBMITTED.toLowerCase() ||
-      st === 'auto submitted' ||
-      st === ReviewStatus.AUTO_SUBMITTED.toLowerCase()
+      reviewRecord.status === ReviewStatus.SUBMITTED ||
+      reviewRecord.status === ReviewStatus.AUTO_SUBMITTED ||
+      reviewRecord.status === ReviewStatus.AWAITING_REVIEW ||
+      reviewRecord.reviewStatus === AppraisalReviewStatus.AWAITING_REVIEW ||
+      statusLower === ReviewStatus.SUBMITTED.toLowerCase() ||
+      statusLower === ReviewStatus.AUTO_SUBMITTED.toLowerCase() ||
+      statusLower === ReviewStatus.AWAITING_REVIEW.toLowerCase() ||
+      reviewStatusLower === AppraisalReviewStatus.AWAITING_REVIEW.toLowerCase() ||
+      Boolean(reviewRecord.submittedDate)
     ) {
-      return 'awaiting-review';
+      return AppraisalReviewStatus.AWAITING_REVIEW;
     }
-    return 'assigned';
+    return AppraisalReviewStatus.ASSIGNED;
   }
 
-  private normalizeStatusFilter(statusValue: string): string {
-    const val = (statusValue || '').toLowerCase().replace(/[\s_-]/g, '');
-    if (val === 'underreview' || val === 'inreview') return 'under-review';
-    if (val === 'reviewed' || val === 'completed' || val === 'approved') return 'reviewed';
-    if (val === 'awaitingreview' || val === 'pending' || val === 'submitted') return 'awaiting-review';
-    if (val === 'assigned' || val === 'notstarted' || val === 'draft') return 'assigned';
-    return val;
+  private normalizeStatusFilter(statusValue: string): AppraisalReviewStatus | null {
+    const normalizedVal = (statusValue || '').toLowerCase().replace(/[\s_-]/g, '');
+    const underReviewKey = AppraisalReviewStatus.UNDER_REVIEW.toLowerCase().replace(/[\s_-]/g, '');
+    const inReviewKey = ReviewStatus.IN_REVIEW.toLowerCase().replace(/[\s_-]/g, '');
+    const reviewedKey = AppraisalReviewStatus.REVIEWED.toLowerCase().replace(/[\s_-]/g, '');
+    const awaitingReviewKey = AppraisalReviewStatus.AWAITING_REVIEW.toLowerCase().replace(/[\s_-]/g, '');
+    const submittedKey = ReviewStatus.SUBMITTED.toLowerCase().replace(/[\s_-]/g, '');
+    const assignedKey = AppraisalReviewStatus.ASSIGNED.toLowerCase().replace(/[\s_-]/g, '');
+    const draftKey = ReviewStatus.DRAFT.toLowerCase().replace(/[\s_-]/g, '');
+
+    if (normalizedVal === underReviewKey || normalizedVal === inReviewKey) return AppraisalReviewStatus.UNDER_REVIEW;
+    if (normalizedVal === reviewedKey) return AppraisalReviewStatus.REVIEWED;
+    if (normalizedVal === awaitingReviewKey || normalizedVal === submittedKey) return AppraisalReviewStatus.AWAITING_REVIEW;
+    if (normalizedVal === assignedKey || normalizedVal === draftKey) return AppraisalReviewStatus.ASSIGNED;
+    return null;
   }
 
   private normalizeYear(yearStr: string): string {
@@ -455,7 +460,7 @@ export class ManagerQuarterlyReviewService {
     const sanitized = this.sanitizeReview(review);
     const employeeName = empDetail?.fullName || assignment?.employeeName || review.employeeId;
     const displayStatus = this.getDisplayStatus(review, assignment);
-    const isEvaluated = displayStatus === 'Reviewed';
+    const isEvaluated = displayStatus === AppraisalReviewStatus.REVIEWED;
     const unsubmittedStatuses = ['draft', 'assigned', 'not started', 'not_started', 'in progress', 'in_progress'];
     const revStatusLower = (review.reviewStatus || '').trim().toLowerCase();
     const statusLower = (review.status || '').trim().toLowerCase();
@@ -570,7 +575,7 @@ export class ManagerQuarterlyReviewService {
       assignedAt: assignment?.assignedAt || assignment?.createdAt || null,
       assignedByName: assignment?.assignedByName || null,
       actionType: isEvaluated ? 'view' : (isSubmitted ? 'evaluate' : 'view'),
-      actionLabel: isEvaluated ? 'View Review' : (isSubmitted ? 'Evaluate Now' : 'Assigned'),
+      actionLabel: isEvaluated ? 'View Review' : (isSubmitted ? 'Evaluate Now' : AppraisalReviewStatus.ASSIGNED),
       managerName: review.managerName || assignment?.assignedByName,
       evaluatorName: review.evaluatorName || (isEvaluated ? review.managerName : null),
       evaluatorRole: review.evaluatorRole || (isEvaluated ? (review.managerName === 'CEO & Admin' ? 'CEO' : 'MANAGER') : null),
@@ -631,8 +636,8 @@ export class ManagerQuarterlyReviewService {
       toDate,
       startDate: fromDate,
       endDate: toDate,
-      status: 'Assigned',
-      reviewStatus: 'Assigned',
+      status: ReviewStatus.ASSIGNED,
+      reviewStatus: AppraisalReviewStatus.ASSIGNED,
       finalRating: null,
       ratings: null,
       isFinalRatingHidden: false,
@@ -642,7 +647,7 @@ export class ManagerQuarterlyReviewService {
       assignedAt: assignment.assignedAt || (assignment as any).createdAt || null,
       assignedByName: assignment.assignedByName || null,
       actionType: 'view',
-      actionLabel: 'Assigned',
+      actionLabel: AppraisalReviewStatus.ASSIGNED,
       managerName: assignment.assignedByName || null,
       evaluatorName: null,
       evaluatorRole: null,
@@ -760,7 +765,7 @@ export class ManagerQuarterlyReviewService {
           employeeId: a.employeeId,
           quarter: a.quarter,
           status: ReviewStatus.AUTO_SUBMITTED,
-          reviewStatus: 'Awaiting Review',
+          reviewStatus: AppraisalReviewStatus.AWAITING_REVIEW,
           assignmentId: a.id,
           deadlineAt: a.deadlineAt,
           managerName: a.assignedByName,
@@ -870,11 +875,13 @@ export class ManagerQuarterlyReviewService {
     }
 
     // Filter by status tab if requested
-    if (filters.status && filters.status.toUpperCase() !== 'ALL') {
+    if (filters.status && filters.status.toUpperCase() !== DisplayStatusFilter.ALL) {
       const targetStatus = this.normalizeStatusFilter(filters.status);
-      rows = rows.filter(
-        (rowItem) => this.normalizeStatusFilter(this.getStatusBucket(rowItem)) === targetStatus,
-      );
+      if (targetStatus) {
+        rows = rows.filter(
+          (rowItem) => this.getStatusBucket(rowItem) === targetStatus,
+        );
+      }
     }
 
     // Filter by role if requested (e.g. 'MANAGER' or 'EMPLOYEE')
@@ -1142,8 +1149,8 @@ export class ManagerQuarterlyReviewService {
         const review = latestReviewByEmployee.get(employeeId);
         const isCompleted = Boolean(
           review &&
-          ([ReviewStatus.APPROVED, ReviewStatus.COMPLETED].includes(review.status) ||
-            review.reviewStatus === ReviewStatus.REVIEWED),
+          (review.status === ReviewStatus.REVIEWED ||
+            review.reviewStatus === AppraisalReviewStatus.REVIEWED),
         );
         const hasFinalRating = isCompleted && Boolean(review?.finalRating);
 
@@ -1209,7 +1216,7 @@ export class ManagerQuarterlyReviewService {
 
       const pendingIds = eligibleIds.filter((employeeId) => {
         const review = latestReviewByEmployee.get(employeeId);
-        return !review || ![ReviewStatus.APPROVED, ReviewStatus.COMPLETED].includes(review.status) && review.reviewStatus !== ReviewStatus.REVIEWED;
+        return !review || (review.status !== ReviewStatus.REVIEWED && review.reviewStatus !== AppraisalReviewStatus.REVIEWED);
       });
 
       if (pendingIds.length === 0) {
@@ -1253,11 +1260,11 @@ export class ManagerQuarterlyReviewService {
 
       // Determine requested quarter & financial year
       const rawQuarterString = (queryFilters.quarter || '').trim();
-      const isAllQuartersSelected = !rawQuarterString || rawQuarterString.toUpperCase() === 'ALL';
+      const isAllQuartersSelected = !rawQuarterString || rawQuarterString.toUpperCase() === DisplayStatusFilter.ALL;
       const selectedQuarter = isAllQuartersSelected ? '' : rawQuarterString;
 
       const rawYearString = (queryFilters.financialYear || queryFilters.year || '').trim();
-      const isAllYearsSelected = !rawYearString || rawYearString.toUpperCase() === 'ALL';
+      const isAllYearsSelected = !rawYearString || rawYearString.toUpperCase() === DisplayStatusFilter.ALL;
       const normalizedYearDigits = rawYearString ? this.normalizeYear(rawYearString) : '';
       const selectedFinancialYear = isAllYearsSelected ? '' : (normalizedYearDigits ? `FY${normalizedYearDigits}` : '');
 
@@ -1426,7 +1433,7 @@ export class ManagerQuarterlyReviewService {
             pendingQuarter: primaryPending,
             pendingQuarters: pendingCodes,
             financialYear: existingAssignment.financialYear || selectedFinancialYear,
-            status: existingAssignment.status || 'Assigned',
+            status: existingAssignment.status || AssignmentStatus.ASSIGNED,
             assignedAt: existingAssignment.assignedAt,
             deadlineAt: existingAssignment.deadlineAt,
             assignedByName: existingAssignment.assignedByName,
@@ -1456,7 +1463,7 @@ export class ManagerQuarterlyReviewService {
             pendingQuarter: primaryPending || 'Q2',
             pendingQuarters: pendingCodes,
             financialYear: selectedFinancialYear,
-            status: matchedAssignment?.status || 'Assigned',
+            status: matchedAssignment?.status || AssignmentStatus.ASSIGNED,
             assignedAt: matchedAssignment?.assignedAt || null,
             deadlineAt: matchedAssignment?.deadlineAt || null,
             assignedByName: matchedAssignment?.assignedByName || null,
@@ -1475,34 +1482,32 @@ export class ManagerQuarterlyReviewService {
         const reviewStatusLower = (reviewRow.status || '').toLowerCase();
         const evaluationStatusLower = (reviewRow.reviewStatus || '').toLowerCase();
         const hasSubmittedReviewStatus = [
-          'submitted',
-          'auto submitted',
-          'in review',
-          'under review',
-          'reviewed',
-          'completed',
-          'approved',
+          ReviewStatus.SUBMITTED.toLowerCase(),
+          ReviewStatus.AUTO_SUBMITTED.toLowerCase(),
+          ReviewStatus.IN_REVIEW.toLowerCase(),
+          ReviewStatus.UNDER_REVIEW.toLowerCase(),
+          ReviewStatus.REVIEWED.toLowerCase(),
         ].includes(reviewStatusLower) || [
-          'pending',
-          'in review',
-          'under review',
-          'reviewed',
-          'completed',
-          'approved',
+          AppraisalReviewStatus.UNDER_REVIEW.toLowerCase(),
+          AppraisalReviewStatus.REVIEWED.toLowerCase(),
         ].includes(evaluationStatusLower);
 
-        return hasSubmittedReviewStatus && reviewStatusLower !== 'assigned' && reviewStatusLower !== 'draft';
+        return (
+          hasSubmittedReviewStatus &&
+          reviewStatusLower !== ReviewStatus.ASSIGNED.toLowerCase() &&
+          reviewStatusLower !== ReviewStatus.DRAFT.toLowerCase()
+        );
       };
 
       const actualSubmissionRows = filteredReviewRows.filter(isActualSubmission);
       const pendingReviewsCount = actualSubmissionRows.filter(
-        (reviewItem) => this.getStatusBucket(reviewItem) === 'awaiting-review',
+        (reviewItem) => this.getStatusBucket(reviewItem) === AppraisalReviewStatus.AWAITING_REVIEW,
       ).length;
       const inReviewCount = actualSubmissionRows.filter(
-        (reviewItem) => this.getStatusBucket(reviewItem) === 'under-review',
+        (reviewItem) => this.getStatusBucket(reviewItem) === AppraisalReviewStatus.UNDER_REVIEW,
       ).length;
       const completedCount = actualSubmissionRows.filter(
-        (reviewItem) => this.getStatusBucket(reviewItem) === 'reviewed',
+        (reviewItem) => this.getStatusBucket(reviewItem) === AppraisalReviewStatus.REVIEWED,
       ).length;
       const totalSubmissionsCount = pendingReviewsCount + inReviewCount + completedCount;
 
@@ -1765,8 +1770,8 @@ export class ManagerQuarterlyReviewService {
             toDate,
             startDate: fromDate,
             endDate: toDate,
-            status: 'Assigned',
-            reviewStatus: 'Assigned',
+            status: ReviewStatus.ASSIGNED,
+            reviewStatus: AppraisalReviewStatus.ASSIGNED,
             overview: null,
             achievements: [],
             challenges: [],
@@ -1779,7 +1784,7 @@ export class ManagerQuarterlyReviewService {
             lastModified: assignment.assignedAt,
             finalRating: null,
             actionType: 'view',
-            actionLabel: 'Assigned',
+            actionLabel: AppraisalReviewStatus.ASSIGNED,
             managerName: assignment.assignedByName,
             deadlineAt: assignment.deadlineAt || toDate,
             assignedAt: assignment.assignedAt,
@@ -1814,7 +1819,7 @@ export class ManagerQuarterlyReviewService {
 
       const sanitized = this.sanitizeReview(review);
       const displayStatus = this.getDisplayStatus(review);
-      const isEvaluated = displayStatus === 'Reviewed';
+      const isEvaluated = displayStatus === AppraisalReviewStatus.REVIEWED;
       const averageScore = this.computeAverageRatingScore(review.ratings);
       const parsedRating = averageScore !== null ? averageScore : this.extractRatingValue(review.finalRating);
       const hasFinalRating = parsedRating !== null || Boolean(review.finalRating);
@@ -1929,7 +1934,7 @@ export class ManagerQuarterlyReviewService {
         reviewStatus: displayStatus,
         reviewedOn: isEvaluated ? review.reviewedOn : null,
         actionType: isEvaluated ? 'view' : (isSubmitted ? 'evaluate' : 'view'),
-        actionLabel: isEvaluated ? 'View Review' : (isSubmitted ? 'Evaluate Now' : 'Assigned'),
+        actionLabel: isEvaluated ? 'View Review' : (isSubmitted ? 'Evaluate Now' : AppraisalReviewStatus.ASSIGNED),
         finalRating: shouldHideRating ? null : parsedRating,
         averageRatingScore: shouldHideRating ? null : parsedRating,
         ratings: shouldHideRating ? null : sanitized.ratings,
@@ -2378,7 +2383,7 @@ export class ManagerQuarterlyReviewService {
           assignment.isAccessOpen === 1 &&
           isDeadlinePassed &&
           assignment.status !== AssignmentStatus.SUBMITTED &&
-          assignment.status !== AssignmentStatus.COMPLETED
+          assignment.status !== AssignmentStatus.REVIEWED
         ) {
           liveStatus = AssignmentStatus.AUTO_SUBMITTED;
         }

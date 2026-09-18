@@ -1,23 +1,3 @@
-export enum ReviewStatus {
-  INITIAL = 'INITIAL',
-  DRAFT = 'DRAFT',
-  ASSIGNED = 'Assigned',
-  AWAITING_REVIEW = 'Awaiting Review',
-  UNDER_REVIEW = 'Under Review',
-  REVIEWED = 'Reviewed',
-  // Pre-submission review aliases
-  Initial = 'Initial',
-  Draft = 'Draft',
-  SUBMITTED = 'Submitted',
-  SUBMITTED_ALIAS = 'SUBMITTED',
-  AUTO_SUBMITTED = 'Auto Submitted',
-  AUTO_SUBMITTED_ALIAS = 'AUTO_SUBMITTED',
-  NOT_STARTED = 'Assigned',
-  IN_REVIEW = 'Under Review',
-  COMPLETED = 'Reviewed',
-  APPROVED = 'Reviewed',
-}
-
 export enum AppraisalReviewStatus {
   ASSIGNED = 'Assigned',
   AWAITING_REVIEW = 'Awaiting Review',
@@ -25,12 +5,27 @@ export enum AppraisalReviewStatus {
   REVIEWED = 'Reviewed',
 }
 
+export enum ReviewStatus {
+  INITIAL = 'INITIAL',
+  DRAFT = 'DRAFT',
+  ASSIGNED = 'Assigned',
+  AWAITING_REVIEW = 'Awaiting Review',
+  UNDER_REVIEW = 'Under Review',
+  REVIEWED = 'Reviewed',
+  SUBMITTED = 'Submitted',
+  AUTO_SUBMITTED = 'Auto Submitted',
+  NOT_STARTED = 'Assigned',
+  IN_REVIEW = 'Under Review',
+  COMPLETED = 'Reviewed',
+  APPROVED = 'Reviewed',
+}
+
 export enum AssignmentStatus {
   ASSIGNED = 'ASSIGNED',
   AWAITING_REVIEW = 'AWAITING_REVIEW',
   UNDER_REVIEW = 'UNDER_REVIEW',
   REVIEWED = 'REVIEWED',
-  // Legacy aliases mapped to canonical values
+  // Canonical aliases mapped to assignment workflow
   IN_PROGRESS = 'ASSIGNED',
   DRAFT = 'ASSIGNED',
   SUBMITTED = 'AWAITING_REVIEW',
