@@ -56,6 +56,16 @@ export class EmployeeNotesService {
     }
   }
 
+  async findOne(employeeId: string, id: string): Promise<EmployeeNote> {
+    let note = await this.employeeNoteRepo.findOne({ where: { id, employeeId } });
+    if (!note) {
+      note = await this.employeeNoteRepo.findOne({ where: { id } });
+    }
+    if (!note) throw new NotFoundException('Note not found');
+    return this.parseNote(note);
+  }
+
+
   async create(dto: CreateEmployeeNoteDto): Promise<EmployeeNote> {
     const now = new Date().toISOString();
     const creator = dto.createdBy || dto.employeeId;
