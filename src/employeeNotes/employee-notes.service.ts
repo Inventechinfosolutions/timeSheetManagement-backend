@@ -1,11 +1,13 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException, HttpException, HttpStatus } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
-import { v4 as uuidv4 } from 'uuid';
-import { EmployeeNote, ProjectRow } from './entities/employee-note.entity';
+import { Brackets, Repository } from 'typeorm';
+import { EmployeeNote, NoteFileRecord } from './entities/employee-note.entity';
+import { NoteCategory, NoteType } from './enums/employee-note.enums';
 import { CreateEmployeeNoteDto } from './dto/create-employee-note.dto';
-import { UpdateEmployeeNoteDto, AddProjectRowDto } from './dto/update-employee-note.dto';
+import { UpdateEmployeeNoteDto } from './dto/update-employee-note.dto';
 import { ExportNoteDescriptionDto } from './dto/export-employee-note.dto';
+import { DocumentUploaderService } from '../common/document-uploader/services/document-uploader.service';
+import { DocumentMetaInfo, EntityType, ReferenceType } from '../common/document-uploader/models/documentmetainfo.model';
 import PDFDocument from 'pdfkit';
 
 @Injectable()
@@ -15,26 +17,120 @@ export class EmployeeNotesService {
   constructor(
     @InjectRepository(EmployeeNote)
     private readonly employeeNoteRepo: Repository<EmployeeNote>,
+    @InjectRepository(DocumentMetaInfo)
+    private readonly documentRepo: Repository<DocumentMetaInfo>,
+    private readonly documentUploaderService: DocumentUploaderService,
   ) {}
 
   // ---------------------------------------------------------------------------
   // Helpers
   // ---------------------------------------------------------------------------
 
-  /** Parse the `rows` / `files` JSON stored as longtext in MySQL */
+  /** Normalize employee_notes.files to object_store UUID strings only */
   private parseNote(note: EmployeeNote): EmployeeNote {
-    try {
-      if (note.rows && typeof note.rows === 'string') {
-        note.rows = JSON.parse(note.rows as any);
-      }
-    } catch { note.rows = []; }
+    note.files = this.extractFileKeys(note.files);
+    return note;
+  }
 
-    try {
-      if (note.files && typeof note.files === 'string') {
-        note.files = JSON.parse(note.files as any);
-      }
-    } catch { note.files = []; }
+  /**
+   * PARENT if parent_note_id is empty; CHILD if it points to another note.
+   */
+  private resolveNoteType(parentNoteId?: number | null): NoteType {
+    return parentNoteId != null && Number(parentNoteId) > 0
+      ? NoteType.CHILD
+      : NoteType.PARENT;
+  }
 
+  private extractFileKeys(rawFiles: any): string[] {
+    if (!Array.isArray(rawFiles) || rawFiles.length === 0) return [];
+    const keys: string[] = [];
+    const seen = new Set<string>();
+    for (const f of rawFiles) {
+      const key = typeof f === 'string' ? f : (f?.s3Key || f?.id || f?.key || '');
+      if (key && typeof key === 'string' && !key.startsWith('temp-') && !key.startsWith('note-') && !seen.has(key)) {
+        seen.add(key);
+        keys.push(key);
+      }
+    }
+    return keys;
+  }
+
+  /** Load filename / mime from MinIO using the object_store UUID */
+  private async resolveFileFromStore(id: string): Promise<NoteFileRecord> {
+    const doc = await this.documentRepo.findOne({
+      where: [{ id }, { s3Key: id }],
+    });
+    const s3Key = doc?.s3Key || id;
+    try {
+      const meta = await this.documentUploaderService.getMetaData(s3Key);
+      const name =
+        meta.filename && meta.filename !== 'unknown' ? meta.filename : 'file';
+      return {
+        id: doc?.id || id,
+        name,
+        size: 0,
+        type: meta.mimetype || '',
+        s3Key,
+      };
+    } catch {
+      return { id: doc?.id || id, name: 'file', size: 0, type: '', s3Key };
+    }
+  }
+
+  /**
+   * Point object_store.entityId AND object_store.refId at the same employee_notes.id.
+   * Files uploaded during create land with 0; this is what attaches them after save.
+   */
+  private async linkObjectStoreFiles(noteId: number, files: NoteFileRecord[] | any[]): Promise<void> {
+    if (!noteId || Number(noteId) <= 0) return;
+    const keys = this.extractFileKeys(files);
+    if (keys.length === 0) return;
+    try {
+      let linked = 0;
+      for (const key of keys) {
+        const doc = await this.documentRepo.findOne({
+          where: [{ id: key }, { s3Key: key }],
+        });
+        if (!doc) continue;
+        if (doc.entityType && doc.entityType !== EntityType.EMPLOYEE_NOTE) continue;
+        doc.entityType = EntityType.EMPLOYEE_NOTE;
+        doc.refType = doc.refType || ReferenceType.NOTE_ATTACHMENT;
+        doc.entityId = noteId;
+        doc.refId = noteId;
+        await this.documentRepo.save(doc);
+        linked++;
+      }
+      this.logger.log(`[DOCS] Linked ${linked}/${keys.length} object_store record(s) to noteId=${noteId}`);
+    } catch (err: any) {
+      this.logger.warn(`[DOCS] Failed to link object_store records to note ${noteId}: ${err?.message || err}`);
+    }
+  }
+
+  /**
+   * Hydrate API response files from object_store IDs + MinIO metadata.
+   * Does not persist the hydrated objects back to employee_notes.
+   */
+  private async hydrateNoteFiles(note: EmployeeNote): Promise<EmployeeNote> {
+    this.parseNote(note);
+    try {
+      const storedIds = this.extractFileKeys(note.files);
+      const storeDocs = await this.documentRepo.find({
+        where: { entityType: EntityType.EMPLOYEE_NOTE, entityId: note.id },
+      });
+      const related = storeDocs.filter(
+        (d) => d.entityId === note.id && (d.refId === note.id || d.refId === 0),
+      );
+      const ids = [...storedIds];
+      for (const d of related) {
+        const key = d.id || d.s3Key;
+        if (key && !ids.includes(key) && !ids.includes(d.s3Key)) ids.push(key);
+      }
+      const hydrated = await Promise.all(ids.map((id) => this.resolveFileFromStore(id)));
+      (note as any).files = hydrated;
+    } catch (err: any) {
+      this.logger.warn(`[DOCS] hydrateNoteFiles failed for note ${note.id}: ${err?.message || err}`);
+      (note as any).files = [];
+    }
     return note;
   }
 
@@ -42,13 +138,62 @@ export class EmployeeNotesService {
   // CRUD – Notes
   // ---------------------------------------------------------------------------
 
-  async findAllForEmployee(employeeId: string): Promise<EmployeeNote[]> {
+  async findAllForEmployee(employeeId: string, search?: string): Promise<EmployeeNote[]> {
     try {
-      const notes = await this.employeeNoteRepo.find({
-        where: { employeeId },
-        order: { updatedAt: 'DESC' },
-      });
-      return notes.map((n) => this.parseNote(n));
+      const term = (search || '').trim();
+      const qb = this.employeeNoteRepo
+        .createQueryBuilder('note')
+        .where('note.employeeId = :employeeId', { employeeId })
+        .orderBy('note.updatedAt', 'DESC');
+
+      if (term) {
+        const q = `%${term.replace(/[\\%_]/g, '\\$&').toLowerCase()}%`;
+        qb.andWhere(
+          new Brackets((w) => {
+            w.where('LOWER(note.projectName) LIKE :q', { q }).orWhere(
+              'LOWER(note.title) LIKE :q',
+              { q },
+            );
+          }),
+        );
+      }
+
+      let notes = await qb.getMany();
+
+      if (term && notes.length > 0) {
+        const ids = new Set(notes.map((n) => n.id));
+        const missingParentIds = notes
+          .map((n) => n.parentNoteId)
+          .filter((id): id is number => !!id && !ids.has(id));
+        if (missingParentIds.length > 0) {
+          const parents = await this.employeeNoteRepo.find({
+            where: missingParentIds.map((id) => ({ id, employeeId })),
+          });
+          for (const parent of parents) {
+            if (!ids.has(parent.id)) {
+              notes.push(parent);
+              ids.add(parent.id);
+            }
+          }
+        }
+        const matchedParentIds = notes
+          .filter((n) => !n.parentNoteId)
+          .map((n) => n.id);
+        if (matchedParentIds.length > 0) {
+          const children = await this.employeeNoteRepo.find({
+            where: matchedParentIds.map((id) => ({ parentNoteId: id, employeeId })),
+          });
+          for (const child of children) {
+            if (!ids.has(child.id)) {
+              notes.push(child);
+              ids.add(child.id);
+            }
+          }
+        }
+      }
+
+      const parsed = notes.map((n) => this.parseNote(n));
+      return Promise.all(parsed.map((n) => this.hydrateNoteFiles(n)));
     } catch (err: any) {
       this.logger.error(
         `findAllForEmployee failed for employeeId=${employeeId}: ${err instanceof Error ? err.message : err}`,
@@ -58,177 +203,95 @@ export class EmployeeNotesService {
     }
   }
 
-  async findOne(employeeId: string, id: string): Promise<EmployeeNote> {
-    let note = await this.employeeNoteRepo.findOne({ where: { id, employeeId } });
-    if (!note) {
-      note = await this.employeeNoteRepo.findOne({ where: { id } });
+  async findOne(employeeId: string, id: number | string): Promise<EmployeeNote> {
+    const numId = Number(id);
+    if (!Number.isFinite(numId) || numId <= 0) {
+      throw new NotFoundException('Note not found');
     }
+    const where = employeeId
+      ? { id: numId, employeeId }
+      : { id: numId };
+    const note = await this.employeeNoteRepo.findOne({ where });
     if (!note) throw new NotFoundException('Note not found');
-    return this.parseNote(note);
+    return this.hydrateNoteFiles(this.parseNote(note));
   }
 
 
   async create(dto: CreateEmployeeNoteDto): Promise<EmployeeNote> {
-    const now = new Date().toISOString();
     const creator = dto.createdBy || dto.employeeId;
-
-    // Ensure every row has an id and timestamps
-    const rows: ProjectRow[] = (dto.rows ?? []).map((r) => ({
-      id:        r.id        ?? uuidv4(),
-      title:     r.title     ?? '',
-      notes:     r.notes     ?? '',
-      createdBy: r.createdBy ?? creator,
-      createdAt: r.createdAt ?? now,
-      updatedAt: r.updatedAt ?? now,
-    }));
+    const parentNoteId = dto.parentNoteId != null && Number(dto.parentNoteId) > 0
+      ? Number(dto.parentNoteId)
+      : null;
+    const type = this.resolveNoteType(parentNoteId);
+    const fileIds = this.extractFileKeys(dto.files);
 
     const note = this.employeeNoteRepo.create({
       employeeId:   dto.employeeId,
-      parentNoteId: dto.parentNoteId ?? null,
+      parentNoteId,
+      type,
       projectName:  dto.projectName ?? '',
       title:        dto.title       ?? '',
-      category:     dto.category    ?? 'Personal Note',
-      folder:       dto.folder      ?? 'General',
+      category:     dto.category    ?? NoteCategory.PERSONAL_NOTE,
       content:      dto.content     ?? '',
-      rows:         rows,
-      files:        dto.files       ?? [],
+      files:        fileIds,
       createdBy:    creator,
       updatedBy:    dto.updatedBy   ?? creator,
     });
 
-    // Manually JSON-stringify for longtext columns
-    (note as any).rows  = JSON.stringify(note.rows);
-    (note as any).files = JSON.stringify(note.files);
-
     const saved = await this.employeeNoteRepo.save(note);
-    return this.parseNote(saved);
+
+    await this.linkObjectStoreFiles(saved.id, fileIds.length ? fileIds : (dto.files ?? []));
+
+    return this.hydrateNoteFiles(this.parseNote(saved));
   }
 
-  async update(employeeId: string, id: string, dto: UpdateEmployeeNoteDto): Promise<EmployeeNote> {
-    const existing = await this.employeeNoteRepo.findOne({ where: { id, employeeId } });
+  async update(employeeId: string, id: number | string, dto: UpdateEmployeeNoteDto): Promise<EmployeeNote> {
+    const numId = Number(id);
+    const existing = await this.employeeNoteRepo.findOne({ where: { id: numId, employeeId } });
     if (!existing) throw new NotFoundException('Note not found');
 
-    this.parseNote(existing); // deserialize stored JSON first
+    this.parseNote(existing);
 
     const updater = dto.updatedBy || employeeId;
-    const now     = new Date().toISOString();
 
     if (dto.parentNoteId !== undefined) existing.parentNoteId = dto.parentNoteId ?? null;
+    existing.type = this.resolveNoteType(existing.parentNoteId);
     if (dto.projectName  !== undefined) existing.projectName  = dto.projectName;
     if (dto.title        !== undefined) existing.title        = dto.title;
     if (dto.category     !== undefined) existing.category     = dto.category;
-    if (dto.folder       !== undefined) existing.folder       = dto.folder;
     if (dto.content      !== undefined) existing.content      = dto.content;
     if (dto.createdBy    !== undefined) existing.createdBy    = dto.createdBy;
     existing.updatedBy = updater;
 
-    if (dto.rows !== undefined) {
-      existing.rows = dto.rows.map((r) => ({
-        id:        r.id        ?? uuidv4(),
-        title:     r.title     ?? '',
-        notes:     r.notes     ?? '',
-        createdBy: r.createdBy ?? updater,
-        createdAt: r.createdAt ?? now,
-        updatedAt: now,
-      }));
+    if (dto.files !== undefined) {
+      existing.files = this.extractFileKeys(dto.files);
+      await this.linkObjectStoreFiles(numId, existing.files.length ? existing.files : (dto.files ?? []));
     }
 
-    if (dto.files !== undefined) existing.files = dto.files;
-
-    // Stringify for longtext storage
-    (existing as any).rows  = JSON.stringify(existing.rows  ?? []);
-    (existing as any).files = JSON.stringify(existing.files ?? []);
-
     const saved = await this.employeeNoteRepo.save(existing);
-    return this.parseNote(saved);
+    return this.hydrateNoteFiles(this.parseNote(saved));
   }
 
-  async remove(employeeId: string, id: string): Promise<void> {
-    const existing = await this.employeeNoteRepo.findOne({ where: { id, employeeId } });
+  async remove(employeeId: string, id: number | string): Promise<void> {
+    const numId = Number(id);
+    if (!Number.isFinite(numId) || numId <= 0) {
+      throw new NotFoundException('Note not found');
+    }
+    const existing = await this.employeeNoteRepo.findOne({ where: { id: numId, employeeId } });
     if (!existing) throw new NotFoundException('Note not found');
-    await this.employeeNoteRepo.remove(existing);
-  }
 
-  // ---------------------------------------------------------------------------
-  // Sub-table rows (project detail rows inside a Project Note)
-  // ---------------------------------------------------------------------------
+    const childDelete = await this.employeeNoteRepo
+      .createQueryBuilder()
+      .delete()
+      .from(EmployeeNote)
+      .where('parent_note_id = :parentId', { parentId: numId })
+      .execute();
 
-  /** Add a new row to an existing note's sub-table */
-  async addRow(employeeId: string, noteId: string, dto: AddProjectRowDto): Promise<EmployeeNote> {
-    const note = await this.employeeNoteRepo.findOne({ where: { id: noteId, employeeId } });
-    if (!note) throw new NotFoundException('Note not found');
-    this.parseNote(note);
+    this.logger.log(
+      `Deleted ${childDelete.affected ?? 0} child note(s) with parent_note_id=${numId}`,
+    );
 
-    const now = new Date().toISOString();
-    const creator = dto.createdBy || employeeId;
-
-    const newRow: ProjectRow = {
-      id:        uuidv4(),
-      title:     dto.title     ?? '',
-      notes:     dto.notes     ?? '',
-      createdBy: creator,
-      createdAt: now,
-      updatedAt: now,
-    };
-
-    const rows = Array.isArray(note.rows) ? note.rows : [];
-    rows.push(newRow);
-    note.rows = rows;
-
-    (note as any).rows  = JSON.stringify(note.rows);
-    (note as any).files = JSON.stringify(note.files ?? []);
-
-    const saved = await this.employeeNoteRepo.save(note);
-    return this.parseNote(saved);
-  }
-
-  /** Update a specific row inside a note's sub-table */
-  async updateRow(
-    employeeId: string,
-    noteId: string,
-    rowId: string,
-    dto: AddProjectRowDto,
-  ): Promise<EmployeeNote> {
-    const note = await this.employeeNoteRepo.findOne({ where: { id: noteId, employeeId } });
-    if (!note) throw new NotFoundException('Note not found');
-    this.parseNote(note);
-
-    const rows = Array.isArray(note.rows) ? note.rows : [];
-    const idx  = rows.findIndex((r) => r.id === rowId);
-    if (idx === -1) throw new NotFoundException('Row not found');
-
-    const now = new Date().toISOString();
-    rows[idx] = {
-      ...rows[idx],
-      ...(dto.title !== undefined ? { title: dto.title } : {}),
-      ...(dto.notes !== undefined ? { notes: dto.notes } : {}),
-      updatedAt: now,
-    };
-    note.rows = rows;
-
-    (note as any).rows  = JSON.stringify(note.rows);
-    (note as any).files = JSON.stringify(note.files ?? []);
-
-    const saved = await this.employeeNoteRepo.save(note);
-    return this.parseNote(saved);
-  }
-
-  /** Delete a specific row from a note's sub-table */
-  async removeRow(employeeId: string, noteId: string, rowId: string): Promise<EmployeeNote> {
-    const note = await this.employeeNoteRepo.findOne({ where: { id: noteId, employeeId } });
-    if (!note) throw new NotFoundException('Note not found');
-    this.parseNote(note);
-
-    const rows = Array.isArray(note.rows) ? note.rows : [];
-    const filtered = rows.filter((r) => r.id !== rowId);
-    if (filtered.length === rows.length) throw new NotFoundException('Row not found');
-    note.rows = filtered;
-
-    (note as any).rows  = JSON.stringify(note.rows);
-    (note as any).files = JSON.stringify(note.files ?? []);
-
-    const saved = await this.employeeNoteRepo.save(note);
-    return this.parseNote(saved);
+    await this.employeeNoteRepo.delete({ id: numId, employeeId });
   }
 
   // ---------------------------------------------------------------------------
@@ -272,13 +335,24 @@ export class EmployeeNotesService {
         ? `<h1 style="font-size: 20pt; font-weight: bold; color: #000000; margin-top: 0; margin-bottom: 14pt; line-height: 1.3;">${this.escapeHtml(displayTitle)}</h1>`
         : '';
       const htmlDoc = `<!DOCTYPE html>
-<html><head><meta charset="utf-8">
+<html xmlns:o="urn:schemas-microsoft-com:office:office"
+      xmlns:w="urn:schemas-microsoft-com:office:word"
+      xmlns="http://www.w3.org/TR/REC-html40">
+<head><meta charset="utf-8">
 <style>
   body { font-family: Calibri, Arial, sans-serif; margin: 2cm; color: #1e293b; }
   .note-body { font-size: 11pt; line-height: 1.65; color: #334155; }
-  .note-body p { margin-bottom: 8pt; }
-  .note-body ul, .note-body ol { padding-left: 20pt; margin-bottom: 8pt; }
-  .note-body li { margin-bottom: 4pt; }
+  .note-body p { margin: 0 0 8pt 0; }
+  .note-body h1, .note-body h2, .note-body h3 { color: #0f172a; margin: 10pt 0 6pt 0; }
+  .note-body ul, .note-body ol { margin: 4pt 0 10pt 0; padding-left: 24pt; }
+  .note-body ul ul, .note-body ol ol, .note-body ul ol, .note-body ol ul { margin: 3pt 0 3pt 0; padding-left: 20pt; }
+  .note-body li { margin: 0 0 4pt 0; line-height: 1.5; }
+  .note-body ul { list-style-type: disc; }
+  .note-body ul ul { list-style-type: circle; }
+  .note-body ul ul ul { list-style-type: square; }
+  .note-body ol { list-style-type: decimal; }
+  .note-body ol ol { list-style-type: lower-alpha; }
+  .note-body ol ol ol { list-style-type: lower-roman; }
   .note-body blockquote { border-left: 4px solid #4318FF; background: #f8fafc; padding: 6pt 12pt; color: #475569; font-style: italic; margin: 8pt 0; }
 </style></head><body>
 ${titleHtml}
@@ -319,26 +393,19 @@ ${titleHtml}
    */
   async exportNoteById(
     employeeId: string,
-    id: string,
+    id: number | string,
     format: string = 'pdf',
   ): Promise<{ buffer: Buffer; filename: string; contentType: string }> {
     const note = await this.findOne(employeeId, id);
     const title = note.title || note.projectName || 'Note';
-    let content = note.content || '';
-
-    // If it's a project note and has sub-table rows, combine them if main content is empty
-    if (!content.trim() && Array.isArray(note.rows) && note.rows.length > 0) {
-      content = note.rows
-        .map((r) => `<h2>${this.escapeHtml(r.title || 'Row')}</h2>${r.notes || ''}`)
-        .join('<br/>');
-    }
+    const content = note.content || '';
 
     return this.exportDescription({
       htmlContent: content,
       title,
       format: (format as any) || 'pdf',
       employeeId,
-      noteId: id,
+      noteId: String(id),
     });
   }
 
@@ -391,24 +458,20 @@ ${titleHtml}
               .fontSize(11)
               .fillColor('#334155')
               .text(block.text || '', { lineGap: 3, paragraphGap: 8 });
-          } else if (block.type === 'ul' && block.items) {
+          } else if (block.type === 'list' && block.items) {
             for (const item of block.items) {
+              const indent = 16 + item.depth * 18;
               doc
                 .font('Helvetica')
                 .fontSize(11)
                 .fillColor('#334155')
-                .text(`•   ${item}`, { indent: 16, lineGap: 2.5, paragraphGap: 4 });
+                .text(`${item.marker}  ${item.text}`, {
+                  indent,
+                  lineGap: 2.5,
+                  paragraphGap: 3,
+                });
             }
-            doc.moveDown(0.3);
-          } else if (block.type === 'ol' && block.items) {
-            block.items.forEach((item, idx) => {
-              doc
-                .font('Helvetica')
-                .fontSize(11)
-                .fillColor('#334155')
-                .text(`${idx + 1}.   ${item}`, { indent: 16, lineGap: 2.5, paragraphGap: 4 });
-            });
-            doc.moveDown(0.3);
+            doc.moveDown(0.25);
           } else if (block.type === 'blockquote') {
             const startY = doc.y;
             doc
@@ -441,42 +504,30 @@ ${titleHtml}
   }
 
   private parseHtmlToBlocks(html: string): Array<{
-    type: 'h1' | 'h2' | 'p' | 'ul' | 'ol' | 'blockquote';
+    type: 'h1' | 'h2' | 'p' | 'list' | 'blockquote';
     text?: string;
-    items?: string[];
+    items?: Array<{ text: string; depth: number; marker: string }>;
   }> {
     const blocks: Array<{
-      type: 'h1' | 'h2' | 'p' | 'ul' | 'ol' | 'blockquote';
+      type: 'h1' | 'h2' | 'p' | 'list' | 'blockquote';
       text?: string;
-      items?: string[];
+      items?: Array<{ text: string; depth: number; marker: string }>;
     }> = [];
 
-    const blockRegex = /<(h[1-3]|p|ul|ol|blockquote)(?:[^>]*)>([\s\S]*?)<\/\1>/gi;
-    let match: RegExpExecArray | null;
+    const topBlocks = this.splitTopLevelTags(html, ['h1', 'h2', 'h3', 'p', 'ul', 'ol', 'blockquote']);
 
-    while ((match = blockRegex.exec(html)) !== null) {
-      const tag = match[1].toLowerCase();
-      const inner = match[2];
-
-      if (tag === 'ul' || tag === 'ol') {
-        const items: string[] = [];
-        const liRegex = /<li(?:[^>]*)>([\s\S]*?)<\/li>/gi;
-        let liMatch: RegExpExecArray | null;
-        while ((liMatch = liRegex.exec(inner)) !== null) {
-          const text = this.stripTags(liMatch[1]);
-          if (text) items.push(text);
-        }
-        if (items.length > 0) {
-          blocks.push({ type: tag as 'ul' | 'ol', items });
-        }
-      } else if (tag === 'h1' || tag === 'h2' || tag === 'h3') {
-        const text = this.stripTags(inner);
-        if (text) blocks.push({ type: tag === 'h1' ? 'h1' : 'h2', text });
-      } else if (tag === 'blockquote') {
-        const text = this.stripTags(inner);
+    for (const block of topBlocks) {
+      if (block.tag === 'ul' || block.tag === 'ol') {
+        const items = this.parseNestedListItems(block.inner, block.tag === 'ol', 0);
+        if (items.length > 0) blocks.push({ type: 'list', items });
+      } else if (block.tag === 'h1' || block.tag === 'h2' || block.tag === 'h3') {
+        const text = this.stripTags(block.inner);
+        if (text) blocks.push({ type: block.tag === 'h1' ? 'h1' : 'h2', text });
+      } else if (block.tag === 'blockquote') {
+        const text = this.stripTags(block.inner);
         if (text) blocks.push({ type: 'blockquote', text });
       } else {
-        const text = this.stripTags(inner);
+        const text = this.stripTags(block.inner);
         if (text) blocks.push({ type: 'p', text });
       }
     }
@@ -492,6 +543,97 @@ ${titleHtml}
     }
 
     return blocks;
+  }
+
+  private splitTopLevelTags(
+    html: string,
+    tags: string[],
+  ): Array<{ tag: string; inner: string }> {
+    const blocks: Array<{ tag: string; inner: string }> = [];
+    const openRe = new RegExp(`<(${tags.join('|')})\\b[^>]*>`, 'gi');
+    let match: RegExpExecArray | null;
+    while ((match = openRe.exec(html)) !== null) {
+      const tag = match[1].toLowerCase();
+      const innerStart = match.index + match[0].length;
+      const close = this.findMatchingClose(html, tag, innerStart);
+      if (close < 0) continue;
+      blocks.push({ tag, inner: html.slice(innerStart, close) });
+      openRe.lastIndex = close + tag.length + 3;
+    }
+    return blocks;
+  }
+
+  private findMatchingClose(html: string, tag: string, from: number): number {
+    const openRe = new RegExp(`<${tag}\\b[^>]*>`, 'gi');
+    const closeRe = new RegExp(`</${tag}>`, 'gi');
+    let depth = 1;
+    let i = from;
+    while (i < html.length && depth > 0) {
+      openRe.lastIndex = i;
+      closeRe.lastIndex = i;
+      const openMatch = openRe.exec(html);
+      const closeMatch = closeRe.exec(html);
+      if (!closeMatch) return -1;
+      if (openMatch && openMatch.index < closeMatch.index) {
+        depth++;
+        i = openMatch.index + openMatch[0].length;
+      } else {
+        depth--;
+        if (depth === 0) return closeMatch.index;
+        i = closeMatch.index + closeMatch[0].length;
+      }
+    }
+    return -1;
+  }
+
+  private parseNestedListItems(
+    innerHtml: string,
+    ordered: boolean,
+    depth: number,
+  ): Array<{ text: string; depth: number; marker: string }> {
+    const items: Array<{ text: string; depth: number; marker: string }> = [];
+    const lis = this.splitTopLevelTags(innerHtml, ['li']);
+    lis.forEach((li, idx) => {
+      const nestedLists = this.splitTopLevelTags(li.inner, ['ul', 'ol']);
+      let textHtml = li.inner;
+      for (const nested of nestedLists) {
+        const full = this.extractFullTag(li.inner, nested.tag, nested.inner);
+        if (full) textHtml = textHtml.replace(full, '');
+      }
+      const text = this.stripTags(textHtml);
+      if (text) {
+        items.push({
+          text,
+          depth,
+          marker: this.listMarker(ordered, idx, depth),
+        });
+      }
+      for (const nested of nestedLists) {
+        items.push(
+          ...this.parseNestedListItems(nested.inner, nested.tag === 'ol', depth + 1),
+        );
+      }
+    });
+    return items;
+  }
+
+  private extractFullTag(html: string, tag: string, inner: string): string | null {
+    const idx = html.indexOf(inner);
+    if (idx < 0) return null;
+    const openStart = html.lastIndexOf('<', idx - 1);
+    const close = `</${tag}>`;
+    const closeIdx = html.indexOf(close, idx + inner.length);
+    if (openStart < 0 || closeIdx < 0) return null;
+    return html.slice(openStart, closeIdx + close.length);
+  }
+
+  private listMarker(ordered: boolean, index: number, depth: number): string {
+    if (!ordered) {
+      return depth === 0 ? '•' : depth === 1 ? '◦' : '▪';
+    }
+    if (depth === 0) return `${index + 1}.`;
+    if (depth === 1) return `${String.fromCharCode(97 + (index % 26))}.`;
+    return `${index + 1}.`;
   }
 
   private stripTags(s: string): string {
@@ -515,5 +657,152 @@ ${titleHtml}
       .replace(/"/g, '&quot;')
       .replace(/'/g, '&#039;');
   }
+
+  // ---------------------------------------------------------------------------
+  // Leave Management Standard Document Uploader Methods
+  // ---------------------------------------------------------------------------
+
+  async uploadDocument(
+    documents: Express.Multer.File[],
+    refType: ReferenceType,
+    refId: number,
+    entityType: EntityType,
+    entityId: number,
+  ) {
+    this.logger.log(
+      `[DOCS] Uploading ${documents.length} document(s) for note entityId=${entityId}, refId=${refId}`,
+    );
+    try {
+      const uploadPromises = documents.map(async (doc) => {
+        const details = new DocumentMetaInfo();
+        details.refId = refId;
+        details.refType = refType;
+        details.entityId = entityId;
+        details.entityType = entityType;
+
+        return await this.documentUploaderService.uploadImage(doc, details);
+      });
+
+      const results = await Promise.all(uploadPromises);
+      this.logger.log(
+        `[DOCS] Successfully uploaded ${results.length} document(s)`,
+      );
+
+      // Sync with note.files column if refId or entityId matches an existing note
+      const noteId = refId || entityId;
+      if (noteId && noteId !== 0) {
+        try {
+          const note = await this.employeeNoteRepo.findOne({ where: { id: noteId } });
+          if (note) {
+            this.parseNote(note);
+            const existingIds = this.extractFileKeys(note.files);
+            const newIds = results.map((uploaded) => uploaded.key).filter(Boolean);
+            note.files = Array.from(new Set([...existingIds, ...newIds]));
+            await this.employeeNoteRepo.save(note);
+          }
+        } catch (err) {
+          this.logger.warn(`Could not sync note.files for noteId=${noteId}: ${err}`);
+        }
+      }
+
+      return {
+        success: true,
+        message: 'Documents uploaded successfully',
+        data: results,
+      };
+    } catch (error: any) {
+      this.logger.error(`[DOCS] Upload failed: ${error.message}`, error.stack);
+      throw new HttpException(
+        error.message ? `Error uploading documents: ${error.message}` : 'Error uploading documents',
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
+  }
+
+  async getAllFiles(
+    entityType: EntityType,
+    entityId: number,
+    refId: number,
+    referenceType: ReferenceType,
+  ) {
+    this.logger.log(
+      `[DOCS] Getting all files for entity ${entityType} ID ${entityId}, refId ${refId}`,
+    );
+    try {
+      return await this.documentUploaderService.getAllDocs(
+        entityType,
+        entityId,
+        referenceType,
+        refId,
+      );
+    } catch (error: any) {
+      this.logger.error(`[DOCS] Failed to get files: ${error.message}`);
+      throw new HttpException(
+        'Failed to fetch documents',
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
+  }
+
+  async deleteDocument(
+    entityType: EntityType,
+    entityId: number,
+    refId: number,
+    key: string,
+  ) {
+    this.logger.log(`[DOCS] Deleting document key=${key} for entityId=${entityId}, refId=${refId}`);
+    try {
+      const result = await this.documentUploaderService.deleteDoc(key);
+
+      const noteId = refId || entityId;
+      if (noteId && noteId !== 0) {
+        try {
+          const note = await this.employeeNoteRepo.findOne({ where: { id: noteId } });
+          if (note) {
+            this.parseNote(note);
+            note.files = this.extractFileKeys(note.files).filter((id) => id !== key);
+            await this.employeeNoteRepo.save(note);
+          }
+        } catch (err) {
+          this.logger.warn(`Could not sync note.files on delete for noteId=${noteId}: ${err}`);
+        }
+      }
+
+      return result;
+    } catch (error: any) {
+      this.logger.error(`[DOCS] Delete failed: ${error.message}`, error.stack);
+      if (error instanceof HttpException) throw error;
+      throw new HttpException(
+        'Error deleting document',
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
+  }
+
+  async validateEntity(
+    entityType: EntityType,
+    entityId: number,
+    refId: number,
+  ) {
+    try {
+      if (entityType === EntityType.EMPLOYEE_NOTE) {
+        const noteId = refId !== 0 ? refId : entityId;
+        if (noteId !== 0) {
+          const note = await this.employeeNoteRepo.findOne({ where: { id: noteId } });
+          if (!note) {
+            throw new NotFoundException(`Employee note with ID ${noteId} not found`);
+          }
+        }
+      }
+    } catch (error: any) {
+      this.logger.error(`[DOCS] Entity validation failed: ${error.message}`);
+      if (error instanceof HttpException) throw error;
+      throw new HttpException(
+        'Validation error',
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
+  }
 }
+
 
