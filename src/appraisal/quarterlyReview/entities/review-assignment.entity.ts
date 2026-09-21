@@ -1,0 +1,87 @@
+import { Entity, Column, PrimaryGeneratedColumn } from 'typeorm';
+import { BaseEntity } from '../../../common/core/models/base.entity';
+import { AssignmentMode, AssignmentStatus } from '../enums/quarterly-review.enum';
+
+
+
+@Entity('review_assignments')
+export class ReviewAssignment extends BaseEntity {
+  @PrimaryGeneratedColumn()
+  id!: number;
+
+  @Column({ name: 'employee_id', type: 'varchar', length: 100 })
+  employeeId!: string;
+
+  @Column({ name: 'employee_name', type: 'varchar', length: 150, nullable: true })
+  employeeName!: string | null;
+
+  @Column({ name: 'role', type: 'varchar', length: 50, nullable: true })
+  role!: string | null;
+
+  @Column({ name: 'quarter', type: 'varchar', length: 50 })
+  quarter!: string;
+
+  @Column({ name: 'financial_year', type: 'varchar', length: 50, nullable: true })
+  financialYear!: string | null;
+
+  @Column({ name: 'assigned_by_id', type: 'varchar', length: 100 })
+  assignedById!: string;
+
+  @Column({ name: 'assigned_by_name', type: 'varchar', length: 150, nullable: true })
+  assignedByName!: string | null;
+
+  @Column({ name: 'assigned_by_role', type: 'varchar', length: 50 })
+  assignedByRole!: 'MANAGER' | 'ADMIN' | 'CEO';
+
+  @Column({ name: 'assigned_at', type: 'timestamp' })
+  assignedAt!: Date;
+
+  @Column({ name: 'deadline_at', type: 'timestamp' })
+  deadlineAt!: Date;
+
+  @Column({
+    name: 'status',
+    type: 'varchar',
+    length: 50,
+    default: AssignmentStatus.ASSIGNED,
+  })
+  status!: AssignmentStatus;
+
+  @Column({ name: 'is_access_open', type: 'tinyint', default: 1 })
+  isAccessOpen!: number;
+
+  @Column({ name: 'access_request_eligible_until', type: 'timestamp', nullable: true })
+  accessRequestEligibleUntil!: Date | null;
+
+  @Column({ name: 'notes', type: 'text', nullable: true })
+  notes!: string | null;
+
+  /**
+   * Tracks whether this assignment was created for an individual employee
+   * or broadcast to all mapped team members at once.
+   */
+  @Column({
+    name: 'assignment_mode',
+    type: 'varchar',
+    length: 20,
+    default: AssignmentMode.INDIVIDUAL,
+    nullable: true,
+  })
+  assignmentMode!: AssignmentMode;
+
+  /** Set when the 2-day approaching reminder (email + inbox) was sent. */
+  @Column({ name: 'reminder_2d_sent_at', type: 'timestamp', nullable: true })
+  reminder2dSentAt!: Date | null;
+
+  /** Set when the 1-day approaching reminder (email + inbox) was sent. */
+  @Column({ name: 'reminder_1d_sent_at', type: 'timestamp', nullable: true })
+  reminder1dSentAt!: Date | null;
+
+  /** Set when the same-day approaching reminder (email + inbox) was sent. */
+  @Column({ name: 'reminder_today_sent_at', type: 'timestamp', nullable: true })
+  reminderTodaySentAt!: Date | null;
+
+  /** Set when the deadline-expired / request-access-again warning was sent. */
+  @Column({ name: 'deadline_expired_notified_at', type: 'timestamp', nullable: true })
+  deadlineExpiredNotifiedAt!: Date | null;
+}

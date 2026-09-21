@@ -8,6 +8,7 @@ export enum ReferenceType {
   DOCUMENT = 'DOCUMENT',
   PROJECT_DOCUMENT = 'PROJECT_DOCUMENT',
   PROJECT_PHOTO = 'PROJECT_PHOTO',
+  QUARTERLY_REVIEW_DOCUMENT = 'QUARTERLY_REVIEW_DOCUMENT',
   // Add more as needed
 }
 
@@ -17,6 +18,7 @@ export enum EntityType {
   EMPLOYEE = 'EMPLOYEE',
   LEAVE_REQUEST = 'LEAVE_REQUEST',
   PROJECT = 'PROJECT',
+  QUARTERLY_REVIEW = 'QUARTERLY_REVIEW',
   // Add more as needed
 }
 
@@ -29,8 +31,8 @@ export class DocumentMetaInfo extends BaseEntity {
   refId: number;
 
   @Column({
-    type: 'enum',
-    enum: ReferenceType,
+    type: 'varchar',
+    length: 255,
     nullable: false,
   })
   refType: ReferenceType;
@@ -39,8 +41,8 @@ export class DocumentMetaInfo extends BaseEntity {
   entityId: number;
 
   @Column({
-    type: 'enum',
-    enum: EntityType,
+    type: 'varchar',
+    length: 255,
     nullable: false,
   })
   entityType: EntityType;
