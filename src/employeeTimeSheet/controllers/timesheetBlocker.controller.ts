@@ -16,7 +16,7 @@ export class TimesheetBlockerController {
     try {
       this.logger.log(`Creating timesheet blocker for employee: ${data.employeeId}`);
       const user = req.user;
-      const isAdmin = user?.userType === UserType.ADMIN;
+      const isAdmin = user?.userType === UserType.ADMIN || user?.userType === UserType.CEO;
 
       // Set the blocker's identity as strictly the role (Admin or Manager)
       data.blockedBy = isAdmin ? UserType.ADMIN : UserType.MANAGER;
@@ -44,7 +44,7 @@ export class TimesheetBlockerController {
     try {
       this.logger.log(`Removing timesheet blocker ID: ${id}`);
       const user = req.user;
-      const isAdmin = user?.userType === UserType.ADMIN;
+      const isAdmin = user?.userType === UserType.ADMIN || user?.userType === UserType.CEO;
 
       // Check for Manager Role
       const roleUpper = (user?.role || '').toUpperCase();

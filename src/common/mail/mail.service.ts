@@ -18,16 +18,27 @@ export class MailService {
 
   async sendMailAsync(to: string, subject: string, text: string, html?: string, cc?: string[], replyTo?: string) {
     this.logger.debug(`Adding email job to queue for ${to}...`);
-    this.mailQueue.add('send-email', {
-      to,
-      subject,
-      text,
-      html,
-      cc,
-      replyTo,
-    }).catch(err => {
-      this.logger.error(`Failed to add email job to queue for ${to}: ${err.message}`);
-    });
+    try {
+      if (this.mailQueue) {
+        await this.mailQueue.add('send-email', {
+          to,
+          subject,
+          text,
+          html,
+          cc,
+          replyTo,
+        });
+      } else {
+        await this.sendMail(to, subject, text, html, cc, replyTo);
+      }
+    } catch (err: any) {
+      this.logger.warn(`Failed to add email job to queue for ${to}: ${err.message}. Sending directly...`);
+      try {
+        await this.sendMail(to, subject, text, html, cc, replyTo);
+      } catch (directErr: any) {
+        this.logger.error(`Direct email send failed for ${to}: ${directErr.message}`);
+      }
+    }
   }
 
   private createTransporter() {
