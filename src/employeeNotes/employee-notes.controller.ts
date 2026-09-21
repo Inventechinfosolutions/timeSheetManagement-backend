@@ -1,11 +1,12 @@
 import {
   Controller, Get, Post, Put, Delete,
-  Param, Body, Logger, HttpCode, HttpStatus,
+  Param, Body, Query, Res, Logger, HttpCode, HttpStatus, HttpException,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
 import { EmployeeNotesService } from './employee-notes.service';
 import { CreateEmployeeNoteDto } from './dto/create-employee-note.dto';
 import { UpdateEmployeeNoteDto, AddProjectRowDto } from './dto/update-employee-note.dto';
+import { ExportNoteDescriptionDto } from './dto/export-employee-note.dto';
 
 @ApiTags('Employee Notes')
 @Controller('employee-notes')
@@ -33,6 +34,61 @@ export class EmployeeNotesController {
     @Param('id') id: string,
   ) {
     return this.employeeNotesService.findOne(employeeId, id);
+  }
+
+  /** POST /employee-notes/export  — export note description as PDF or Doc */
+  @Post('export')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Export note description as PDF, Word (.doc), or text' })
+  async exportDescription(
+    @Body() dto: ExportNoteDescriptionDto,
+    @Res() res: any,
+  ) {
+    try {
+      this.logger.log(`Exporting note description in format=${dto.format}, title=${dto.title || 'untitled'}`);
+      const { buffer, filename, contentType } = await this.employeeNotesService.exportDescription(dto);
+      res.set({
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        'Pragma': 'no-cache',
+        'Expires': '0',
+        'Content-Type': contentType,
+        'Content-Disposition': `attachment; filename="${filename}"`,
+        'Content-Length': buffer.length,
+      });
+      res.send(buffer);
+    } catch (err: any) {
+      this.logger.error(`Export failed: ${err.message}`, err.stack);
+      if (err instanceof HttpException) throw err;
+      throw new HttpException(err.message || 'Failed to export document', HttpStatus.INTERNAL_SERVER_ERROR);
+    }
+  }
+
+  /** GET /employee-notes/:employeeId/:id/download  — download note by id */
+  @Get(':employeeId/:id/download')
+  @ApiOperation({ summary: 'Download a note by id as PDF or Word (.doc)' })
+  async downloadNote(
+    @Param('employeeId') employeeId: string,
+    @Param('id') id: string,
+    @Query('format') format: string = 'pdf',
+    @Res() res: any,
+  ) {
+    try {
+      this.logger.log(`Downloading note id=${id} for employee=${employeeId} in format=${format}`);
+      const { buffer, filename, contentType } = await this.employeeNotesService.exportNoteById(employeeId, id, format);
+      res.set({
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        'Pragma': 'no-cache',
+        'Expires': '0',
+        'Content-Type': contentType,
+        'Content-Disposition': `attachment; filename="${filename}"`,
+        'Content-Length': buffer.length,
+      });
+      res.send(buffer);
+    } catch (err: any) {
+      this.logger.error(`Download failed: ${err.message}`, err.stack);
+      if (err instanceof HttpException) throw err;
+      throw new HttpException(err.message || 'Failed to download document', HttpStatus.INTERNAL_SERVER_ERROR);
+    }
   }
 
   /** POST /employee-notes  — create a new note */
