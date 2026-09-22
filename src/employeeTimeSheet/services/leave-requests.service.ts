@@ -1547,7 +1547,9 @@ export class LeaveRequestsService {
       }
       if (
         request.status !== LeaveRequestStatus.APPROVED &&
-        request.status !== LeaveRequestStatus.PENDING
+        request.status !== LeaveRequestStatus.PENDING &&
+        request.status !== LeaveRequestStatus.REQUESTING_FOR_CANCELLATION &&
+        request.status !== LeaveRequestStatus.REQUESTING_FOR_MODIFICATION
       ) {
         this.logger.warn(
           `[CANCEL] Request ${id} is not in APPROVED or PENDING status. Current status: ${request.status}`,
@@ -1557,7 +1559,10 @@ export class LeaveRequestsService {
         );
       }
 
-      const isPending = request.status === LeaveRequestStatus.PENDING;
+      const isOpenRequest =
+        request.status === LeaveRequestStatus.PENDING ||
+        request.status === LeaveRequestStatus.REQUESTING_FOR_CANCELLATION ||
+        request.status === LeaveRequestStatus.REQUESTING_FOR_MODIFICATION;
 
       const startDate = dayjs(request.fromDate);
       const endDate = dayjs(request.toDate);
@@ -1659,7 +1664,7 @@ export class LeaveRequestsService {
         }
 
         const deadline = currentDate.hour(18).minute(30).second(0);
-        const isCancellable = isPending
+        const isCancellable = isOpenRequest
           ? true
           : isPrivileged || now.isBefore(deadline);
 
@@ -1667,7 +1672,7 @@ export class LeaveRequestsService {
           date: currentStr,
           isCancellable,
           reason: isCancellable
-            ? isPending
+            ? isOpenRequest
               ? 'Pending request — cancellable'
               : isPrivileged
                 ? 'Admin/Manager Bypass'
@@ -1796,24 +1801,6 @@ export class LeaveRequestsService {
         );
         throw new ForbiddenException(
           'Only pending cancellation requests can be undone',
-        );
-      }
-
-      // Time Check: Next Day 10 AM
-      const submissionTime = dayjs(request.submittedDate || request.createdAt);
-      const deadline = submissionTime
-        .add(1, 'day')
-        .hour(10)
-        .minute(0)
-        .second(0);
-      const now = dayjs();
-
-      if (now.isAfter(deadline)) {
-        this.logger.warn(
-          `[UNDO_CANCEL] Undo deadline passed at ${deadline.format()}. Current time: ${now.format()}`,
-        );
-        throw new ForbiddenException(
-          `Undo window closed. Deadline was ${deadline.format('DD-MMM HH:mm')}`,
         );
       }
 
