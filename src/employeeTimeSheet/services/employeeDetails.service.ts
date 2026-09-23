@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   NotFoundException,
   Logger,
@@ -23,6 +24,9 @@ import { User } from '../../users/entities/user.entity';
 import { EmployeeLinkService } from './employeeLink.service';
 import { DocumentUploaderService } from '../../common/document-uploader/services/document-uploader.service';
 import { DocumentMetaInfo, EntityType, ReferenceType } from '../../common/document-uploader/models/documentmetainfo.model';
+import { CreateCeoDto } from '../dto/createCeo.dto';
+import { EmailService } from '../../email/email.service';
+import { baseLayout } from '../../common/mail/templates/base.layout';
 import * as XLSX from 'xlsx';
 import * as ExcelJS from 'exceljs';
 import { BulkUploadResultDto, BulkUploadErrorDto } from '../dto/bulk-upload-result.dto';
@@ -61,6 +65,7 @@ export class EmployeeDetailsService {
     private readonly employeeLinkService: EmployeeLinkService,
     private readonly documentUploaderService: DocumentUploaderService,
     private readonly employeeAttendanceService: EmployeeAttendanceService,
+    private readonly emailService: EmailService,
   ) { }
 
   async createEmployee(
@@ -70,6 +75,14 @@ export class EmployeeDetailsService {
       this.logger.log(
         `Creating new employee: ${JSON.stringify(createEmployeeDetailsDto)}`,
       );
+
+      // Reject attempt to create CEO through normal employee creation flow
+      const roleStr = String(createEmployeeDetailsDto.role || '').toUpperCase().trim();
+      if (createEmployeeDetailsDto.role === UserType.CEO || roleStr === 'CEO') {
+        throw new BadRequestException(
+          'CEO role cannot be created through the normal employee creation flow. Please use the dedicated Create CEO flow.',
+        );
+      }
 
       // Check for duplicate Employee ID
       const duplicateEmployeeId = await this.employeeDetailsRepository.findOne({
@@ -192,7 +205,7 @@ export class EmployeeDetailsService {
   async getRoles(): Promise<string[]> {
     this.logger.log('Fetching all roles from enum');
     try {
-      return Object.values(UserType);
+      return Object.values(UserType).filter((role) => role !== UserType.CEO);
     } catch (error) {
       this.logger.error(`Error fetching roles: ${error.message}`);
       throw new HttpException('Failed to fetch roles', HttpStatus.INTERNAL_SERVER_ERROR);
@@ -317,6 +330,7 @@ export class EmployeeDetailsService {
       const enrichedData = data.map((emp: any) => ({
         ...emp,
         userStatus: emp.user?.status || UserStatus.DRAFT,
+        userType: emp.user?.userType || emp.role || null,
         resetRequired: emp.user?.resetRequired ?? true,
         lastLoggedIn: emp.user?.lastLoggedIn || null,
         user: undefined // Remove the nested user object to keep response clean
@@ -696,10 +710,11 @@ export class EmployeeDetailsService {
 
   async findByEmployeeId(employeeId: string): Promise<EmployeeDetails> {
     try {
-      this.logger.log(`Fetching employee with string ID: ${employeeId}`);
+      const trimmedQuery = employeeId.trim();
+      this.logger.log(`Fetching employee with string ID/email: ${trimmedQuery}`);
       const employee = await this.employeeDetailsRepository.createQueryBuilder('employee')
         .leftJoinAndMapOne('employee.user', User, 'user', 'user.loginId = employee.employeeId')
-        .where('employee.employeeId = :employeeId', { employeeId })
+        .where('employee.employeeId = :searchId OR LOWER(employee.email) = LOWER(:searchId)', { searchId: trimmedQuery })
         .getOne();
 
       if (!employee) {
@@ -1711,6 +1726,263 @@ export class EmployeeDetailsService {
     } catch (error) {
       this.logger.error(`Error in getInterns: ${error.message}`, error.stack);
       throw new HttpException('Failed to fetch interns list', HttpStatus.INTERNAL_SERVER_ERROR);
+    }
+  }
+
+  async hasCeo(): Promise<{ hasCeo: boolean; ceo?: any }> {
+    try {
+      const ceoUser = await this.userRepository.findOne({
+        where: [
+          { userType: UserType.CEO },
+          { loginId: 'CEO' },
+          { role: UserType.CEO },
+        ],
+      });
+
+      const ceoEmployee = await this.employeeDetailsRepository.findOne({
+        where: [
+          { role: UserType.CEO },
+          { employeeId: 'CEO' },
+        ],
+      });
+
+      if (ceoUser || ceoEmployee) {
+        return {
+          hasCeo: true,
+          ceo: {
+            employeeId: ceoEmployee?.employeeId || ceoUser?.loginId || 'CEO',
+            fullName: ceoEmployee?.fullName || ceoUser?.aliasLoginName || 'CEO',
+            email: ceoEmployee?.email || null,
+            designation: ceoEmployee?.designation || 'Chief Executive Officer',
+          },
+        };
+      }
+
+      return { hasCeo: false };
+    } catch (error) {
+      this.logger.error(`Error checking CEO existence: ${error.message}`, error.stack);
+      throw new HttpException('Failed to check CEO status', HttpStatus.INTERNAL_SERVER_ERROR);
+    }
+  }
+
+  async createCeo(dto: CreateCeoDto): Promise<any> {
+    this.logger.log(`Starting manual CEO creation: ${dto.fullName} (${dto.email})`);
+    try {
+      // 1. Check if CEO already exists (Only one CEO account is allowed)
+      const ceoStatus = await this.hasCeo();
+      if (ceoStatus.hasCeo) {
+        throw new ConflictException('A CEO account already exists. Only one CEO account is allowed.');
+      }
+
+      // 2. Check if email is already registered
+      const normalizedEmail = dto.email.trim().toLowerCase();
+      const existingEmployeeEmail = await this.employeeDetailsRepository.findOne({
+        where: { email: normalizedEmail },
+      });
+      if (existingEmployeeEmail) {
+        throw new ConflictException(`Email address ${dto.email} is already registered`);
+      }
+
+      // 3. Hash the provided password using bcrypt
+      const salt = await bcrypt.genSalt(10);
+      const hashedPassword = await bcrypt.hash(dto.password, salt);
+
+      // 4. Create EmployeeDetails record
+      const ceoEmployee = this.employeeDetailsRepository.create({
+        fullName: dto.fullName.trim(),
+        employeeId: 'CEO',
+        email: normalizedEmail,
+        designation: dto.designation?.trim() || 'Chief Executive Officer',
+        gender: dto.gender,
+        role: UserType.CEO,
+        userStatus: UserStatus.ACTIVE,
+        employmentType: EmploymentType.FULL_TIMER,
+        joiningDate: new Date(),
+        password: hashedPassword,
+      });
+      const savedEmployee = await this.employeeDetailsRepository.save(ceoEmployee);
+
+      // 5. Create User record (usersService.create hashes password with bcrypt)
+      await this.usersService.create({
+        loginId: 'CEO',
+        aliasLoginName: dto.fullName.trim(),
+        password: dto.password,
+        userType: UserType.CEO,
+        role: UserType.CEO,
+        status: UserStatus.ACTIVE,
+        resetRequired: false,
+        changePasswordRequired: false,
+      });
+
+      // 6. Send Credentials Email using existing Worksphere template (header & footer)
+      try {
+        const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+        const content = `
+          <!-- Congratulations / Welcome Banner -->
+          <table width="100%" border="0" cellspacing="0" cellpadding="0" style="background: linear-gradient(135deg, #dbeafe 0%, #ede9fe 100%); border: 1px solid #bfdbfe; border-radius: 14px; margin-bottom: 28px;">
+            <tr>
+              <td align="center" style="padding: 26px 24px;">
+                <p style="font-family: sans-serif; font-size: 32px; margin: 0 0 8px 0;">🎉</p>
+                <p style="font-family: sans-serif; font-size: 22px; font-weight: 800; color: #1e40af; margin: 0 0 6px 0;">Congratulations, ${dto.fullName}</p>
+                <p style="font-family: sans-serif; font-size: 14px; color: #4b5563; margin: 0;">Your Chief Executive Officer (CEO) account has been created.</p>
+              </td>
+            </tr>
+          </table>
+
+          <p style="font-family: sans-serif; font-size: 15px; color: #374151; line-height: 1.7; margin: 0 0 24px 0;">
+            Your CEO account has been set up with full administrative operational access on <strong>WorkSphere</strong>. Please find your login credentials below:
+          </p>
+
+          <!-- Review/Account Details Card -->
+          <table width="100%" border="0" cellspacing="0" cellpadding="0" style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 14px; margin-bottom: 24px;">
+            <tr>
+              <td style="padding: 24px;">
+
+                <!-- Card Header -->
+                <table width="100%" border="0" cellspacing="0" cellpadding="0" style="margin-bottom: 18px;">
+                  <tr>
+                    <td style="font-family: sans-serif; font-size: 13px; font-weight: 800; color: #1e40af; text-transform: uppercase; letter-spacing: 0.5px;">
+                      <span style="font-size: 16px; margin-right: 8px;">📋</span> Account Details
+                    </td>
+                  </tr>
+                </table>
+
+                <!-- Details Rows -->
+                <table width="100%" border="0" cellspacing="0" cellpadding="0">
+                  <tr>
+                    <td width="160" style="padding-bottom: 14px; font-family: sans-serif; font-size: 13px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.3px; vertical-align: top;">Full Name</td>
+                    <td style="padding-bottom: 14px; font-family: sans-serif; font-size: 14px; font-weight: 700; color: #1f2937; vertical-align: top;">${dto.fullName}</td>
+                  </tr>
+                  <tr>
+                    <td width="160" style="padding-bottom: 14px; font-family: sans-serif; font-size: 13px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.3px; vertical-align: top;">Designation</td>
+                    <td style="padding-bottom: 14px; font-family: sans-serif; font-size: 14px; color: #1f2937; vertical-align: top;">${dto.designation}</td>
+                  </tr>
+                  <tr>
+                    <td width="160" style="padding-bottom: 14px; font-family: sans-serif; font-size: 13px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.3px; vertical-align: top;">Role</td>
+                    <td style="padding-bottom: 14px; font-family: sans-serif; font-size: 14px; font-weight: 700; color: #1f2937; vertical-align: top;">
+                      <span style="background-color: #dbeafe; color: #1e40af; padding: 4px 12px; border-radius: 999px; font-size: 13px; font-weight: 800;">CEO</span>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td width="160" style="padding-bottom: 14px; font-family: sans-serif; font-size: 13px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.3px; vertical-align: top;">Username / Login ID</td>
+                    <td style="padding-bottom: 14px; font-family: sans-serif; font-size: 14px; font-weight: 700; color: #1e40af; vertical-align: top;">
+                      <span style="background-color: #eff6ff; border: 1px solid #bfdbfe; color: #1d4ed8; padding: 4px 12px; border-radius: 6px; font-family: monospace; font-size: 14px; font-weight: 800;">CEO</span>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td width="160" style="padding-bottom: 14px; font-family: sans-serif; font-size: 13px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.3px; vertical-align: top;">Password</td>
+                    <td style="padding-bottom: 14px; font-family: sans-serif; font-size: 14px; font-weight: 700; color: #1f2937; vertical-align: top;">
+                      <span style="background-color: #f1f5f9; border: 1px solid #cbd5e1; color: #0f172a; padding: 4px 12px; border-radius: 6px; font-family: monospace; font-size: 14px; font-weight: 700;">${dto.password}</span>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td width="160" style="font-family: sans-serif; font-size: 13px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.3px; vertical-align: top;">Registered Email</td>
+                    <td style="font-family: sans-serif; font-size: 14px; color: #1f2937; vertical-align: top;">
+                      <a href="mailto:${normalizedEmail}" style="color: #2563eb; text-decoration: none;">${normalizedEmail}</a>
+                    </td>
+                  </tr>
+                </table>
+
+              </td>
+            </tr>
+          </table>
+
+          <!-- Security Note -->
+          <table width="100%" border="0" cellspacing="0" cellpadding="0" style="background-color: #fff7ed; border: 1px solid #fed7aa; border-radius: 10px; margin-bottom: 24px;">
+            <tr>
+              <td style="padding: 14px 18px;">
+                <p style="font-family: sans-serif; font-size: 13px; color: #92400e; margin: 0; line-height: 1.6;">
+                  <span style="font-weight: 800;">⚠️ Important:</span> You can log in using your Login ID (<strong>CEO</strong>) and the password provided above. If you ever forget your password, you can reset it anytime via the <strong>Forgot Password</strong> link using your registered email.
+                </p>
+              </td>
+            </tr>
+          </table>
+
+          <!-- Steps Section -->
+          <table width="100%" border="0" cellspacing="0" cellpadding="0" style="margin: 24px 0;">
+            <tr>
+              <td style="font-family: sans-serif; font-size: 13px; font-weight: 800; color: #1e40af; text-transform: uppercase; letter-spacing: 0.5px; padding-bottom: 14px;">
+                <span style="margin-right: 8px;">🚀</span> How to Access Your Account
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <table width="100%" border="0" cellspacing="0" cellpadding="0">
+                  <tr>
+                    <td style="padding-bottom: 10px;">
+                      <table border="0" cellspacing="0" cellpadding="0">
+                        <tr>
+                          <td style="background-color: #2563eb; color: #ffffff; font-family: sans-serif; font-size: 12px; font-weight: 800; width: 24px; height: 24px; border-radius: 50%; text-align: center; vertical-align: middle; padding: 0 8px;">1</td>
+                          <td style="padding-left: 12px; font-family: sans-serif; font-size: 14px; color: #374151;">Click the <strong>Login to WorkSphere</strong> button below to open the portal.</td>
+                        </tr>
+                      </table>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td style="padding-bottom: 10px;">
+                      <table border="0" cellspacing="0" cellpadding="0">
+                        <tr>
+                          <td style="background-color: #2563eb; color: #ffffff; font-family: sans-serif; font-size: 12px; font-weight: 800; width: 24px; height: 24px; border-radius: 50%; text-align: center; vertical-align: middle; padding: 0 8px;">2</td>
+                          <td style="padding-left: 12px; font-family: sans-serif; font-size: 14px; color: #374151;">Enter your Login ID: <strong>CEO</strong> and your Password.</td>
+                        </tr>
+                      </table>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td>
+                      <table border="0" cellspacing="0" cellpadding="0">
+                        <tr>
+                          <td style="background-color: #2563eb; color: #ffffff; font-family: sans-serif; font-size: 12px; font-weight: 800; width: 24px; height: 24px; border-radius: 50%; text-align: center; vertical-align: middle; padding: 0 8px;">3</td>
+                          <td style="padding-left: 12px; font-family: sans-serif; font-size: 14px; color: #374151;">Access full Executive Director operations across all modules.</td>
+                        </tr>
+                      </table>
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+          </table>
+
+          <!-- Action Button -->
+          <table width="100%" border="0" cellspacing="0" cellpadding="0" style="margin: 28px 0 20px 0;">
+            <tr>
+              <td align="center">
+                <a href="${frontendUrl}" style="background-color: #2563eb; color: #ffffff; font-family: sans-serif; font-size: 15px; font-weight: 800; text-decoration: none; padding: 14px 36px; border-radius: 8px; display: inline-block; letter-spacing: 0.5px;">
+                  START MY SESSION →
+                </a>
+              </td>
+            </tr>
+          </table>
+        `;
+
+        const htmlContent = baseLayout(
+          content,
+          'Welcome to WorkSphere — CEO Account Created',
+          'CHIEF EXECUTIVE OFFICER ACCOUNT',
+        );
+
+        await this.emailService.sendEmail(
+          normalizedEmail,
+          'Welcome to WorkSphere - CEO Account Credentials',
+          `Hello ${dto.fullName}, your CEO account has been created. Login ID: CEO, Password: ${dto.password}, Registered Email: ${normalizedEmail}. Login here: ${frontendUrl}`,
+          htmlContent,
+        );
+        this.logger.log(`Credentials email successfully sent to CEO at ${normalizedEmail}`);
+      } catch (emailErr) {
+        this.logger.error(`Failed to send credentials email to CEO: ${emailErr.message}`);
+      }
+
+      return {
+        message: 'CEO account created successfully. Welcome email sent.',
+        employeeId: 'CEO',
+        fullName: savedEmployee.fullName,
+        email: savedEmployee.email,
+        designation: savedEmployee.designation,
+      };
+    } catch (error) {
+      if (error instanceof HttpException) throw error;
+      this.logger.error(`Failed to create CEO: ${error.message}`, error.stack);
+      throw new HttpException('Failed to create CEO', HttpStatus.INTERNAL_SERVER_ERROR);
     }
   }
 }

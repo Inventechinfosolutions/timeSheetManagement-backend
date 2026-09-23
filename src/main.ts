@@ -8,6 +8,9 @@ async function bootstrap() {
   const app = await NestFactory.create(AppModule);
   const configService = app.get(ConfigService);
 
+  // Allow clean release of sockets/ports on restart
+  app.enableShutdownHooks();
+
   app.use(cookieParser());
 
   // Enable CORS

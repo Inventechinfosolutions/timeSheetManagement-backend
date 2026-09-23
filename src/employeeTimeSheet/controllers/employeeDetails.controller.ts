@@ -16,6 +16,7 @@ import {
   Req,
   Res,
   UseGuards,
+  ForbiddenException,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { ReceptionistReadOnlyGuard } from '../../auth/guards/receptionist-readonly.guard';
@@ -24,6 +25,7 @@ import { Response } from 'express';
 import { Readable } from 'stream';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { EmployeeDetailsDto } from '../dto/employeeDetails.dto';
+import { CreateCeoDto } from '../dto/createCeo.dto';
 import { ResetPasswordDto } from '../dto/resetPassword.dto';
 import { BulkUploadResultDto } from '../dto/bulk-upload-result.dto';
 import { EmployeeDetailsService } from '../services/employeeDetails.service';
@@ -122,6 +124,30 @@ export class EmployeeDetailsController {
       this.logger.error(`Error creating employee: ${error.message}`, error.stack);
       throw error;
     }
+  }
+
+  @Post('create-ceo')
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({ summary: 'Create CEO account (Admin only)' })
+  @ApiBody({ type: CreateCeoDto })
+  @ApiCreatedResponse({ description: 'CEO account created successfully' })
+  @ApiResponse({ status: 401, description: 'Unauthorized - No JWT or invalid token' })
+  @ApiResponse({ status: 403, description: 'Forbidden - Only ADMIN can create a CEO' })
+  @ApiResponse({ status: 409, description: 'Conflict - CEO already exists' })
+  async createCeo(@Body() createCeoDto: CreateCeoDto, @Req() req: any) {
+    const user = req.user;
+    if (!user || user.userType !== UserType.ADMIN) {
+      throw new ForbiddenException('Only ADMIN can create a CEO account.');
+    }
+    this.logger.log(`Admin ${user.loginId} creating CEO account: ${createCeoDto.fullName}`);
+    return await this.employeeDetailsService.createCeo(createCeoDto);
+  }
+
+  @Get('has-ceo')
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({ summary: 'Check if CEO account exists' })
+  async hasCeo() {
+    return await this.employeeDetailsService.hasCeo();
   }
 
   @Post('bulk-upload')
