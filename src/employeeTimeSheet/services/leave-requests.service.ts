@@ -828,7 +828,17 @@ export class LeaveRequestsService {
 
       // 4. Status Filter
       if (status && status !== 'All') {
-        query.andWhere('lr.status = :status', { status });
+        const statusList = Array.isArray(status)
+          ? status
+          : String(status)
+              .split(',')
+              .map((s) => s.trim())
+              .filter(Boolean);
+        if (statusList.length === 1) {
+          query.andWhere('lr.status = :status', { status: statusList[0] });
+        } else if (statusList.length > 1) {
+          query.andWhere('lr.status IN (:...statusList)', { statusList });
+        }
       }
 
       // 4b. Request Type Filter
@@ -2371,6 +2381,13 @@ export class LeaveRequestsService {
       }
 
       const previousStatus = request.status;
+
+      if (status === LeaveRequestStatus.APPROVED && previousStatus === LeaveRequestStatus.REQUESTING_FOR_MODIFICATION) {
+        status = LeaveRequestStatus.MODIFICATION_APPROVED;
+      }
+      if (status === LeaveRequestStatus.APPROVED && previousStatus === LeaveRequestStatus.REQUESTING_FOR_CANCELLATION) {
+        status = LeaveRequestStatus.CANCELLATION_APPROVED;
+      }
 
       if (status === LeaveRequestStatus.REJECTED && previousStatus === LeaveRequestStatus.REQUESTING_FOR_MODIFICATION) {
         status = LeaveRequestStatus.MODIFICATION_REJECTED;

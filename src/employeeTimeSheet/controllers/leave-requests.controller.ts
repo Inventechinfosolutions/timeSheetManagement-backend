@@ -350,18 +350,19 @@ export class LeaveRequestsController {
       month?: string;
       year?: string;
       requestType?: string;
+      status?: string;
       ids?: number[];
     },
     @Req() req: any,
   ) {
     try {
-      const { department, search, month, year, requestType, ids } = body;
-      this.logger.log(`Bulk approving ${ids?.length ? `${ids.length} selected` : 'all matching PENDING'} requests`);
+      const { department, search, month, year, requestType, ids, status } = body;
+      this.logger.log(`Bulk approving ${ids?.length ? `${ids.length} selected` : 'all matching'} requests`);
       const user = req.user;
       const reviewerName = user?.aliasLoginName || user?.fullName || 'Admin';
       const reviewerEmail = user?.loginId || user?.email;
       return await this.leaveRequestsService.bulkUpdateStatus({
-        status: LeaveRequestStatus.APPROVED,
+        status: (status as any) || LeaveRequestStatus.APPROVED,
         department,
         search,
         month,
@@ -386,18 +387,19 @@ export class LeaveRequestsController {
       month?: string;
       year?: string;
       requestType?: string;
+      status?: string;
       ids?: number[];
     },
     @Req() req: any,
   ) {
     try {
-      const { department, search, month, year, requestType, ids } = body;
-      this.logger.log(`Bulk rejecting ${ids?.length ? `${ids.length} selected` : 'all matching PENDING'} requests`);
+      const { department, search, month, year, requestType, ids, status } = body;
+      this.logger.log(`Bulk rejecting ${ids?.length ? `${ids.length} selected` : 'all matching'} requests`);
       const user = req.user;
       const reviewerName = user?.aliasLoginName || user?.fullName || 'Admin';
       const reviewerEmail = user?.loginId || user?.email;
       return await this.leaveRequestsService.bulkUpdateStatus({
-        status: LeaveRequestStatus.REJECTED,
+        status: (status as any) || LeaveRequestStatus.REJECTED,
         department,
         search,
         month,
