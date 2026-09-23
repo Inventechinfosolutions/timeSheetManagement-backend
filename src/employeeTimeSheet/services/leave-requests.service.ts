@@ -1292,8 +1292,8 @@ export class LeaveRequestsService {
           reviewedBy: req.reviewedBy || '',
           isModified:
             req.isModified === true ||
-            req.isModified === 1 ||
-            req.isModified === '1'
+              req.isModified === 1 ||
+              req.isModified === '1'
               ? 'Yes'
               : 'No',
           modificationCount: req.modificationCount ?? 0,
@@ -1637,7 +1637,7 @@ export class LeaveRequestsService {
             try {
               const parsed = JSON.parse(c.availableDates);
               if (Array.isArray(parsed)) datesInChild = parsed;
-            } catch (e) {}
+            } catch (e) { }
           }
 
           if (datesInChild) {
@@ -1864,7 +1864,7 @@ export class LeaveRequestsService {
       this._recalcMonthStatus(
         request.employeeId,
         request.fromDate.toString(),
-      ).catch(() => {});
+      ).catch(() => { });
 
       return saved;
     } catch (error) {
@@ -1969,7 +1969,7 @@ export class LeaveRequestsService {
       this._recalcMonthStatus(
         request.employeeId,
         request.fromDate.toString(),
-      ).catch(() => {});
+      ).catch(() => { });
 
       return result;
     } catch (error) {
@@ -2268,7 +2268,69 @@ export class LeaveRequestsService {
     }
   }
 
+  async bulkUpdateStatus(params: {
+    status: LeaveRequestStatus;
+    department?: string;
+    search?: string;
+    month?: string;
+    year?: string;
+    requestType?: string;
+    ids?: number[];
+    reviewerName?: string;
+    reviewerEmail?: string;
+  }): Promise<{ successCount: number; failCount: number; total: number }> {
+    const { status, department, search, month, year, requestType, ids: explicitIds, reviewerName, reviewerEmail } = params;
+
+    let ids: number[] = [];
+    if (explicitIds && Array.isArray(explicitIds) && explicitIds.length > 0) {
+      ids = explicitIds;
+      this.logger.log(`[BULK_STATUS] Using ${ids.length} explicitly provided request IDs to update to ${status}`);
+    } else {
+      const queryStatus =
+        status === LeaveRequestStatus.CANCELLATION_APPROVED ||
+        status === LeaveRequestStatus.CANCELLATION_REJECTED
+          ? LeaveRequestStatus.REQUESTING_FOR_CANCELLATION
+          : status === LeaveRequestStatus.MODIFICATION_APPROVED ||
+            status === LeaveRequestStatus.MODIFICATION_REJECTED
+          ? LeaveRequestStatus.REQUESTING_FOR_MODIFICATION
+          : LeaveRequestStatus.PENDING;
+
+      this.logger.log(`[BULK_STATUS] Fetching all ${queryStatus} requests matching filters to update to ${status}`);
+      // Fetch ALL requests matching the filters (no pagination)
+      const allResult = await this.findUnifiedRequests({
+        department,
+        search,
+        month: month || 'All',
+        year: year || 'All',
+        requestType,
+        status: queryStatus,
+        page: 1,
+        limit: 99999,
+        forExport: true,
+      });
+
+      ids = (allResult.data || []).map((r: any) => r.id).filter(Boolean);
+      this.logger.log(`[BULK_STATUS] Found ${ids.length} ${queryStatus} requests to update`);
+    }
+
+    let successCount = 0;
+    let failCount = 0;
+    for (const id of ids) {
+      try {
+        await this.updateStatus(id, status, undefined, reviewerName, reviewerEmail);
+        successCount++;
+      } catch (err) {
+        this.logger.warn(`[BULK_STATUS] Failed to update request ${id}: ${err?.message}`);
+        failCount++;
+      }
+    }
+
+    this.logger.log(`[BULK_STATUS] Done. success=${successCount}, fail=${failCount}`);
+    return { successCount, failCount, total: ids.length };
+  }
+
   async updateStatus(
+
     id: number,
     status: LeaveRequestStatus,
     employeeId?: string,
@@ -2400,7 +2462,7 @@ export class LeaveRequestsService {
           if (request.availableDates) {
             try {
               validDates = JSON.parse(request.availableDates);
-            } catch (e) {}
+            } catch (e) { }
           }
 
           for (let i = 0; i <= diff; i++) {
@@ -2513,7 +2575,7 @@ export class LeaveRequestsService {
           if (request.availableDates) {
             try {
               cleanDates = JSON.parse(request.availableDates);
-            } catch (e) {}
+            } catch (e) { }
           }
           if (cleanDates.length === 0) {
             let cur = dayjs(request.fromDate);
@@ -2700,7 +2762,7 @@ export class LeaveRequestsService {
                 try {
                   const parsed = JSON.parse(_childAvailableDatesBackup);
                   if (Array.isArray(parsed)) restoredDates = parsed;
-                } catch (e) {}
+                } catch (e) { }
               }
               // Fallback: derive from date range
               if (restoredDates.length === 0) {
@@ -2720,7 +2782,7 @@ export class LeaveRequestsService {
                   try {
                     const parsed = JSON.parse(parent.availableDates);
                     if (Array.isArray(parsed)) allParentDates = parsed;
-                  } catch (e) {}
+                  } catch (e) { }
                 }
 
                 const mergedDatesSet = new Set([...allParentDates, ...restoredDates]);
@@ -2857,7 +2919,7 @@ export class LeaveRequestsService {
                 try {
                   const parsed = JSON.parse(request.availableDates);
                   if (Array.isArray(parsed)) removedDates = parsed;
-                } catch (e) {}
+                } catch (e) { }
               }
 
               if (removedDates.length === 0) {
@@ -2879,7 +2941,7 @@ export class LeaveRequestsService {
                 try {
                   const parsed = JSON.parse(parent.availableDates);
                   if (Array.isArray(parsed)) allParentDates = parsed;
-                } catch (e) {}
+                } catch (e) { }
               }
 
               if (allParentDates.length === 0) {
@@ -2943,7 +3005,7 @@ export class LeaveRequestsService {
       this._recalcMonthStatus(
         request.employeeId,
         String(request.fromDate),
-      ).catch(() => {});
+      ).catch(() => { });
 
       this.logger.log(
         `[UPDATE_STATUS] Successfully updated request ${id} to ${status}`,
@@ -2992,7 +3054,7 @@ export class LeaveRequestsService {
       if (request.availableDates) {
         try {
           cleanDates = JSON.parse(request.availableDates);
-        } catch (e) {}
+        } catch (e) { }
       }
       if (cleanDates.length === 0) {
         let cur = dayjs(request.fromDate);
@@ -3045,7 +3107,7 @@ export class LeaveRequestsService {
       this._recalcMonthStatus(
         request.employeeId,
         request.fromDate.toString(),
-      ).catch(() => {});
+      ).catch(() => { });
 
       return {
         success: true,
@@ -3257,7 +3319,7 @@ export class LeaveRequestsService {
       this._recalcMonthStatus(
         request.employeeId,
         String(request.fromDate),
-      ).catch(() => {});
+      ).catch(() => { });
       this.logger.log(
         `[REJECT_CANCELLATION] Successfully rejected cancellation for request ${id}`,
       );
@@ -3371,9 +3433,9 @@ export class LeaveRequestsService {
 
       const factor = parentRequest.isHalfDay
         ? this.getDurationFactor(
-            parentRequest.firstHalf,
-            parentRequest.secondHalf,
-          )
+          parentRequest.firstHalf,
+          parentRequest.secondHalf,
+        )
         : 1.0;
 
       const correctedDuration = Number(
@@ -3512,7 +3574,7 @@ export class LeaveRequestsService {
             try {
               const parsed = JSON.parse(child.availableDates);
               if (Array.isArray(parsed)) datesInChild = parsed;
-            } catch (e) {}
+            } catch (e) { }
           }
           if (datesInChild.length > 0) {
             datesInChild.forEach((d) => cancelledDateSet.add(d));
@@ -3531,7 +3593,7 @@ export class LeaveRequestsService {
           try {
             const parsed = JSON.parse(request.availableDates);
             if (Array.isArray(parsed)) allDates = parsed;
-          } catch (e) {}
+          } catch (e) { }
         }
 
         if (allDates.length === 0) {
@@ -3584,7 +3646,7 @@ export class LeaveRequestsService {
               updatedAt: new Date(),
               duration: request.isHalfDay
                 ? range.count *
-                  this.getDurationFactor(request.firstHalf, request.secondHalf)
+                this.getDurationFactor(request.firstHalf, request.secondHalf)
                 : range.count,
               requestModifiedFrom: `${request.id}:${request.requestType}`,
               availableDates: JSON.stringify(
@@ -3678,7 +3740,7 @@ export class LeaveRequestsService {
               status: LeaveRequestStatus.REQUESTING_FOR_CANCELLATION,
               duration: request.isHalfDay
                 ? range.count *
-                  this.getDurationFactor(request.firstHalf, request.secondHalf)
+                this.getDurationFactor(request.firstHalf, request.secondHalf)
                 : range.count,
               requestModifiedFrom: `${request.id}:${request.requestType}`,
               availableDates: JSON.stringify(
@@ -3705,7 +3767,7 @@ export class LeaveRequestsService {
       }
 
       this._recalcMonthStatus(employeeId, request.fromDate.toString()).catch(
-        () => {},
+        () => { },
       );
       if (isPendingRequest && createdRequests.length === 0) return request;
       return createdRequests.length === 1
@@ -3765,7 +3827,7 @@ export class LeaveRequestsService {
       );
 
       this._recalcMonthStatus(employeeId, request.fromDate.toString()).catch(
-        () => {},
+        () => { },
       );
       return request;
     } catch (error) {
@@ -4018,7 +4080,7 @@ export class LeaveRequestsService {
               message: `${requesterName} has submitted ${actionText === 'New' ? 'a new' : 'a'} ${request.requestType} titled "${request.title}".`,
               type: 'alert',
             })
-            .catch(() => {});
+            .catch(() => { });
         }
       }
 
@@ -4038,8 +4100,8 @@ export class LeaveRequestsService {
       const parsed = JSON.parse(ccEmails);
       return Array.isArray(parsed)
         ? parsed.filter(
-            (e: unknown) => typeof e === 'string' && e.includes('@'),
-          )
+          (e: unknown) => typeof e === 'string' && e.includes('@'),
+        )
         : [];
     } catch {
       return [];
@@ -4625,7 +4687,7 @@ export class LeaveRequestsService {
 
       this.logger.log(`[MODIFY_REQUEST] Successfully modified request ${id}`);
       this._recalcMonthStatus(employeeId, request.fromDate.toString()).catch(
-        () => {},
+        () => { },
       );
 
       return {
@@ -4948,7 +5010,7 @@ export class LeaveRequestsService {
             try {
               const parsed = JSON.parse(request.availableDates);
               if (Array.isArray(parsed)) parentDates = parsed;
-            } catch (e) {}
+            } catch (e) { }
           }
           if (parentDates.length === 0) {
             let curIter = dayjs(request.fromDate);
@@ -5001,7 +5063,7 @@ export class LeaveRequestsService {
         }
       }
 
-      this._recalcMonthStatus(employeeId, datesToModify[0]).catch(() => {});
+      this._recalcMonthStatus(employeeId, datesToModify[0]).catch(() => { });
       this.logger.log(
         `[MODIFY_DATES] Successfully created ${createdRequests.length} modification requests`,
       );
@@ -5061,7 +5123,7 @@ export class LeaveRequestsService {
                 try {
                   const parsed = JSON.parse(modifiedDatesBackup);
                   if (Array.isArray(parsed)) restoredDates = parsed;
-                } catch (e) {}
+                } catch (e) { }
               }
               if (restoredDates.length === 0) {
                 let cur = dayjs(request.fromDate);
@@ -5080,7 +5142,7 @@ export class LeaveRequestsService {
                   try {
                     const parsed = JSON.parse(parent.availableDates);
                     if (Array.isArray(parsed)) allParentDates = parsed;
-                  } catch (e) {}
+                  } catch (e) { }
                 }
 
                 const mergedDatesSet = new Set([...allParentDates, ...restoredDates]);
@@ -5177,7 +5239,7 @@ export class LeaveRequestsService {
       }
 
       this._recalcMonthStatus(employeeId, String(request.fromDate)).catch(
-        () => {},
+        () => { },
       );
       this.logger.log(
         `[UNDO_MODIFY] Successfully cancelled modification request ${id}`,
