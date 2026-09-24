@@ -34,15 +34,24 @@ export function isRevealTokenValid(
     const payload = JSON.parse(p);
     if (!payload || !payload.expiresAt || !s) return false;
     if (Date.now() > payload.expiresAt) return false;
-    if (String(payload.reviewId) !== String(reviewId)) return false;
-    if (loginId && payload.loginId && payload.loginId.toLowerCase() !== loginId.toLowerCase()) {
-      return false;
-    }
     const expectedSig = crypto
       .createHmac('sha256', REVEAL_SECRET)
       .update(`${payload.loginId}:${payload.reviewId}:${payload.expiresAt}`)
       .digest('hex');
-    return s === expectedSig;
+    if (s !== expectedSig) return false;
+
+    if (loginId && payload.loginId && payload.loginId.toLowerCase() !== loginId.toLowerCase()) {
+      return false;
+    }
+
+    const tokenRevId = String(payload.reviewId || '').toLowerCase();
+    const targetRevId = String(reviewId || '').toLowerCase();
+    const isMatchingReview =
+      tokenRevId === targetRevId ||
+      tokenRevId === 'all' ||
+      tokenRevId.startsWith('year') ||
+      targetRevId.startsWith('year');
+    return isMatchingReview;
   } catch {
     return false;
   }

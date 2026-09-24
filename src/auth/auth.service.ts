@@ -111,7 +111,7 @@ export class AuthService {
     try {
       const access_token = this.jwtService.sign(payload, {
         secret: process.env.JWT_ACCESS_SECRET || process.env.JWT_SECRET,
-        expiresIn: (process.env.JWT_ACCESS_EXPIRES_IN as any) || '5m',
+        expiresIn: (process.env.JWT_ACCESS_EXPIRES_IN as any) || '1h',
       });
       const refresh_token = this.jwtService.sign(payload, {
         secret: process.env.JWT_REFRESH_SECRET || 'your-refresh-secret-key',

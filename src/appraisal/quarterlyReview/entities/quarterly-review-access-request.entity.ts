@@ -3,6 +3,7 @@ import { BaseEntity } from '../../../common/core/models/base.entity';
 
 export enum AccessRequestStatus {
   PENDING = 'PENDING',
+  AWAITING_REVIEW = 'AWAITING_REVIEW',
   APPROVED = 'APPROVED',
   REJECTED = 'REJECTED',
 }
@@ -61,6 +62,7 @@ export class QuarterlyReviewAccessRequest extends BaseEntity {
 
   @Column({ name: 'rejected_by_name', type: 'varchar', length: 150, nullable: true })
   rejectedByName: string | null;
+
   @Column({ name: 'rejected_at', type: 'timestamp', nullable: true })
   rejectedAt: Date | null;
 
@@ -84,4 +86,6 @@ export class QuarterlyReviewAccessRequest extends BaseEntity {
 
   @Column({ name: 'remarks', type: 'text', nullable: true })
   remarks: string | null;
+
+  attemptNumber?: number;
 }

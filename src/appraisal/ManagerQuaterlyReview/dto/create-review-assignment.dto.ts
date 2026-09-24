@@ -11,16 +11,6 @@ import {
 } from 'class-validator';
 import { AssignmentMode, QuarterLabel } from '../../quarterlyReview/enums/quarterly-review.enum';
 
-/**
- * DTO for the new "+ Create" assignment flow.
- *
- * Mode INDIVIDUAL:  employeeIds required (≥ 1 item).
- * Mode ALL:         employeeIds is ignored / optional — the backend resolves
- *                   all mapped employees automatically.
- *
- * All other fields (quarter, financialYear, startDate, endDate, description)
- * are mandatory regardless of mode.
- */
 export class CreateReviewAssignmentDto {
   @ApiProperty({
     enum: AssignmentMode,
@@ -52,24 +42,24 @@ export class CreateReviewAssignmentDto {
   @IsNotEmpty()
   quarter!: QuarterLabel;
 
-  @ApiProperty({
-    description: 'Financial year in the format FY<YYYY>-<YY>, e.g. FY2026-27.',
+  @ApiPropertyOptional({
+    description: 'Financial year in the format FY<YYYY>-<YY>, e.g. FY2026-27. Defaults to current FY if omitted.',
     example: 'FY2026-27',
   })
   @IsString()
-  @IsNotEmpty({ message: 'financialYear is required' })
-  financialYear!: string;
+  @IsOptional()
+  financialYear?: string;
 
-  @ApiProperty({
-    description: 'Start date of the review period (ISO 8601 date string).',
+  @ApiPropertyOptional({
+    description: 'Start date of the review period (ISO 8601 date string). Defaults to current date if omitted.',
     example: '2026-07-01',
   })
   @IsDateString({}, { message: 'startDate must be a valid ISO 8601 date string (YYYY-MM-DD)' })
-  @IsNotEmpty({ message: 'startDate is required' })
-  startDate!: string;
+  @IsOptional()
+  startDate?: string;
 
   @ApiProperty({
-    description: 'End date (deadline) of the review period (ISO 8601 date string).',
+    description: 'End date (deadline) of the review period (YYYY-MM-DD). Stored as 23:59:59 IST that day.',
     example: '2026-09-30',
   })
   @IsDateString({}, { message: 'endDate must be a valid ISO 8601 date string (YYYY-MM-DD)' })

@@ -2,19 +2,28 @@ import { Injectable, NotFoundException, ForbiddenException, BadRequestException,
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In, Like } from 'typeorm';
 import { QuarterlyReview } from '../../quarterlyReview/entities/quarterly-review.entity';
+import { QuarterlyReviewAccessRequest, AccessRequestStatus } from '../../quarterlyReview/entities/quarterly-review-access-request.entity';
 import { ManagerMapping, ManagerMappingStatus } from '../../../managerMapping/entities/managerMapping.entity';
 import { EmployeeDetails } from '../../../employeeTimeSheet/entities/employeeDetails.entity';
 import { User } from '../../../users/entities/user.entity';
 import { UserType } from '../../../users/enums/user-type.enum';
 import { ManagerEvaluationDto } from '../dto/manager-evaluation.dto';
-import { ReviewStatus, AssignmentMode } from '../../quarterlyReview/enums/quarterly-review.enum';
+import { ReviewStatus, AssignmentMode, AppraisalReviewStatus, DisplayStatusFilter } from '../../quarterlyReview/enums/quarterly-review.enum';
 import { EmailService } from '../../../email/email.service';
 import { NotificationsService } from '../../../notifications/Services/notifications.service';
-import { getAppraisalQuarterEvaluatedTemplate } from '../../../common/mail/templates';
+import {
+  getAppraisalQuarterEvaluatedTemplate,
+  getAppraisalQuarterAssignedTemplate,
+  getAppraisalQuarterAssignedManagerTemplate,
+} from '../../../common/mail/templates';
 import { CreateReviewAssignmentDto } from '../dto/create-review-assignment.dto';
 
-import { ReviewAssignment, AssignmentStatus } from '../../quarterlyReview/entities/review-assignment.entity';
+import { ReviewAssignment } from '../../quarterlyReview/entities/review-assignment.entity';
+import { AssignmentStatus } from '../../quarterlyReview/enums/quarterly-review.enum';
+
 import { isRevealTokenValid } from '../../quarterlyReview/utils/rating-reveal.utils';
+import { assertAssignmentDateRange, toStartOfDayIst, toEndOfDayIst, computeAssignmentDeadline } from '../../quarterlyReview/utils/assignment-deadline.utils';
+import { getDynamicCurrentFinancialYear } from '../../../master/service/master-financial-year.service';
 
 /** Filters + pagination params accepted by getTeamSubmissions */
 export interface TeamSubmissionsFilters {
@@ -45,6 +54,8 @@ export class ManagerQuarterlyReviewService {
     private readonly quarterlyReviewRepository: Repository<QuarterlyReview>,
     @InjectRepository(ReviewAssignment)
     private readonly assignmentRepository: Repository<ReviewAssignment>,
+    @InjectRepository(QuarterlyReviewAccessRequest)
+    private readonly accessRequestRepository: Repository<QuarterlyReviewAccessRequest>,
     @InjectRepository(ManagerMapping)
     private readonly managerMappingRepository: Repository<ManagerMapping>,
     @InjectRepository(EmployeeDetails)
@@ -53,7 +64,7 @@ export class ManagerQuarterlyReviewService {
     private readonly notificationsService: NotificationsService,
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
-  ) {}
+  ) { }
 
   /** Check if the user has privileged access (Admin or CEO). */
   private isPrivilegedUser(user: any): boolean {
@@ -117,10 +128,104 @@ export class ManagerQuarterlyReviewService {
     return val;
   }
 
+  /** Normalize quarter string to uppercase with no spaces/hyphens for comparison (e.g. "Q1FY202627") */
+  private normalizeQ(q: string | null | undefined): string {
+    return (q || '').toUpperCase().replace(/[\s_-]/g, '');
+  }
+
+  /** Format a quarter string to canonical hyphen format, e.g. "Q1 FY2026-27" -> "Q1-FY2026-27" */
+  public formatQuarterHyphen(quarter: string | null | undefined): string {
+    if (!quarter) return '';
+    const trimmed = String(quarter).trim();
+    return trimmed.replace(/^([Qq][1-4])[\s_]+(FY\d{4}-\d{2})/i, '$1-$2');
+  }
+
+  /** Return common variants of a quarter string for database querying (both hyphen, space, and code formats) */
+  public normalizeQuarterVariants(quarter: string | null | undefined): string[] {
+    if (!quarter) return [];
+    const q = String(quarter).trim();
+    const hyphen = this.formatQuarterHyphen(q);
+    const space = q.replace(/^([Qq][1-4])[\s_-]+(FY\d{4}-\d{2})/i, '$1 $2');
+    const spaceWithFy = q.replace(/^([Qq][1-4])[\s_-]+FY\s*(\d{4}-\d{2})/i, '$1 FY $2');
+    const qMatch = q.match(/Q[1-4]/i)?.[0]?.toUpperCase();
+    const fyMatch = q.match(/(\d{4}-\d{2})/i)?.[1];
+    const variants = [q, hyphen, space, spaceWithFy];
+    if (qMatch) {
+      variants.push(qMatch);
+      if (fyMatch) {
+        variants.push(`${qMatch} FY${fyMatch}`);
+        variants.push(`${qMatch} FY ${fyMatch}`);
+        variants.push(`${qMatch}-FY${fyMatch}`);
+        variants.push(`${qMatch}-FY ${fyMatch}`);
+      }
+    }
+    return Array.from(new Set(variants.filter(Boolean) as string[]));
+  }
+
+  /** Resolve canonical Financial Year string, e.g. "FY 2026-27" */
+  public resolveFinancialYear(val?: string | null): string {
+    if (!val) return getDynamicCurrentFinancialYear().financialYear;
+    const str = String(val).trim();
+    const match = str.match(/(?:FY\s*)?(\d{4}-\d{2})/i);
+    if (match) {
+      return `FY ${match[1]}`;
+    }
+    return str.toUpperCase().startsWith('FY') ? str : `FY ${str}`;
+  }
+
+  /** Resolve standard quarter date range (fromDate & toDate) */
+  public resolveQuarterDateRange(
+    quarterStr?: string | null,
+    financialYearStr?: string | null,
+    customStart?: any,
+    customEnd?: any,
+  ): { fromDate: string | null; toDate: string | null } {
+    let fromDate: string | null = null;
+    let toDate: string | null = null;
+
+    if (customStart) {
+      fromDate = customStart instanceof Date ? customStart.toISOString().split('T')[0] : String(customStart).split('T')[0];
+    }
+    if (customEnd) {
+      toDate = customEnd instanceof Date ? customEnd.toISOString().split('T')[0] : String(customEnd).split('T')[0];
+    }
+
+    if (fromDate && toDate) {
+      return { fromDate, toDate };
+    }
+
+    // Default dates for Indian Fiscal Year (Apr 1 - Mar 31)
+    const qMatch = (quarterStr || '').match(/Q([1-4])/i);
+    const fyMatch = (financialYearStr || quarterStr || '').match(/(\d{4})-(\d{2})/);
+    if (qMatch && fyMatch) {
+      const qNum = parseInt(qMatch[1], 10);
+      const startYr = parseInt(fyMatch[1], 10);
+      if (qNum === 1) {
+        if (!fromDate) fromDate = `${startYr}-04-01`;
+        if (!toDate) toDate = `${startYr}-06-30`;
+      } else if (qNum === 2) {
+        if (!fromDate) fromDate = `${startYr}-07-01`;
+        if (!toDate) toDate = `${startYr}-09-30`;
+      } else if (qNum === 3) {
+        if (!fromDate) fromDate = `${startYr}-10-01`;
+        if (!toDate) toDate = `${startYr}-12-31`;
+      } else if (qNum === 4) {
+        if (!fromDate) fromDate = `${startYr + 1}-01-01`;
+        if (!toDate) toDate = `${startYr + 1}-03-31`;
+      }
+    }
+
+    return {
+      fromDate: fromDate || '2026-04-01',
+      toDate: toDate || '2026-06-30',
+    };
+  }
+
   private sanitizeReview(review: QuarterlyReview | null): any {
     if (!review) return null;
     return {
       ...review,
+      quarter: this.formatQuarterHyphen(review.quarter),
       projects: this.parseJsonIfNeeded(review.projects) ?? [],
       achievements: this.parseJsonIfNeeded((review as any).achievements) ?? [],
       challenges: this.parseJsonIfNeeded((review as any).challenges) ?? [],
@@ -140,41 +245,101 @@ export class ManagerQuarterlyReviewService {
     return (firstInitial + lastInitial).toUpperCase();
   }
 
-  private getDisplayStatus(review: QuarterlyReview, assignment?: ReviewAssignment | null): string {
-    if (review.status === ReviewStatus.COMPLETED) return 'Completed';
-    if (review.status === ReviewStatus.APPROVED || review.reviewStatus === ReviewStatus.REVIEWED) return 'Reviewed';
-    if (review.reviewStatus === ReviewStatus.DRAFT || review.status === ReviewStatus.DRAFT) return 'Draft';
-    if (review.status === ReviewStatus.IN_REVIEW) return 'Under Review';
-    if (review.status === ReviewStatus.SUBMITTED) return 'Under Review';
-    if (review.status === ReviewStatus.AUTO_SUBMITTED) return 'Auto Submitted';
-    if (assignment || review.status === ReviewStatus.NOT_STARTED) return 'Assigned';
-    return review.reviewStatus || review.status || 'Not Started';
+  private getDisplayStatus(review: QuarterlyReview, assignment?: ReviewAssignment | null): AppraisalReviewStatus {
+    const reviewStatusLower = (review.reviewStatus || '').trim().toLowerCase();
+    const statusLower = (review.status || '').trim().toLowerCase();
+
+    // 1. Reviewed by Manager/Admin/CEO -> Reviewed
+    if (
+      review.status === ReviewStatus.REVIEWED ||
+      review.reviewStatus === AppraisalReviewStatus.REVIEWED ||
+      statusLower === AppraisalReviewStatus.REVIEWED.toLowerCase() ||
+      reviewStatusLower === AppraisalReviewStatus.REVIEWED.toLowerCase()
+    ) {
+      return AppraisalReviewStatus.REVIEWED;
+    }
+
+    // 2. Saved as Draft by Manager/Admin/CEO during evaluation -> Under Review
+    if (
+      review.reviewStatus === AppraisalReviewStatus.UNDER_REVIEW ||
+      review.status === ReviewStatus.UNDER_REVIEW ||
+      reviewStatusLower === AppraisalReviewStatus.UNDER_REVIEW.toLowerCase() ||
+      statusLower === ReviewStatus.UNDER_REVIEW.toLowerCase()
+    ) {
+      return AppraisalReviewStatus.UNDER_REVIEW;
+    }
+
+    // 3. Submitted by Employee or Manager -> Awaiting Review
+    if (
+      review.status === ReviewStatus.SUBMITTED ||
+      review.status === ReviewStatus.AUTO_SUBMITTED ||
+      review.status === ReviewStatus.AWAITING_REVIEW ||
+      review.reviewStatus === AppraisalReviewStatus.AWAITING_REVIEW ||
+      statusLower === ReviewStatus.SUBMITTED.toLowerCase() ||
+      statusLower === ReviewStatus.AUTO_SUBMITTED.toLowerCase() ||
+      statusLower === ReviewStatus.AWAITING_REVIEW.toLowerCase() ||
+      reviewStatusLower === AppraisalReviewStatus.AWAITING_REVIEW.toLowerCase() ||
+      Boolean(review.submittedDate)
+    ) {
+      return AppraisalReviewStatus.AWAITING_REVIEW;
+    }
+
+    // 4. Assigned to employee -> Assigned
+    return AppraisalReviewStatus.ASSIGNED;
   }
 
-  /** Categorize a raw review or row into standard buckets. */
-  private getStatusBucket(reviewRecord: any): 'assigned' | 'pending' | 'in-review' | 'completed' | 'other' {
-    const revStatus = reviewRecord.reviewStatus || '';
-    const st = reviewRecord.status || '';
-    if (['Reviewed', 'Approved', 'Completed'].includes(revStatus) || ['Reviewed', 'Approved', 'Completed'].includes(st)) {
-      return 'completed';
+  /** Categorize a raw review or row into standard buckets strictly matching the 4 canonical statuses. */
+  private getStatusBucket(reviewRecord: any): AppraisalReviewStatus {
+    const reviewStatusLower = (reviewRecord.reviewStatus || '').trim().toLowerCase();
+    const statusLower = (reviewRecord.status || '').trim().toLowerCase();
+
+    if (
+      reviewRecord.status === ReviewStatus.REVIEWED ||
+      reviewRecord.reviewStatus === AppraisalReviewStatus.REVIEWED ||
+      reviewStatusLower === AppraisalReviewStatus.REVIEWED.toLowerCase() ||
+      statusLower === AppraisalReviewStatus.REVIEWED.toLowerCase()
+    ) {
+      return AppraisalReviewStatus.REVIEWED;
     }
-    if (revStatus === 'In Review' || st === 'Under Review' || st === ReviewStatus.IN_REVIEW) {
-      return 'in-review';
+    if (
+      reviewRecord.reviewStatus === AppraisalReviewStatus.UNDER_REVIEW ||
+      reviewRecord.status === ReviewStatus.UNDER_REVIEW ||
+      reviewStatusLower === AppraisalReviewStatus.UNDER_REVIEW.toLowerCase() ||
+      statusLower === ReviewStatus.UNDER_REVIEW.toLowerCase()
+    ) {
+      return AppraisalReviewStatus.UNDER_REVIEW;
     }
-    if (revStatus === 'Pending' || st === 'Submitted' || st === ReviewStatus.SUBMITTED || st === 'Auto Submitted' || st === ReviewStatus.AUTO_SUBMITTED) {
-      return 'pending';
+    if (
+      reviewRecord.status === ReviewStatus.SUBMITTED ||
+      reviewRecord.status === ReviewStatus.AUTO_SUBMITTED ||
+      reviewRecord.status === ReviewStatus.AWAITING_REVIEW ||
+      reviewRecord.reviewStatus === AppraisalReviewStatus.AWAITING_REVIEW ||
+      statusLower === ReviewStatus.SUBMITTED.toLowerCase() ||
+      statusLower === ReviewStatus.AUTO_SUBMITTED.toLowerCase() ||
+      statusLower === ReviewStatus.AWAITING_REVIEW.toLowerCase() ||
+      reviewStatusLower === AppraisalReviewStatus.AWAITING_REVIEW.toLowerCase() ||
+      Boolean(reviewRecord.submittedDate)
+    ) {
+      return AppraisalReviewStatus.AWAITING_REVIEW;
     }
-    if (st === 'Assigned') {
-      return 'assigned';
-    }
-    if (st === 'Draft' || st === ReviewStatus.DRAFT || !revStatus) {
-      return 'pending';
-    }
-    return 'other';
+    return AppraisalReviewStatus.ASSIGNED;
   }
 
-  private normalizeStatusFilter(statusValue: string): string {
-    return statusValue.toLowerCase().replace(/[\s_-]/g, '');
+  private normalizeStatusFilter(statusValue: string): AppraisalReviewStatus | null {
+    const normalizedVal = (statusValue || '').toLowerCase().replace(/[\s_-]/g, '');
+    const underReviewKey = AppraisalReviewStatus.UNDER_REVIEW.toLowerCase().replace(/[\s_-]/g, '');
+    const inReviewKey = ReviewStatus.IN_REVIEW.toLowerCase().replace(/[\s_-]/g, '');
+    const reviewedKey = AppraisalReviewStatus.REVIEWED.toLowerCase().replace(/[\s_-]/g, '');
+    const awaitingReviewKey = AppraisalReviewStatus.AWAITING_REVIEW.toLowerCase().replace(/[\s_-]/g, '');
+    const submittedKey = ReviewStatus.SUBMITTED.toLowerCase().replace(/[\s_-]/g, '');
+    const assignedKey = AppraisalReviewStatus.ASSIGNED.toLowerCase().replace(/[\s_-]/g, '');
+    const draftKey = ReviewStatus.DRAFT.toLowerCase().replace(/[\s_-]/g, '');
+
+    if (normalizedVal === underReviewKey || normalizedVal === inReviewKey) return AppraisalReviewStatus.UNDER_REVIEW;
+    if (normalizedVal === reviewedKey) return AppraisalReviewStatus.REVIEWED;
+    if (normalizedVal === awaitingReviewKey || normalizedVal === submittedKey) return AppraisalReviewStatus.AWAITING_REVIEW;
+    if (normalizedVal === assignedKey || normalizedVal === draftKey) return AppraisalReviewStatus.ASSIGNED;
+    return null;
   }
 
   private normalizeYear(yearStr: string): string {
@@ -214,6 +379,75 @@ export class ManagerQuarterlyReviewService {
     return singleMatch ? parseFloat(singleMatch[0]) : null;
   }
 
+  /**
+   * Compute average score across the standard 6 rating categories.
+   * Returns a 1-decimal number, or null if no ratings exist.
+   */
+  private computeAverageRatingScore(ratings: any): number | null {
+    if (!ratings) return null;
+    let parsed = ratings;
+    if (typeof ratings === 'string') {
+      try {
+        parsed = JSON.parse(ratings);
+      } catch {
+        return null;
+      }
+    }
+    if (typeof parsed !== 'object' || parsed === null) return null;
+    const numericValues = Object.values(parsed).filter(
+      (v): v is number => typeof v === 'number' && !isNaN(v),
+    );
+    if (numericValues.length === 0) return null;
+    const sum = numericValues.reduce((acc, curr) => acc + curr, 0);
+    if (sum === 0) return null;
+    const totalCategories = Math.max(numericValues.length, 6);
+    return Math.round((sum / totalCategories) * 10) / 10;
+  }
+
+  /**
+   * Determine employee's role (MANAGER, EMPLOYEE, etc.)
+   * Primary source of truth: employee_details table 'role' column.
+   */
+  private resolveEmployeeRole(
+    empDetail?: EmployeeDetails,
+    userRecord?: User,
+    review?: QuarterlyReview,
+  ): string {
+    // 1. Primary: employee_details table 'role' column
+    const empRoleRaw = empDetail?.role ? String(empDetail.role).trim().toLowerCase() : '';
+    if (empRoleRaw) {
+      if (empRoleRaw === 'manager') return 'MANAGER';
+      if (empRoleRaw === 'employee') return 'EMPLOYEE';
+      if (empRoleRaw === 'admin') return 'ADMIN';
+      if (empRoleRaw === 'team_lead' || empRoleRaw === 'team lead') return 'TEAM LEAD';
+      return empRoleRaw.toUpperCase();
+    }
+
+    // 2. Secondary fallback: users table role or userType
+    const userRoleRaw = (userRecord?.role || userRecord?.userType
+      ? String(userRecord?.role || userRecord?.userType).trim().toLowerCase()
+      : '');
+    if (userRoleRaw) {
+      if (userRoleRaw === 'manager') return 'MANAGER';
+      if (userRoleRaw === 'employee') return 'EMPLOYEE';
+      if (userRoleRaw === 'admin') return 'ADMIN';
+      if (userRoleRaw === 'team_lead' || userRoleRaw === 'team lead') return 'TEAM LEAD';
+      return userRoleRaw.toUpperCase();
+    }
+
+    // 3. Tertiary fallback: designation contains manager
+    if (empDetail?.designation && empDetail.designation.toLowerCase().includes('manager')) {
+      return 'MANAGER';
+    }
+
+    // 4. Fallback based on review manager name
+    if (review?.managerName === 'CEO & Admin') {
+      return 'MANAGER';
+    }
+
+    return 'EMPLOYEE';
+  }
+
   /** Shape a single review row to what the review table UI expects */
   private toTableRow(
     review: QuarterlyReview,
@@ -226,11 +460,40 @@ export class ManagerQuarterlyReviewService {
     const sanitized = this.sanitizeReview(review);
     const employeeName = empDetail?.fullName || assignment?.employeeName || review.employeeId;
     const displayStatus = this.getDisplayStatus(review, assignment);
-    const isEvaluated = displayStatus === 'Reviewed' || displayStatus === 'Completed';
-    const isSubmitted = review.status === ReviewStatus.SUBMITTED || review.status === ReviewStatus.AUTO_SUBMITTED || review.status === ReviewStatus.IN_REVIEW;
+    const isEvaluated = displayStatus === AppraisalReviewStatus.REVIEWED;
+    const unsubmittedStatuses = ['draft', 'assigned', 'not started', 'not_started', 'in progress', 'in_progress'];
+    const revStatusLower = (review.reviewStatus || '').trim().toLowerCase();
+    const statusLower = (review.status || '').trim().toLowerCase();
 
-    const parsedRating = this.extractRatingValue(review.finalRating);
-    const hasFinalRating = isEvaluated && (parsedRating !== null || review.finalRating !== null);
+    const isSubmitted = Boolean(
+      review.submittedDate ||
+      (statusLower && !unsubmittedStatuses.includes(statusLower)) ||
+      (revStatusLower && !unsubmittedStatuses.includes(revStatusLower))
+    );
+
+    const submissionDetails = isSubmitted
+      ? {
+        overview: sanitized.overview || null,
+        projects: sanitized.projects || [],
+        achievements: sanitized.achievements || [],
+        challenges: sanitized.challenges || [],
+        learningGoals: sanitized.learningGoals || [],
+        teamContribution: sanitized.teamContribution || [],
+        companyEnvironment: sanitized.companyEnvironment || null,
+      }
+      : {
+        overview: null,
+        projects: [],
+        achievements: [],
+        challenges: [],
+        learningGoals: [],
+        teamContribution: [],
+        companyEnvironment: null,
+      };
+
+    const averageScore = this.computeAverageRatingScore(review.ratings);
+    const parsedRating = averageScore !== null ? averageScore : this.extractRatingValue(review.finalRating);
+    const hasFinalRating = parsedRating !== null || review.finalRating !== null;
 
     // Evaluator who evaluated the review can see what they gave
     const isEvaluator = Boolean(
@@ -248,42 +511,78 @@ export class ManagerQuarterlyReviewService {
     );
     const shouldHideRating = hasFinalRating && !isEvaluator && !isTokenValid;
 
-    const isManagerEmployee =
-      userRecord?.userType === UserType.MANAGER ||
-      userRecord?.role === 'MANAGER' ||
-      review.managerName === 'CEO & Admin' ||
-      (empDetail?.designation && empDetail.designation.toLowerCase().includes('manager'));
+    const employeeRole = (assignment && assignment.role) ? assignment.role : this.resolveEmployeeRole(empDetail, userRecord, review);
+    const isManagerEmployee = employeeRole === 'MANAGER';
 
-    const employeeRole = isManagerEmployee ? 'MANAGER' : 'EMPLOYEE';
+    const rawQuarter = review.quarter || assignment?.quarter || '';
+    const quarterCode = rawQuarter.match(/Q[1-4]/i)?.[0]?.toUpperCase() || rawQuarter || 'Q1';
+    const resolvedFy = review.financialYear || assignment?.financialYear || this.resolveFinancialYear(rawQuarter);
+
+    const assignedDateStr = review.assignedAt
+      ? new Date(review.assignedAt).toISOString().slice(0, 10)
+      : assignment?.assignedAt
+        ? new Date(assignment.assignedAt).toISOString().slice(0, 10)
+        : null;
+
+    const deadlineDateStr = review.deadlineAt
+      ? new Date(review.deadlineAt).toISOString().slice(0, 10)
+      : assignment?.deadlineAt
+        ? new Date(assignment.deadlineAt).toISOString().slice(0, 10)
+        : null;
+
+    const { fromDate: defaultFromDate, toDate: defaultToDate } = this.resolveQuarterDateRange(
+      rawQuarter,
+      resolvedFy,
+      assignedDateStr,
+      deadlineDateStr,
+    );
+    const fromDate = assignedDateStr || defaultFromDate;
+    const toDate = deadlineDateStr || defaultToDate;
+    const fullQuarter = `${quarterCode}-${resolvedFy.replace(/\s+/g, '')}`;
 
     return {
       ...sanitized,
+      ...submissionDetails,
+      isSubmitted,
+      isReviewSubmitted: isSubmitted,
+      submittedDate: isSubmitted ? review.submittedDate : null,
       id: review.id || assignment?.id,
       assignmentId: assignment?.id || review.assignmentId || null,
       employeeId: review.employeeId,
       employeeName,
       employeeInitials: this.getInitials(employeeName),
       employeeRole,
+      role: employeeRole,
       department: empDetail?.department || 'Engineering',
       designation: empDetail?.designation || (isManagerEmployee ? 'Manager' : 'Employee'),
-      quarter: review.quarter || assignment?.quarter,
-      financialYear: assignment?.financialYear || null,
+      quarter: quarterCode,
+      quarterCode,
+      fullQuarter,
+      financialYear: resolvedFy,
+      fromDate,
+      toDate,
+      startDate: fromDate,
+      endDate: toDate,
       status: displayStatus,
-      reviewStatus: review.reviewStatus || (isSubmitted ? 'Pending' : null),
+      reviewStatus: displayStatus,
       finalRating: shouldHideRating ? null : parsedRating,
+      averageRatingScore: shouldHideRating ? null : parsedRating,
       ratings: shouldHideRating ? null : sanitized.ratings,
       isFinalRatingHidden: shouldHideRating,
       hasFinalRating,
       lastModified: review.reviewedOn || (review as any).updatedAt || review.submittedDate || assignment?.assignedAt || null,
-      deadlineAt: assignment?.deadlineAt || review.deadlineAt || null,
+      deadlineAt: assignment?.deadlineAt || review.deadlineAt || toDate || null,
       assignedAt: assignment?.assignedAt || assignment?.createdAt || null,
       assignedByName: assignment?.assignedByName || null,
       actionType: isEvaluated ? 'view' : (isSubmitted ? 'evaluate' : 'view'),
-      actionLabel: isEvaluated ? 'View Review' : (isSubmitted ? 'Evaluate Now' : 'Assigned'),
+      actionLabel: isEvaluated ? 'View Review' : (isSubmitted ? 'Evaluate Now' : AppraisalReviewStatus.ASSIGNED),
       managerName: review.managerName || assignment?.assignedByName,
       evaluatorName: review.evaluatorName || (isEvaluated ? review.managerName : null),
       evaluatorRole: review.evaluatorRole || (isEvaluated ? (review.managerName === 'CEO & Admin' ? 'CEO' : 'MANAGER') : null),
       evaluatorId: review.evaluatorId || null,
+      notes: review.notes || assignment?.notes || null,
+      description: review.notes || assignment?.notes || null,
+      assignmentNotes: review.notes || assignment?.notes || null,
     };
   }
 
@@ -294,11 +593,30 @@ export class ManagerQuarterlyReviewService {
     userRecord?: User,
   ) {
     const employeeName = empDetail?.fullName || assignment.employeeName || assignment.employeeId;
-    const isManagerEmployee =
-      userRecord?.userType === UserType.MANAGER ||
-      userRecord?.role === 'MANAGER' ||
-      (empDetail?.designation && empDetail.designation.toLowerCase().includes('manager'));
-    const employeeRole = isManagerEmployee ? 'MANAGER' : 'EMPLOYEE';
+    const employeeRole = assignment.role || this.resolveEmployeeRole(empDetail, userRecord);
+    const isManagerEmployee = employeeRole === 'MANAGER';
+
+    const rawQuarter = assignment.quarter || '';
+    const quarterCode = rawQuarter.match(/Q[1-4]/i)?.[0]?.toUpperCase() || rawQuarter || 'Q1';
+    const resolvedFy = assignment.financialYear || this.resolveFinancialYear(rawQuarter);
+
+    const assignedDateStr = assignment.assignedAt
+      ? new Date(assignment.assignedAt).toISOString().slice(0, 10)
+      : null;
+
+    const deadlineDateStr = assignment.deadlineAt
+      ? new Date(assignment.deadlineAt).toISOString().slice(0, 10)
+      : null;
+
+    const { fromDate: defaultFromDate, toDate: defaultToDate } = this.resolveQuarterDateRange(
+      rawQuarter,
+      resolvedFy,
+      assignedDateStr,
+      deadlineDateStr,
+    );
+    const fromDate = assignedDateStr || defaultFromDate;
+    const toDate = deadlineDateStr || defaultToDate;
+    const fullQuarter = `${quarterCode}-${resolvedFy.replace(/\s+/g, '')}`;
 
     return {
       id: assignment.id,
@@ -307,22 +625,29 @@ export class ManagerQuarterlyReviewService {
       employeeName,
       employeeInitials: this.getInitials(employeeName),
       employeeRole,
+      role: employeeRole,
       department: empDetail?.department || 'Engineering',
       designation: empDetail?.designation || (isManagerEmployee ? 'Manager' : 'Employee'),
-      quarter: assignment.quarter,
-      financialYear: assignment.financialYear || null,
-      status: 'Assigned',
-      reviewStatus: null,
+      quarter: quarterCode,
+      quarterCode,
+      fullQuarter,
+      financialYear: resolvedFy,
+      fromDate,
+      toDate,
+      startDate: fromDate,
+      endDate: toDate,
+      status: ReviewStatus.ASSIGNED,
+      reviewStatus: AppraisalReviewStatus.ASSIGNED,
       finalRating: null,
       ratings: null,
       isFinalRatingHidden: false,
       hasFinalRating: false,
       lastModified: assignment.assignedAt || (assignment as any).createdAt || null,
-      deadlineAt: assignment.deadlineAt || null,
+      deadlineAt: assignment.deadlineAt || toDate || null,
       assignedAt: assignment.assignedAt || (assignment as any).createdAt || null,
       assignedByName: assignment.assignedByName || null,
       actionType: 'view',
-      actionLabel: 'Assigned',
+      actionLabel: AppraisalReviewStatus.ASSIGNED,
       managerName: assignment.assignedByName || null,
       evaluatorName: null,
       evaluatorRole: null,
@@ -335,6 +660,9 @@ export class ManagerQuarterlyReviewService {
       companyEnvironment: null,
       submittedDate: null,
       reviewedOn: null,
+      notes: assignment.notes || null,
+      description: assignment.notes || null,
+      assignmentNotes: assignment.notes || null,
     };
   }
 
@@ -437,7 +765,7 @@ export class ManagerQuarterlyReviewService {
           employeeId: a.employeeId,
           quarter: a.quarter,
           status: ReviewStatus.AUTO_SUBMITTED,
-          reviewStatus: null,
+          reviewStatus: AppraisalReviewStatus.AWAITING_REVIEW,
           assignmentId: a.id,
           deadlineAt: a.deadlineAt,
           managerName: a.assignedByName,
@@ -547,31 +875,47 @@ export class ManagerQuarterlyReviewService {
     }
 
     // Filter by status tab if requested
-    if (filters.status && filters.status.toUpperCase() !== 'ALL') {
+    if (filters.status && filters.status.toUpperCase() !== DisplayStatusFilter.ALL) {
       const targetStatus = this.normalizeStatusFilter(filters.status);
-      rows = rows.filter(
-        (rowItem) => this.normalizeStatusFilter(this.getStatusBucket(rowItem)) === targetStatus,
-      );
+      if (targetStatus) {
+        rows = rows.filter(
+          (rowItem) => this.getStatusBucket(rowItem) === targetStatus,
+        );
+      }
     }
 
     // Filter by role if requested (e.g. 'MANAGER' or 'EMPLOYEE')
     if (filters.role && filters.role.toUpperCase() !== 'ALL') {
       const targetRole = filters.role.toUpperCase();
-      rows = rows.filter((rowItem) => rowItem.employeeRole === targetRole);
+      rows = rows.filter((rowItem) => (rowItem.employeeRole || rowItem.role || '').toUpperCase() === targetRole);
     }
 
     // Quarter filter (supports both filters.quarter and filters.quarterCard)
     const effectiveQuarter = (filters.quarter && filters.quarter.toUpperCase() !== 'ALL')
       ? filters.quarter
       : (filters.quarterCard && filters.quarterCard.toUpperCase() !== 'ALL')
-      ? filters.quarterCard
-      : null;
+        ? filters.quarterCard
+        : null;
 
     if (effectiveQuarter) {
       const qUpper = effectiveQuarter.toUpperCase().trim();
+      const qCode = qUpper.match(/Q[1-4]/i)?.[0]?.toUpperCase() || qUpper;
+      const qHyphen = this.formatQuarterHyphen(qUpper).toUpperCase();
+      const normTarget = this.normalizeQ(qUpper);
       rows = rows.filter((rowItem) => {
         const rowQ = (rowItem.quarter || '').toUpperCase().trim();
-        return rowQ === qUpper || rowQ.startsWith(qUpper + ' ') || rowQ.includes(qUpper);
+        const rowCode = (rowItem.quarterCode || rowQ).toUpperCase().trim();
+        const rowFull = (rowItem.fullQuarter || '').toUpperCase().trim();
+        const normRow = this.normalizeQ(rowFull || rowQ);
+        return (
+          rowCode === qCode ||
+          rowQ === qUpper ||
+          rowFull === qUpper ||
+          rowFull === qHyphen ||
+          normRow === normTarget ||
+          rowFull.includes(qUpper) ||
+          rowFull.includes(qHyphen)
+        );
       });
     }
 
@@ -613,7 +957,31 @@ export class ManagerQuarterlyReviewService {
     revealToken?: string,
   ): Promise<PaginatedResult<any>> {
     try {
-      const rows = await this.getFilteredRows(managerUser, filters, revealToken);
+      let rows = await this.getFilteredRows(managerUser, filters, revealToken);
+
+      try {
+        const pendingAccessReqs = await this.accessRequestRepository.find({
+          where: { status: AccessRequestStatus.PENDING },
+        });
+        if (pendingAccessReqs.length > 0) {
+          rows = rows.map((row) => {
+            const req = pendingAccessReqs.find((ar) => {
+              if (String(ar.employeeId).trim().toLowerCase() !== String(row.employeeId).trim().toLowerCase()) return false;
+              const arQ = this.normalizeQ(ar.quarter || '');
+              const rowQ = this.normalizeQ(row.quarter || row.fullQuarter || '');
+              return !arQ || !rowQ || arQ === rowQ || arQ.includes(rowQ) || rowQ.includes(arQ);
+            });
+            return {
+              ...row,
+              hasPendingAccessRequest: Boolean(req),
+              pendingAccessRequestId: req ? req.id : null,
+              pendingAccessRequest: req || null,
+            };
+          });
+        }
+      } catch (reqError: any) {
+        this.logger.warn(`Failed to attach pending access requests: ${reqError.message}`);
+      }
 
       const total = rows.length;
       const page = filters.page && filters.page > 0 ? filters.page : 1;
@@ -640,7 +1008,7 @@ export class ManagerQuarterlyReviewService {
   async getQuarterOptions(managerUser: any): Promise<string[]> {
     try {
       const rows = await this.getFilteredRows(managerUser);
-      return Array.from(new Set(rows.map((rowItem) => rowItem.quarter).filter(Boolean)));
+      return Array.from(new Set(rows.map((rowItem) => this.formatQuarterHyphen(rowItem.quarter)).filter(Boolean)));
     } catch (error: any) {
       this.logger.error(`[getQuarterOptions] Error: ${error.message}`, error.stack);
       if (error instanceof HttpException) throw error;
@@ -651,8 +1019,42 @@ export class ManagerQuarterlyReviewService {
     }
   }
 
+  /** Master financial years around current fiscal year */
+  getFinancialYearOptions(): {
+    financialYears: Array<{ label: string; value: string; code: string; isCurrent: boolean }>;
+    currentAcademicYear: string;
+    currentFinancialYear: string;
+    currentAcademicYearCode: string;
+  } {
+    const now = new Date();
+    const month = now.getMonth();
+    const calendarYear = now.getFullYear();
+    const currentStartYear = month >= 3 ? calendarYear : calendarYear - 1;
+    const currentCode = `${currentStartYear}-${String(currentStartYear + 1).slice(2)}`;
+    const currentAcademicYear = `FY ${currentCode}`;
+
+    const items: Array<{ label: string; value: string; code: string; isCurrent: boolean }> = [];
+    for (let yr = currentStartYear + 2; yr >= currentStartYear - 5; yr--) {
+      const code = `${yr}-${String(yr + 1).slice(2)}`;
+      items.push({
+        label: `FY ${code}`,
+        value: code,
+        code,
+        isCurrent: yr === currentStartYear,
+      });
+    }
+
+    return {
+      financialYears: items,
+      currentAcademicYear,
+      currentFinancialYear: currentAcademicYear,
+      currentAcademicYearCode: currentCode,
+    };
+  }
+
+
   /** Get all employees associated with this manager/admin for the employee filter dropdown */
-  async getTeamEmployees(managerUser: any): Promise<Array<{ employeeId: string; employeeName: string; designation?: string }>> {
+  async getTeamEmployees(managerUser: any): Promise<Array<{ employeeId: string; employeeName: string; designation?: string; role?: string; employeeRole?: string }>> {
     try {
       const isPrivileged = this.isPrivilegedUser(managerUser);
       if (isPrivileged) {
@@ -661,11 +1063,16 @@ export class ManagerQuarterlyReviewService {
         });
         return emps
           .filter((e) => e.employeeId)
-          .map((e) => ({
-            employeeId: e.employeeId,
-            employeeName: e.fullName || e.employeeId,
-            designation: e.designation || 'Employee',
-          }));
+          .map((e) => {
+            const role = this.resolveEmployeeRole(e);
+            return {
+              employeeId: e.employeeId,
+              employeeName: e.fullName || e.employeeId,
+              designation: e.designation || 'Employee',
+              role,
+              employeeRole: role,
+            };
+          });
       } else {
         const { employeeIds } = await this.getMappedEmployeeIds(managerUser);
         const managerLoginId = managerUser?.loginId || '';
@@ -695,11 +1102,16 @@ export class ManagerQuarterlyReviewService {
           where: { employeeId: In(allIds) },
           order: { fullName: 'ASC' },
         });
-        return emps.map((e) => ({
-          employeeId: e.employeeId,
-          employeeName: e.fullName || e.employeeId,
-          designation: e.designation || 'Employee',
-        }));
+        return emps.map((e) => {
+          const role = this.resolveEmployeeRole(e);
+          return {
+            employeeId: e.employeeId,
+            employeeName: e.fullName || e.employeeId,
+            designation: e.designation || 'Employee',
+            role,
+            employeeRole: role,
+          };
+        });
       }
     } catch (error: any) {
       this.logger.error(`[getTeamEmployees] Error: ${error.message}`, error.stack);
@@ -737,8 +1149,8 @@ export class ManagerQuarterlyReviewService {
         const review = latestReviewByEmployee.get(employeeId);
         const isCompleted = Boolean(
           review &&
-          ([ReviewStatus.APPROVED, ReviewStatus.COMPLETED].includes(review.status) ||
-            review.reviewStatus === ReviewStatus.REVIEWED),
+          (review.status === ReviewStatus.REVIEWED ||
+            review.reviewStatus === AppraisalReviewStatus.REVIEWED),
         );
         const hasFinalRating = isCompleted && Boolean(review?.finalRating);
 
@@ -804,7 +1216,7 @@ export class ManagerQuarterlyReviewService {
 
       const pendingIds = eligibleIds.filter((employeeId) => {
         const review = latestReviewByEmployee.get(employeeId);
-        return !review || ![ReviewStatus.APPROVED, ReviewStatus.COMPLETED].includes(review.status) && review.reviewStatus !== ReviewStatus.REVIEWED;
+        return !review || (review.status !== ReviewStatus.REVIEWED && review.reviewStatus !== AppraisalReviewStatus.REVIEWED);
       });
 
       if (pendingIds.length === 0) {
@@ -848,13 +1260,13 @@ export class ManagerQuarterlyReviewService {
 
       // Determine requested quarter & financial year
       const rawQuarterString = (queryFilters.quarter || '').trim();
-      const isAllQuartersSelected = !rawQuarterString || rawQuarterString.toUpperCase() === 'ALL';
+      const isAllQuartersSelected = !rawQuarterString || rawQuarterString.toUpperCase() === DisplayStatusFilter.ALL;
       const selectedQuarter = isAllQuartersSelected ? '' : rawQuarterString;
 
       const rawYearString = (queryFilters.financialYear || queryFilters.year || '').trim();
-      const isAllYearsSelected = !rawYearString || rawYearString.toUpperCase() === 'ALL';
+      const isAllYearsSelected = !rawYearString || rawYearString.toUpperCase() === DisplayStatusFilter.ALL;
       const normalizedYearDigits = rawYearString ? this.normalizeYear(rawYearString) : '';
-      const selectedFinancialYear = normalizedYearDigits ? `FY${normalizedYearDigits}` : 'FY2026-27';
+      const selectedFinancialYear = isAllYearsSelected ? '' : (normalizedYearDigits ? `FY${normalizedYearDigits}` : '');
 
       // ── 1. Fetch eligible employees for this manager/admin ──
       let eligibleEmployees: Array<{
@@ -908,7 +1320,7 @@ export class ManagerQuarterlyReviewService {
       }
       let targetQuarterCanonical = displayQuarterLabel;
       if (/^Q[1-4]$/i.test(displayQuarterLabel)) {
-        targetQuarterCanonical = `${displayQuarterLabel.toUpperCase()} ${selectedFinancialYear}`;
+        targetQuarterCanonical = selectedFinancialYear ? `${displayQuarterLabel.toUpperCase()} ${selectedFinancialYear}` : displayQuarterLabel.toUpperCase();
       }
 
       if (eligibleEmployeeIds.length > 0) {
@@ -1021,7 +1433,7 @@ export class ManagerQuarterlyReviewService {
             pendingQuarter: primaryPending,
             pendingQuarters: pendingCodes,
             financialYear: existingAssignment.financialYear || selectedFinancialYear,
-            status: existingAssignment.status || 'Assigned',
+            status: existingAssignment.status || AssignmentStatus.ASSIGNED,
             assignedAt: existingAssignment.assignedAt,
             deadlineAt: existingAssignment.deadlineAt,
             assignedByName: existingAssignment.assignedByName,
@@ -1051,7 +1463,7 @@ export class ManagerQuarterlyReviewService {
             pendingQuarter: primaryPending || 'Q2',
             pendingQuarters: pendingCodes,
             financialYear: selectedFinancialYear,
-            status: matchedAssignment?.status || 'Assigned',
+            status: matchedAssignment?.status || AssignmentStatus.ASSIGNED,
             assignedAt: matchedAssignment?.assignedAt || null,
             deadlineAt: matchedAssignment?.deadlineAt || null,
             assignedByName: matchedAssignment?.assignedByName || null,
@@ -1070,40 +1482,39 @@ export class ManagerQuarterlyReviewService {
         const reviewStatusLower = (reviewRow.status || '').toLowerCase();
         const evaluationStatusLower = (reviewRow.reviewStatus || '').toLowerCase();
         const hasSubmittedReviewStatus = [
-          'submitted',
-          'auto submitted',
-          'in review',
-          'under review',
-          'reviewed',
-          'completed',
-          'approved',
+          ReviewStatus.SUBMITTED.toLowerCase(),
+          ReviewStatus.AUTO_SUBMITTED.toLowerCase(),
+          ReviewStatus.IN_REVIEW.toLowerCase(),
+          ReviewStatus.UNDER_REVIEW.toLowerCase(),
+          ReviewStatus.REVIEWED.toLowerCase(),
         ].includes(reviewStatusLower) || [
-          'pending',
-          'in review',
-          'under review',
-          'reviewed',
-          'completed',
-          'approved',
+          AppraisalReviewStatus.UNDER_REVIEW.toLowerCase(),
+          AppraisalReviewStatus.REVIEWED.toLowerCase(),
         ].includes(evaluationStatusLower);
 
-        return hasSubmittedReviewStatus && reviewStatusLower !== 'assigned' && reviewStatusLower !== 'draft';
+        return (
+          hasSubmittedReviewStatus &&
+          reviewStatusLower !== ReviewStatus.ASSIGNED.toLowerCase() &&
+          reviewStatusLower !== ReviewStatus.DRAFT.toLowerCase()
+        );
       };
 
       const actualSubmissionRows = filteredReviewRows.filter(isActualSubmission);
       const pendingReviewsCount = actualSubmissionRows.filter(
-        (reviewItem) => this.getStatusBucket(reviewItem) === 'pending',
+        (reviewItem) => this.getStatusBucket(reviewItem) === AppraisalReviewStatus.AWAITING_REVIEW,
       ).length;
       const inReviewCount = actualSubmissionRows.filter(
-        (reviewItem) => this.getStatusBucket(reviewItem) === 'in-review',
+        (reviewItem) => this.getStatusBucket(reviewItem) === AppraisalReviewStatus.UNDER_REVIEW,
       ).length;
       const completedCount = actualSubmissionRows.filter(
-        (reviewItem) => this.getStatusBucket(reviewItem) === 'completed',
+        (reviewItem) => this.getStatusBucket(reviewItem) === AppraisalReviewStatus.REVIEWED,
       ).length;
       const totalSubmissionsCount = pendingReviewsCount + inReviewCount + completedCount;
 
       return {
         totalTeamMembers: eligibleEmployees.length,
         totalSubmissions: totalSubmissionsCount,
+        awaitingReview: pendingReviewsCount,
         pendingReviews: pendingReviewsCount,
         inReview: inReviewCount,
         completed: completedCount,
@@ -1113,9 +1524,10 @@ export class ManagerQuarterlyReviewService {
           canonicalQuarter: targetQuarterCanonical,
           totalEmployees: eligibleEmployees.length,
           totalSubmissions: totalSubmissionsCount,
+          awaitingReview: pendingReviewsCount,
           pendingReviews: pendingReviewsCount,
           inReview: inReviewCount,
-          completed: completedCount, 
+          completed: completedCount,
           assignedCount: assignedEmployees.length,
           notAssignedCount: notAssignedEmployees.length,
           singleQuarterCount: singleQuarterEmployees.length,
@@ -1170,14 +1582,66 @@ export class ManagerQuarterlyReviewService {
         this.userRepository.findOne({ where: { loginId: review.employeeId } }),
       ]);
 
-      const isManagerEmployee =
-        userRecord?.userType === UserType.MANAGER ||
-        (empDetail?.designation && empDetail.designation.toLowerCase().includes('manager'));
+      let assignment: ReviewAssignment | null = null;
+      if (review.assignmentId) {
+        assignment = await this.assignmentRepository.findOne({ where: { id: review.assignmentId } });
+      }
+      if (!assignment) {
+        const variants = this.normalizeQuarterVariants(review.quarter);
+        assignment = await this.assignmentRepository.findOne({
+          where: { employeeId: review.employeeId, quarter: In(variants) },
+          order: { id: 'DESC' },
+        });
+      }
+
+      const employeeRole = this.resolveEmployeeRole(empDetail || undefined, userRecord || undefined, review);
+      const isManagerEmployee = employeeRole === 'MANAGER';
+
+      const rawQuarter = review.quarter || assignment?.quarter || '';
+      const quarterCode = rawQuarter.match(/Q[1-4]/i)?.[0]?.toUpperCase() || rawQuarter || 'Q1';
+      const resolvedFy = review.financialYear || assignment?.financialYear || this.resolveFinancialYear(rawQuarter);
+
+      const assignedDateStr = review.assignedAt
+        ? new Date(review.assignedAt).toISOString().slice(0, 10)
+        : assignment?.assignedAt
+          ? new Date(assignment.assignedAt).toISOString().slice(0, 10)
+          : null;
+
+      const deadlineDateStr = review.deadlineAt
+        ? new Date(review.deadlineAt).toISOString().slice(0, 10)
+        : assignment?.deadlineAt
+          ? new Date(assignment.deadlineAt).toISOString().slice(0, 10)
+          : null;
+
+      const { fromDate: defaultFromDate, toDate: defaultToDate } = this.resolveQuarterDateRange(
+        rawQuarter,
+        resolvedFy,
+        assignedDateStr,
+        deadlineDateStr,
+      );
+      const fromDate = assignedDateStr || defaultFromDate;
+      const toDate = deadlineDateStr || defaultToDate;
+      const fullQuarter = `${quarterCode}-${resolvedFy.replace(/\s+/g, '')}`;
+      const assignmentNotes = review.notes || assignment?.notes || null;
 
       return {
         ...sanitized,
+        quarter: quarterCode,
+        quarterCode,
+        fullQuarter,
+        financialYear: resolvedFy,
+        fromDate,
+        toDate,
+        startDate: fromDate,
+        endDate: toDate,
+        assignedAt: review.assignedAt || assignment?.assignedAt || fromDate,
+        deadlineAt: review.deadlineAt || assignment?.deadlineAt || toDate,
+        notes: assignmentNotes,
+        description: assignmentNotes,
+        assignmentNotes,
         employeeName: empDetail?.fullName || review.employeeId,
-        employeeRole: isManagerEmployee ? 'MANAGER' : 'EMPLOYEE',
+        employeeRole,
+        role: employeeRole,
         department: empDetail?.department || 'Engineering',
         designation: empDetail?.designation || (isManagerEmployee ? 'Manager' : 'Employee'),
         evaluatorName: review.evaluatorName || (review.reviewStatus ? review.managerName : null),
@@ -1201,29 +1665,95 @@ export class ManagerQuarterlyReviewService {
     try {
       const isPrivileged = this.isPrivilegedUser(managerUser);
 
-      const whereConditions: any = quarter ? { employeeId, quarter } : { employeeId };
+      let whereConditions: any;
+      if (quarter) {
+        const variants = this.normalizeQuarterVariants(quarter);
+        whereConditions = { employeeId, quarter: In(variants) };
+      } else {
+        whereConditions = { employeeId };
+      }
 
       let review = await this.quarterlyReviewRepository.findOne({
         where: whereConditions,
         order: { id: 'DESC' },
       });
 
-      if (!review && !isNaN(Number(employeeId))) {
+      if (!review && quarter) {
+        const allReviews = await this.quarterlyReviewRepository.find({
+          where: { employeeId },
+          order: { id: 'DESC' },
+        });
+        const normQ = this.normalizeQ(quarter);
+        const qCode = quarter.match(/Q[1-4]/i)?.[0]?.toUpperCase();
+        review = allReviews.find((r) => {
+          const rNorm = this.normalizeQ(r.quarter);
+          const rCode = r.quarter?.match(/Q[1-4]/i)?.[0]?.toUpperCase();
+          return rNorm === normQ || rNorm.startsWith(normQ) || (qCode && rCode === qCode);
+        }) || null;
+      }
+
+      // If a review was found but quarter was explicitly specified, verify that the review matches the requested quarter
+      if (review && quarter) {
+        const normQ = this.normalizeQ(quarter);
+        const rNorm = this.normalizeQ(review.quarter);
+        const qCode = quarter.match(/Q[1-4]/i)?.[0]?.toUpperCase();
+        const rCode = review.quarter?.match(/Q[1-4]/i)?.[0]?.toUpperCase();
+        const matches = rNorm === normQ || rNorm.startsWith(normQ) || normQ.startsWith(rNorm) || (qCode && rCode === qCode);
+        if (!matches) {
+          review = null;
+        }
+      }
+
+      // Only fall back to review primary key id lookup if no quarter parameter was provided at all
+      if (!review && !quarter && !isNaN(Number(employeeId))) {
         review = await this.quarterlyReviewRepository.findOne({
           where: { id: Number(employeeId) },
         });
       }
 
       if (!review) {
-        const assignment = await this.assignmentRepository.findOne({
-          where: quarter ? { employeeId, quarter } : { employeeId },
+        let assignment = await this.assignmentRepository.findOne({
+          where: whereConditions,
           order: { id: 'DESC' },
         });
+
+        if (!assignment && quarter) {
+          const allAssignments = await this.assignmentRepository.find({
+            where: { employeeId },
+            order: { id: 'DESC' },
+          });
+          const normQ = this.normalizeQ(quarter);
+          const qCode = quarter.match(/Q[1-4]/i)?.[0]?.toUpperCase();
+          assignment = allAssignments.find((a) => {
+            const aNorm = this.normalizeQ(a.quarter);
+            const aCode = a.quarter?.match(/Q[1-4]/i)?.[0]?.toUpperCase();
+            return aNorm === normQ || aNorm.startsWith(normQ) || (qCode && aCode === qCode);
+          }) || null;
+        }
 
         if (assignment) {
           const empDetail = await this.employeeDetailsRepository.findOne({
             where: { employeeId },
           });
+
+          const rawQuarter = assignment.quarter || '';
+          const quarterCode = rawQuarter.match(/Q[1-4]/i)?.[0]?.toUpperCase() || rawQuarter || 'Q1';
+          const resolvedFy = assignment.financialYear || this.resolveFinancialYear(rawQuarter);
+          const assignedDateStr = assignment.assignedAt
+            ? new Date(assignment.assignedAt).toISOString().slice(0, 10)
+            : null;
+          const deadlineDateStr = assignment.deadlineAt
+            ? new Date(assignment.deadlineAt).toISOString().slice(0, 10)
+            : null;
+          const { fromDate: defaultFromDate, toDate: defaultToDate } = this.resolveQuarterDateRange(
+            rawQuarter,
+            resolvedFy,
+            assignedDateStr,
+            deadlineDateStr,
+          );
+          const fromDate = assignedDateStr || defaultFromDate;
+          const toDate = deadlineDateStr || defaultToDate;
+          const fullQuarter = `${quarterCode}-${resolvedFy.replace(/\s+/g, '')}`;
 
           return {
             id: assignment.id,
@@ -1232,9 +1762,16 @@ export class ManagerQuarterlyReviewService {
             employeeName: empDetail?.fullName || assignment.employeeName,
             department: empDetail?.department || 'Engineering',
             designation: empDetail?.designation || 'Employee',
-            quarter: assignment.quarter,
-            status: 'Assigned',
-            reviewStatus: null,
+            quarter: quarterCode,
+            quarterCode,
+            fullQuarter,
+            financialYear: resolvedFy,
+            fromDate,
+            toDate,
+            startDate: fromDate,
+            endDate: toDate,
+            status: ReviewStatus.ASSIGNED,
+            reviewStatus: AppraisalReviewStatus.ASSIGNED,
             overview: null,
             achievements: [],
             challenges: [],
@@ -1247,10 +1784,13 @@ export class ManagerQuarterlyReviewService {
             lastModified: assignment.assignedAt,
             finalRating: null,
             actionType: 'view',
-            actionLabel: 'Assigned',
+            actionLabel: AppraisalReviewStatus.ASSIGNED,
             managerName: assignment.assignedByName,
-            deadlineAt: assignment.deadlineAt,
+            deadlineAt: assignment.deadlineAt || toDate,
             assignedAt: assignment.assignedAt,
+            notes: assignment.notes || null,
+            description: assignment.notes || null,
+            assignmentNotes: assignment.notes || null,
           };
         }
 
@@ -1279,14 +1819,16 @@ export class ManagerQuarterlyReviewService {
 
       const sanitized = this.sanitizeReview(review);
       const displayStatus = this.getDisplayStatus(review);
-      const isEvaluated = displayStatus === 'Reviewed' || displayStatus === 'Completed';
-      const hasFinalRating = isEvaluated && Boolean(review.finalRating);
+      const isEvaluated = displayStatus === AppraisalReviewStatus.REVIEWED;
+      const averageScore = this.computeAverageRatingScore(review.ratings);
+      const parsedRating = averageScore !== null ? averageScore : this.extractRatingValue(review.finalRating);
+      const hasFinalRating = parsedRating !== null || Boolean(review.finalRating);
       const isTokenValid = Boolean(
         revealToken && review.id && isRevealTokenValid(revealToken, review.id, review.employeeId),
       );
       const isEvaluator = Boolean(
         managerUser &&
-        (this.isPrivilegedUser(managerUser) ||
+        (isPrivileged ||
           review.evaluatorId === managerUser.loginId ||
           review.managerName === managerUser.loginId ||
           (managerUser.aliasLoginName && review.managerName === managerUser.aliasLoginName) ||
@@ -1300,29 +1842,119 @@ export class ManagerQuarterlyReviewService {
         this.userRepository.findOne({ where: { loginId: review.employeeId } }),
       ]);
 
-      const isManagerEmployee =
-        userRecord?.userType === UserType.MANAGER ||
-        (empDetail?.designation && empDetail.designation.toLowerCase().includes('manager'));
+      let assignment: ReviewAssignment | null = null;
+      if (review.assignmentId) {
+        assignment = await this.assignmentRepository.findOne({ where: { id: review.assignmentId } });
+      }
+      if (!assignment) {
+        const variants = this.normalizeQuarterVariants(review.quarter);
+        assignment = await this.assignmentRepository.findOne({
+          where: { employeeId: review.employeeId, quarter: In(variants) },
+          order: { id: 'DESC' },
+        });
+      }
+
+      const employeeRole = this.resolveEmployeeRole(empDetail || undefined, userRecord || undefined, review);
+      const isManagerEmployee = employeeRole === 'MANAGER';
+
+      const rawQuarter = review.quarter || assignment?.quarter || '';
+      const quarterCode = rawQuarter.match(/Q[1-4]/i)?.[0]?.toUpperCase() || rawQuarter || 'Q1';
+      const resolvedFy = review.financialYear || assignment?.financialYear || this.resolveFinancialYear(rawQuarter);
+      const assignedDateStr = review.assignedAt
+        ? new Date(review.assignedAt).toISOString().slice(0, 10)
+        : assignment?.assignedAt
+          ? new Date(assignment.assignedAt).toISOString().slice(0, 10)
+          : null;
+      const deadlineDateStr = review.deadlineAt
+        ? new Date(review.deadlineAt).toISOString().slice(0, 10)
+        : assignment?.deadlineAt
+          ? new Date(assignment.deadlineAt).toISOString().slice(0, 10)
+          : null;
+      const { fromDate: defaultFromDate, toDate: defaultToDate } = this.resolveQuarterDateRange(
+        rawQuarter,
+        resolvedFy,
+        assignedDateStr,
+        deadlineDateStr,
+      );
+      const fromDate = assignedDateStr || defaultFromDate;
+      const toDate = deadlineDateStr || defaultToDate;
+      const fullQuarter = `${quarterCode}-${resolvedFy.replace(/\s+/g, '')}`;
+      const assignmentNotes = review.notes || assignment?.notes || null;
+
+      const unsubmittedStatuses = ['draft', 'assigned', 'not started', 'not_started', 'in progress', 'in_progress'];
+      const revStatusLower = (review.reviewStatus || '').trim().toLowerCase();
+      const statusLower = (review.status || '').trim().toLowerCase();
+
+      const isSubmitted = Boolean(
+        review.submittedDate ||
+        (statusLower && !unsubmittedStatuses.includes(statusLower)) ||
+        (revStatusLower && !unsubmittedStatuses.includes(revStatusLower))
+      );
+
+      const submissionDetails = isSubmitted
+        ? {
+          overview: sanitized.overview || null,
+          projects: sanitized.projects || [],
+          achievements: sanitized.achievements || [],
+          challenges: sanitized.challenges || [],
+          learningGoals: sanitized.learningGoals || [],
+          teamContribution: sanitized.teamContribution || [],
+          companyEnvironment: sanitized.companyEnvironment || null,
+        }
+        : {
+          overview: null,
+          projects: [],
+          achievements: [],
+          challenges: [],
+          learningGoals: [],
+          teamContribution: [],
+          companyEnvironment: null,
+        };
 
       return {
         ...sanitized,
-        finalRating: shouldHideRating ? null : sanitized.finalRating,
+        ...submissionDetails,
+        isSubmitted,
+        isReviewSubmitted: isSubmitted,
+        submittedDate: isSubmitted ? review.submittedDate : null,
+        quarter: quarterCode,
+        quarterCode,
+        fullQuarter,
+        financialYear: resolvedFy,
+        fromDate,
+        toDate,
+        startDate: fromDate,
+        endDate: toDate,
+        assignedAt: review.assignedAt || assignment?.assignedAt || fromDate,
+        deadlineAt: review.deadlineAt || assignment?.deadlineAt || toDate,
+        notes: assignmentNotes,
+        description: assignmentNotes,
+        assignmentNotes,
+        status: displayStatus,
+        reviewStatus: displayStatus,
+        reviewedOn: isEvaluated ? review.reviewedOn : null,
+        actionType: isEvaluated ? 'view' : (isSubmitted ? 'evaluate' : 'view'),
+        actionLabel: isEvaluated ? 'View Review' : (isSubmitted ? 'Evaluate Now' : AppraisalReviewStatus.ASSIGNED),
+        finalRating: shouldHideRating ? null : parsedRating,
+        averageRatingScore: shouldHideRating ? null : parsedRating,
         ratings: shouldHideRating ? null : sanitized.ratings,
         isFinalRatingHidden: shouldHideRating,
         hasFinalRating,
         employeeName: empDetail?.fullName || review.employeeId,
-        employeeRole: isManagerEmployee ? 'MANAGER' : 'EMPLOYEE',
+        employeeRole,
+        role: employeeRole,
         department: empDetail?.department || 'Engineering',
         designation: empDetail?.designation || (isManagerEmployee ? 'Manager' : 'Employee'),
-        evaluatorName: review.evaluatorName || (review.reviewStatus ? review.managerName : null),
-        evaluatorRole: review.evaluatorRole || (review.reviewStatus ? (review.managerName === 'CEO & Admin' ? 'CEO' : 'MANAGER') : null),
+        managerName: review.managerName || assignment?.assignedByName,
+        evaluatorName: review.evaluatorName || (isEvaluated ? review.managerName : null),
+        evaluatorRole: review.evaluatorRole || (isEvaluated ? (review.managerName === 'CEO & Admin' ? 'CEO' : 'MANAGER') : null),
         evaluatorId: review.evaluatorId || null,
       };
     } catch (error: any) {
-      this.logger.error(`[getSubmissionByEmployeeId] Error for employeeId=${employeeId}: ${error.message}`, error.stack);
       if (error instanceof HttpException) throw error;
+      this.logger.error(`Error fetching submission for ${employeeId}:`, error);
       throw new HttpException(
-        error.message || 'Failed to fetch employee submission details',
+        error.message || 'Failed to fetch quarterly review submission',
         HttpStatus.INTERNAL_SERVER_ERROR,
       );
     }
@@ -1344,8 +1976,58 @@ export class ManagerQuarterlyReviewService {
       }
 
       const reviewStatus = isDraft
-        ? (dto.reviewStatus || ReviewStatus.DRAFT)
-        : (dto.reviewStatus || ReviewStatus.REVIEWED);
+        ? (dto.reviewStatus || AppraisalReviewStatus.UNDER_REVIEW)
+        : (dto.reviewStatus || AppraisalReviewStatus.REVIEWED);
+
+      if (!isDraft) {
+        const strengths = (dto.strengths || '').trim();
+        const improvements = (dto.improvements || '').trim();
+        const remarks = (dto.remarks || '').trim();
+        if (!strengths || !improvements || !remarks) {
+          throw new HttpException(
+            'All feedback fields (strengths, areas for improvement, and remarks) are required to submit the final review.',
+            HttpStatus.BAD_REQUEST,
+          );
+        }
+
+        let ratingsObj: any = dto.ratings;
+        if (typeof ratingsObj === 'string') {
+          try {
+            ratingsObj = JSON.parse(ratingsObj);
+          } catch {
+            ratingsObj = null;
+          }
+        }
+
+        const normalizedRatings: Record<string, number> = {};
+        if (Array.isArray(ratingsObj)) {
+          ratingsObj.forEach((item: any) => {
+            if (item && item.category) {
+              normalizedRatings[String(item.category).toLowerCase().trim()] = Number(item.rating);
+            }
+          });
+        } else if (ratingsObj && typeof ratingsObj === 'object') {
+          for (const [k, v] of Object.entries(ratingsObj)) {
+            normalizedRatings[k.toLowerCase().trim()] = Number(v);
+          }
+        }
+
+        const requiredCategories = ['productivity', 'quality', 'ownership', 'communication', 'collaboration', 'innovation'];
+        const hasAllRatings = requiredCategories.every((cat) => {
+          const val =
+            normalizedRatings[cat] ??
+            normalizedRatings[`${cat} & output`] ??
+            normalizedRatings[`${cat} skills`];
+          return typeof val === 'number' && !isNaN(val) && val > 0;
+        });
+
+        if (!hasAllRatings) {
+          throw new HttpException(
+            'All 6 performance category ratings are mandatory to submit the final review.',
+            HttpStatus.BAD_REQUEST,
+          );
+        }
+      }
 
       if (dto.quarter?.trim()) {
         const selectedQuarter = dto.quarter.trim();
@@ -1358,10 +2040,20 @@ export class ManagerQuarterlyReviewService {
       review.strengths = dto.strengths !== undefined ? dto.strengths : review.strengths;
       review.improvements = dto.improvements !== undefined ? dto.improvements : review.improvements;
       review.remarks = dto.remarks !== undefined ? dto.remarks : review.remarks;
-      review.finalRating = dto.finalRating !== undefined ? dto.finalRating : review.finalRating;
+      if (dto.ratings !== undefined) {
+        const avgScore = this.computeAverageRatingScore(dto.ratings);
+        if (avgScore !== null) {
+          review.averageRating = Number(avgScore.toFixed(1));
+          review.finalRating = avgScore.toFixed(1);
+        } else {
+          review.finalRating = dto.finalRating !== undefined ? dto.finalRating : review.finalRating;
+        }
+      } else {
+        review.finalRating = dto.finalRating !== undefined ? dto.finalRating : review.finalRating;
+      }
       review.reviewStatus = reviewStatus;
-      review.reviewedOn = new Date();
-      review.status = isDraft ? ReviewStatus.DRAFT : ReviewStatus.APPROVED;
+      review.reviewedOn = isDraft ? null : new Date();
+      review.status = isDraft ? ReviewStatus.UNDER_REVIEW : ReviewStatus.REVIEWED;
 
       // Track evaluator identity and role
       const evaluatorName =
@@ -1372,133 +2064,159 @@ export class ManagerQuarterlyReviewService {
 
       const updated = await this.quarterlyReviewRepository.save(review);
       this.logger.log(
-        `Review id=${id} evaluated by ${evaluatorName} (${review.evaluatorRole}), status=${updated.reviewStatus}, finalRating=${updated.finalRating}`,
+        `[evaluateReview] Successfully saved review ID=${id} as ${reviewStatus} by evaluator=${evaluatorName}`,
       );
 
+      // Sync matching assignment status
+      try {
+        if (updated.assignmentId) {
+          await this.assignmentRepository.update(updated.assignmentId, {
+            status: isDraft ? AssignmentStatus.UNDER_REVIEW : AssignmentStatus.REVIEWED,
+          });
+        } else {
+          const variants = this.normalizeQuarterVariants(updated.quarter);
+          const matchingAssignment = await this.assignmentRepository.findOne({
+            where: { employeeId: updated.employeeId, quarter: In(variants) },
+            order: { id: 'DESC' },
+          });
+          if (matchingAssignment) {
+            matchingAssignment.status = isDraft ? AssignmentStatus.UNDER_REVIEW : AssignmentStatus.REVIEWED;
+            await this.assignmentRepository.save(matchingAssignment);
+          }
+        }
+      } catch (syncErr: any) {
+        this.logger.warn(`Could not sync assignment status on evaluateReview: ${syncErr.message}`);
+      }
+
       if (!isDraft) {
-        await this.sendQuarterlyReviewNotificationEmail(managerUser, updated, dto);
-
-        // 1. Send in-app notification to the Employee
-        try {
-          await this.notificationsService.createNotification({
-            employeeId: updated.employeeId,
-            title: 'Quarterly Review Evaluated',
-            message: `Your manager ${evaluatorName} has completed and submitted your Quarterly Review evaluation for ${updated.quarter}.`,
-            type: 'success',
-          });
-          this.logger.log(`Created in-app notification for employee ${updated.employeeId} on review evaluation`);
-        } catch (empNotifErr: any) {
-          this.logger.warn(`Could not create notification for employee ${updated.employeeId}: ${empNotifErr.message}`);
-        }
-
-        // 2. Send in-app notification to the Manager / Evaluator
-        if (managerUser?.loginId && managerUser.loginId !== updated.employeeId) {
+        setImmediate(async () => {
           try {
-            const empDetail = await this.employeeDetailsRepository.findOne({
-              where: { employeeId: updated.employeeId },
-            });
-            const empName = empDetail?.fullName || updated.employeeId;
-            await this.notificationsService.createNotification({
-              employeeId: managerUser.loginId,
-              title: 'Quarterly Review Evaluated',
-              message: `You have completed and submitted the evaluation for ${empName} (${updated.quarter}).`,
-              type: 'info',
-            });
-            this.logger.log(`Created in-app notification for manager ${managerUser.loginId}`);
-          } catch (mgrNotifErr: any) {
-            this.logger.warn(`Could not create notification for manager ${managerUser.loginId}: ${mgrNotifErr.message}`);
-          }
-        }
+            await this.sendQuarterlyReviewNotificationEmail(managerUser, updated, dto);
 
-        // 3. Send in-app notification and email to Admin and CEO
-        try {
-          const userRepo = this.quarterlyReviewRepository.manager.getRepository(User);
-          const adminCeoUsers = await userRepo.find({
-            where: [
-              { userType: UserType.ADMIN },
-              { userType: UserType.CEO },
-              { role: UserType.ADMIN },
-              { role: UserType.CEO },
-            ],
-          }).catch(() => []);
-
-          const adminCeoIds = new Set<string>(['Admin', 'CEO']);
-          const adminCeoEmails = new Set<string>();
-
-          for (const u of adminCeoUsers) {
-            if (u.loginId && u.loginId !== managerUser?.loginId) {
-              adminCeoIds.add(u.loginId);
-            }
-          }
-
-          const adminCeoEmployees = await this.employeeDetailsRepository.find({
-            where: [
-              { designation: Like('%Admin%') },
-              { designation: Like('%CEO%') },
-            ],
-          }).catch(() => []);
-
-          for (const emp of adminCeoEmployees) {
-            if (emp.employeeId && emp.employeeId !== managerUser?.loginId) {
-              adminCeoIds.add(emp.employeeId);
-              if (emp.email) adminCeoEmails.add(emp.email);
-            }
-          }
-
-          if (adminCeoIds.size > 0) {
-            const extraEmps = await this.employeeDetailsRepository.find({
-              where: { employeeId: In(Array.from(adminCeoIds)) },
-            }).catch(() => []);
-            for (const emp of extraEmps) {
-              if (emp.email) adminCeoEmails.add(emp.email);
-            }
-          }
-
-          const empDetail = await this.employeeDetailsRepository.findOne({
-            where: { employeeId: updated.employeeId },
-          });
-          const empName = empDetail?.fullName || updated.employeeId;
-
-          // Dispatch in-app notifications to Admin and CEO
-          for (const recipientId of adminCeoIds) {
+            // 1. Send in-app notification to the Employee
             try {
               await this.notificationsService.createNotification({
-                employeeId: recipientId,
+                employeeId: updated.employeeId,
                 title: 'Quarterly Review Evaluated',
-                message: `${evaluatorName} has completed and submitted the evaluation for ${empName} (${updated.quarter}).`,
-                type: 'info',
+                message: `Your manager ${evaluatorName} has completed and submitted your Quarterly Review evaluation for ${updated.quarter}.`,
+                type: 'success',
               });
-              this.logger.log(`Created in-app notification for Admin/CEO ${recipientId}`);
-            } catch (adminNotifErr: any) {
-              this.logger.warn(`Could not create notification for Admin/CEO ${recipientId}: ${adminNotifErr.message}`);
+              this.logger.log(`Created in-app notification for employee ${updated.employeeId} on review evaluation`);
+            } catch (empNotifErr: any) {
+              this.logger.warn(`Could not create notification for employee ${updated.employeeId}: ${empNotifErr.message}`);
             }
-          }
 
-          // Dispatch email notifications to Admin and CEO
-          for (const adminEmail of adminCeoEmails) {
-            try {
-              const quarter = updated.quarter || 'Quarterly Review';
-              const subject = `Quarterly Performance Review Completed - ${empName} (${quarter})`;
-              const text = `Hello,\n\n${evaluatorName} has completed and submitted the quarterly review evaluation for ${empName} (${quarter}).\n\nFinal Performance Rating: ${updated.finalRating || dto.finalRating || 'N/A'}\n\nRegards,\nWorkSphere Team`;
-              const htmlContent = getAppraisalQuarterEvaluatedTemplate({
-                employeeName: empName,
-                quarter,
-                managerName: evaluatorName,
-                finalRating: updated.finalRating || dto.finalRating || undefined,
-                strengths: dto.strengths || updated.strengths || undefined,
-                improvements: dto.improvements || updated.improvements || undefined,
-                remarks: dto.remarks || updated.remarks || undefined,
-                portalUrl: process.env.FRONTEND_URL || 'https://worksphere.inventech-developer.in',
-              });
-              await this.emailService.sendEmail(adminEmail, subject, text, htmlContent);
-              this.logger.log(`Queued review evaluation email for Admin/CEO (${adminEmail})`);
-            } catch (adminMailErr: any) {
-              this.logger.warn(`Could not send review evaluation email to Admin/CEO: ${adminMailErr.message}`);
+            // 2. Send in-app notification to the Manager / Evaluator
+            if (managerUser?.loginId && managerUser.loginId !== updated.employeeId) {
+              try {
+                const empDetail = await this.employeeDetailsRepository.findOne({
+                  where: { employeeId: updated.employeeId },
+                });
+                const empName = empDetail?.fullName || updated.employeeId;
+                await this.notificationsService.createNotification({
+                  employeeId: managerUser.loginId,
+                  title: 'Quarterly Review Evaluated',
+                  message: `You have completed and submitted the evaluation for ${empName} (${updated.quarter}).`,
+                  type: 'info',
+                });
+                this.logger.log(`Created in-app notification for manager ${managerUser.loginId}`);
+              } catch (mgrNotifErr: any) {
+                this.logger.warn(`Could not create notification for manager ${managerUser.loginId}: ${mgrNotifErr.message}`);
+              }
             }
+
+            // 3. Send in-app notification and email to Admin and CEO
+            try {
+              const adminCeoUsers = await this.userRepository.find({
+                where: [
+                  { userType: UserType.ADMIN },
+                  { userType: UserType.CEO },
+                  { role: UserType.ADMIN },
+                  { role: UserType.CEO },
+                ],
+              }).catch(() => []);
+
+              const adminCeoIds = new Set<string>(['Admin', 'CEO']);
+              const adminCeoEmails = new Set<string>();
+
+              for (const u of adminCeoUsers) {
+                if (u.loginId && u.loginId !== managerUser?.loginId) {
+                  adminCeoIds.add(u.loginId);
+                }
+              }
+
+              const adminCeoEmployees = await this.employeeDetailsRepository.find({
+                where: [
+                  { designation: Like('%Admin%') },
+                  { designation: Like('%CEO%') },
+                ],
+              }).catch(() => []);
+
+              for (const emp of adminCeoEmployees) {
+                if (emp.employeeId && emp.employeeId !== managerUser?.loginId) {
+                  adminCeoIds.add(emp.employeeId);
+                  if (emp.email) adminCeoEmails.add(emp.email);
+                }
+              }
+
+              if (adminCeoIds.size > 0) {
+                const extraEmps = await this.employeeDetailsRepository.find({
+                  where: { employeeId: In(Array.from(adminCeoIds)) },
+                }).catch(() => []);
+                for (const emp of extraEmps) {
+                  if (emp.email) adminCeoEmails.add(emp.email);
+                }
+              }
+
+              const empDetail = await this.employeeDetailsRepository.findOne({
+                where: { employeeId: updated.employeeId },
+              });
+              const empName = empDetail?.fullName || updated.employeeId;
+
+              // Dispatch in-app notifications to Admin and CEO
+              for (const recipientId of adminCeoIds) {
+                try {
+                  await this.notificationsService.createNotification({
+                    employeeId: recipientId,
+                    title: 'Quarterly Review Evaluated',
+                    message: `${evaluatorName} has completed and submitted the evaluation for ${empName} (${updated.quarter}).`,
+                    type: 'info',
+                  });
+                  this.logger.log(`Created in-app notification for Admin/CEO ${recipientId}`);
+                } catch (adminNotifErr: any) {
+                  this.logger.warn(`Could not create notification for Admin/CEO ${recipientId}: ${adminNotifErr.message}`);
+                }
+              }
+
+              // Dispatch email notifications to Admin and CEO
+              for (const adminEmail of adminCeoEmails) {
+                try {
+                  const quarter = updated.quarter || 'Quarterly Review';
+                  const subject = `Quarterly Performance Review Completed - ${empName} (${quarter})`;
+                  const text = `Hello,\n\n${evaluatorName} has completed and submitted the quarterly review evaluation for ${empName} (${quarter}).\n\nFinal Performance Rating: ${updated.finalRating || dto.finalRating || 'N/A'}\n\nRegards,\nWorkSphere Team`;
+                  const htmlContent = getAppraisalQuarterEvaluatedTemplate({
+                    employeeName: empName,
+                    quarter,
+                    managerName: evaluatorName,
+                    finalRating: updated.finalRating || dto.finalRating || undefined,
+                    strengths: dto.strengths || updated.strengths || undefined,
+                    improvements: dto.improvements || updated.improvements || undefined,
+                    remarks: dto.remarks || updated.remarks || undefined,
+                    portalUrl: process.env.FRONTEND_URL || 'https://worksphere.inventech-developer.in',
+                  });
+                  await this.emailService.sendEmail(adminEmail, subject, text, htmlContent);
+                  this.logger.log(`Queued review evaluation email for Admin/CEO (${adminEmail})`);
+                } catch (adminMailErr: any) {
+                  this.logger.warn(`Could not send review evaluation email to Admin/CEO: ${adminMailErr.message}`);
+                }
+              }
+            } catch (adminResolveErr: any) {
+              this.logger.warn(`Could not resolve or notify Admin/CEO on review evaluation: ${adminResolveErr.message}`);
+            }
+          } catch (notifErr: any) {
+            this.logger.warn(`Could not dispatch evaluation notifications: ${notifErr.message}`);
           }
-        } catch (adminResolveErr: any) {
-          this.logger.warn(`Could not resolve or notify Admin/CEO on review evaluation: ${adminResolveErr.message}`);
-        }
+        });
       }
 
       return this.getSubmissionById(managerUser, updated.id);
@@ -1600,7 +2318,8 @@ export class ManagerQuarterlyReviewService {
       if (isPrivileged) {
         const qb = this.assignmentRepository.createQueryBuilder('assignment').orderBy('assignment.id', 'DESC');
         if (quarter?.trim()) {
-          qb.andWhere('assignment.quarter = :quarter', { quarter: quarter.trim() });
+          const variants = this.normalizeQuarterVariants(quarter);
+          qb.andWhere('assignment.quarter IN (:...variants)', { variants });
         }
         assignments = await qb.getMany();
       } else {
@@ -1620,7 +2339,8 @@ export class ManagerQuarterlyReviewService {
         }
 
         if (quarter?.trim()) {
-          qb.andWhere('assignment.quarter = :quarter', { quarter: quarter.trim() });
+          const variants = this.normalizeQuarterVariants(quarter);
+          qb.andWhere('assignment.quarter IN (:...variants)', { variants });
         }
 
         qb.orderBy('assignment.id', 'DESC');
@@ -1648,14 +2368,14 @@ export class ManagerQuarterlyReviewService {
 
       const empMap = new Map(employees.map((e) => [e.employeeId, e]));
       const reviewMap = new Map(
-        reviews.map((r) => [`${r.employeeId}_${r.quarter}`, r]),
+        reviews.map((r) => [`${r.employeeId}_${this.normalizeQ(r.quarter)}`, r]),
       );
 
       const now = new Date();
 
       return assignments.map((assignment) => {
         const emp = empMap.get(assignment.employeeId);
-        const review = reviewMap.get(`${assignment.employeeId}_${assignment.quarter}`);
+        const review = reviewMap.get(`${assignment.employeeId}_${this.normalizeQ(assignment.quarter)}`);
 
         const isDeadlinePassed = now > new Date(assignment.deadlineAt);
         let liveStatus = assignment.status;
@@ -1663,20 +2383,23 @@ export class ManagerQuarterlyReviewService {
           assignment.isAccessOpen === 1 &&
           isDeadlinePassed &&
           assignment.status !== AssignmentStatus.SUBMITTED &&
-          assignment.status !== AssignmentStatus.COMPLETED
+          assignment.status !== AssignmentStatus.REVIEWED
         ) {
           liveStatus = AssignmentStatus.AUTO_SUBMITTED;
         }
 
+        const resolvedRole = assignment.role || this.resolveEmployeeRole(emp);
         return {
           id: assignment.id,
           assignmentId: assignment.id,
           employeeId: assignment.employeeId,
           employeeName: emp?.fullName || assignment.employeeName || assignment.employeeId,
+          role: resolvedRole,
+          employeeRole: resolvedRole,
           designation: emp?.designation || 'Team Member',
           department: emp?.department || '—',
           email: emp?.email || null,
-          quarter: assignment.quarter,
+          quarter: this.formatQuarterHyphen(assignment.quarter),
           financialYear: assignment.financialYear || null,
           assignedById: assignment.assignedById,
           assignedByName: assignment.assignedByName,
@@ -1690,12 +2413,12 @@ export class ManagerQuarterlyReviewService {
           accessRequestEligibleUntil: assignment.accessRequestEligibleUntil,
           notes: assignment.notes || null,
           reviewId: review ? review.id : null,
-          reviewStatus: review ? (review.status || 'DRAFT') : 'NOT_STARTED',
-          isSubmitted: review ? review.status !== ReviewStatus.DRAFT : false,
+          reviewStatus: review ? (review.status || ReviewStatus.ASSIGNED) : ReviewStatus.ASSIGNED,
+          isSubmitted: review ? (review.status === ReviewStatus.AWAITING_REVIEW || review.status === ReviewStatus.UNDER_REVIEW || review.status === ReviewStatus.REVIEWED) : false,
           submittedAt: review?.submittedDate || null,
           finalRating: review?.finalRating || null,
           averageRating: review?.averageRating != null ? parseFloat(String(review.averageRating)) : null,
-          canEvaluate: review ? (review.status === ReviewStatus.SUBMITTED || review.status === ReviewStatus.IN_REVIEW || review.status === ReviewStatus.AUTO_SUBMITTED) : false,
+          canEvaluate: review ? (review.status === ReviewStatus.AWAITING_REVIEW || review.status === ReviewStatus.UNDER_REVIEW || review.status === ReviewStatus.REVIEWED) : false,
         };
       });
     } catch (error: any) {
@@ -1763,15 +2486,50 @@ export class ManagerQuarterlyReviewService {
     }
 
     // ── 2. Build canonical quarter string e.g. "Q2 FY2026-27" ───────────────
-    const financialYear = (dto.financialYear || '').trim();
+    let financialYear = (dto.financialYear || '').trim();
+    if (!financialYear) {
+      const now = new Date();
+      const yr = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
+      financialYear = `FY${yr}-${String(yr + 1).slice(2)}`;
+    }
     const canonicalQuarter = `${dto.quarter} ${financialYear}`.trim();
 
-    // ── 3. Detect duplicates ─────────────────────────────────────────────────
+    // ── 3. Detect duplicates & access requests ──────────────────────────────
+    const quarterCode = dto.quarter.match(/Q[1-4]/i)?.[0]?.toUpperCase() || dto.quarter.trim();
     const existingAssignments = await this.assignmentRepository.find({
-      where: { employeeId: In(targetEmployeeIds), quarter: canonicalQuarter },
-      select: ['employeeId'],
+      where: { employeeId: In(targetEmployeeIds) },
     });
-    const alreadyAssignedSet = new Set(existingAssignments.map((a) => a.employeeId));
+    const matchedAssignments = existingAssignments.filter((a) => {
+      const aQ = (a.quarter || '').toUpperCase().trim();
+      const aCode = aQ.match(/Q[1-4]/i)?.[0]?.toUpperCase();
+      return aQ === canonicalQuarter.toUpperCase() || (quarterCode && aCode === quarterCode) || aQ === dto.quarter.toUpperCase();
+    });
+    const existingAssignmentMap = new Map(matchedAssignments.map((a) => [a.employeeId, a]));
+
+    const existingReviews = await this.quarterlyReviewRepository.find({
+      where: { employeeId: In(targetEmployeeIds) },
+    });
+    const matchedReviews = existingReviews.filter((r) => {
+      const rQ = (r.quarter || '').toUpperCase().trim();
+      const rCode = rQ.match(/Q[1-4]/i)?.[0]?.toUpperCase();
+      return rQ === canonicalQuarter.toUpperCase() || (quarterCode && rCode === quarterCode) || rQ === dto.quarter.toUpperCase();
+    });
+    const existingReviewMap = new Map(matchedReviews.map((r) => [r.employeeId, r]));
+
+    const accessRequests = await this.accessRequestRepository.find({
+      where: { employeeId: In(targetEmployeeIds) },
+      order: { id: 'DESC' },
+    });
+    const accessRequestMap = new Map<string, QuarterlyReviewAccessRequest>();
+    for (const ar of accessRequests) {
+      const qNorm = (ar.quarter || '').trim().toUpperCase();
+      const cNorm = canonicalQuarter.trim().toUpperCase();
+      const qCode = qNorm.match(/Q[1-4]/i)?.[0]?.toUpperCase();
+      const cCode = cNorm.match(/Q[1-4]/i)?.[0]?.toUpperCase();
+      if ((qNorm === cNorm || (qCode && qCode === cCode)) && !accessRequestMap.has(ar.employeeId)) {
+        accessRequestMap.set(ar.employeeId, ar);
+      }
+    }
 
     // ── 4. Fetch employee details for enrichment ─────────────────────────────
     const employeeDetails = await this.employeeDetailsRepository.find({
@@ -1780,35 +2538,113 @@ export class ManagerQuarterlyReviewService {
     const empDetailMap = new Map(employeeDetails.map((e) => [e.employeeId, e]));
 
     // ── 5. Build assignment rows ─────────────────────────────────────────────
+    const effectiveStartDate = (dto.startDate && dto.startDate.trim()) || new Date().toISOString().slice(0, 10);
+    try {
+      assertAssignmentDateRange(effectiveStartDate, dto.endDate);
+    } catch (dateErr: any) {
+      throw new BadRequestException(dateErr.message || 'Invalid assignment date range.');
+    }
+
     const now = new Date();
-    const endDateObj = new Date(dto.endDate);
+    const { assignedAt: computedAssignedAt, deadlineAt: computedDeadlineAt } = computeAssignmentDeadline(
+      effectiveStartDate,
+      dto.endDate,
+      now,
+    );
+    const endDateObj = computedDeadlineAt;
     const toCreate: ReviewAssignment[] = [];
     const skippedIds: string[] = [];
 
     for (const empId of targetEmployeeIds) {
-      if (alreadyAssignedSet.has(empId)) {
-        skippedIds.push(empId);
-        this.logger.log(`[createReviewAssignment] Skipping ${empId} — already assigned for ${canonicalQuarter}`);
+      const existingAssignment = existingAssignmentMap.get(empId);
+      const existingReview = existingReviewMap.get(empId);
+      const accessReq = accessRequestMap.get(empId);
+
+      if (existingAssignment || existingReview) {
+        if (!accessReq) {
+          skippedIds.push(empId);
+          this.logger.log(`[createReviewAssignment] Skipping ${empId} — already assigned for ${canonicalQuarter} without access request`);
+          continue;
+        }
+
+        // Employee has an access request for this quarter: renew assignment & approve request
+        if (!existingAssignment) continue;
+        const empRole = this.resolveEmployeeRole(empDetailMap.get(empId));
+        existingAssignment.role = empRole;
+        existingAssignment.deadlineAt = computedDeadlineAt;
+        existingAssignment.financialYear = financialYear || existingAssignment.financialYear;
+        existingAssignment.assignedAt = computedAssignedAt;
+        existingAssignment.assignedById = managerLoginId;
+        existingAssignment.assignedByName = managerFullName;
+        existingAssignment.status = AssignmentStatus.ASSIGNED;
+        existingAssignment.isAccessOpen = 1;
+        existingAssignment.notes = dto.description;
+        existingAssignment.reminder2dSentAt = null;
+        existingAssignment.reminder1dSentAt = null;
+        existingAssignment.reminderTodaySentAt = null;
+        existingAssignment.deadlineExpiredNotifiedAt = null;
+        existingAssignment.accessRequestEligibleUntil = null;
+        existingAssignment.updatedBy = managerFullName;
+        const updated = await this.assignmentRepository.save(existingAssignment);
+        toCreate.push(updated);
+
+        if (accessReq.status === AccessRequestStatus.PENDING) {
+          accessReq.status = AccessRequestStatus.APPROVED;
+          accessReq.approvedById = managerLoginId;
+          accessReq.approvedByName = managerFullName;
+          accessReq.approvedAt = now;
+          accessReq.extensionDeadline = computedDeadlineAt;
+          accessReq.accessUntil = computedDeadlineAt;
+          accessReq.remarks = dto.description || 'Access re-assigned by manager';
+          accessReq.updatedBy = managerFullName;
+          await this.accessRequestRepository.save(accessReq);
+        }
+
+        let review = await this.quarterlyReviewRepository.findOne({
+          where: [
+            { employeeId: empId, quarter: canonicalQuarter },
+            { employeeId: empId, quarter: dto.quarter },
+          ],
+        });
+        if (review) {
+          review.financialYear = financialYear || review.financialYear;
+          review.assignedAt = computedAssignedAt;
+          review.deadlineAt = computedDeadlineAt;
+          review.accessUntil = computedDeadlineAt;
+          review.notes = dto.description;
+          review.isReopened = 1;
+          review.autoSubmitted = 0;
+          if (review.status === ReviewStatus.AUTO_SUBMITTED) {
+            review.status = ReviewStatus.DRAFT;
+          }
+          review.updatedBy = managerFullName;
+          await this.quarterlyReviewRepository.save(review);
+        }
         continue;
       }
 
       const empDetail = empDetailMap.get(empId);
+      const empRole = this.resolveEmployeeRole(empDetail);
       const assignment = this.assignmentRepository.create({
         employeeId: empId,
         employeeName: empDetail?.fullName || empId,
+        role: empRole,
         quarter: canonicalQuarter,
         financialYear,
         assignedById: managerLoginId,
         assignedByName: managerFullName,
         assignedByRole: (managerRole as 'MANAGER' | 'ADMIN' | 'CEO') || 'MANAGER',
-        assignedAt: now,
-        deadlineAt: endDateObj,
-        startDate: dto.startDate,
+        assignedAt: computedAssignedAt,
+        deadlineAt: computedDeadlineAt,
         status: AssignmentStatus.ASSIGNED,
         isAccessOpen: 1,
         notes: dto.description,
         assignmentMode: dto.mode as any,
         accessRequestEligibleUntil: null,
+        reminder2dSentAt: null,
+        reminder1dSentAt: null,
+        reminderTodaySentAt: null,
+        deadlineExpiredNotifiedAt: null,
       });
 
       toCreate.push(assignment);
@@ -1820,20 +2656,115 @@ export class ManagerQuarterlyReviewService {
       this.logger.log(
         `[createReviewAssignment] Created ${savedAssignments.length} assignment(s) for ${canonicalQuarter} by ${managerLoginId}`,
       );
+
+      for (const saved of savedAssignments) {
+        try {
+          const matchingReview = await this.quarterlyReviewRepository.findOne({
+            where: [
+              { employeeId: saved.employeeId, quarter: canonicalQuarter },
+              { employeeId: saved.employeeId, quarter: dto.quarter },
+            ],
+          });
+          if (matchingReview) {
+            matchingReview.notes = dto.description;
+            matchingReview.assignmentId = saved.id;
+            matchingReview.assignedAt = saved.assignedAt;
+            matchingReview.deadlineAt = saved.deadlineAt;
+            await this.quarterlyReviewRepository.save(matchingReview);
+          }
+        } catch { }
+      }
     }
 
-    // ── 6. Send in-app notifications ─────────────────────────────────────────
+    // ── 6. Send notifications & emails ─────────────────────────────────────
+    const frontendUrl = process.env.FRONTEND_URL || 'https://worksphere.inventech-developer.in';
+    const successfullyAssignedEmployees: { id: string; name: string }[] = [];
+
     for (const saved of savedAssignments) {
+      const emp = empDetailMap.get(saved.employeeId);
+      const empName = emp?.fullName || saved.employeeName || saved.employeeId;
+      successfullyAssignedEmployees.push({ id: saved.employeeId, name: empName });
+
+      // In-app notification
       try {
         await this.notificationsService.createNotification({
           employeeId: saved.employeeId,
-          title: 'Quarterly Review Assigned',
-          message: `Your manager ${managerFullName} has assigned you a quarterly review for ${canonicalQuarter}. Please complete it by ${dto.endDate}.`,
+          title: `Quarterly Review Assigned: ${canonicalQuarter}`,
+          message: `Your manager ${managerFullName} has assigned you a quarterly review for ${canonicalQuarter}. Please complete it by ${endDateObj.toLocaleDateString('en-IN')}.`,
           type: 'info',
         });
       } catch (notifErr: any) {
         this.logger.warn(
           `[createReviewAssignment] Could not notify employee ${saved.employeeId}: ${notifErr.message}`,
+        );
+      }
+
+      // Email notification to employee
+      try {
+        let empEmail = emp?.email;
+        if (!empEmail) {
+          const empRec = await this.employeeDetailsRepository.findOne({ where: { employeeId: saved.employeeId } });
+          empEmail = empRec?.email;
+        }
+
+        if (empEmail) {
+          const subject = `Quarterly Review Assigned: ${canonicalQuarter}`;
+          const plainText = `Congratulations ${empName}, your quarterly review for ${canonicalQuarter} has been assigned by ${managerFullName} (${managerRole}). Please log in to WorkSphere and complete your self-assessment before the deadline: ${endDateObj.toLocaleDateString('en-IN')} ${endDateObj.toLocaleTimeString('en-IN')}.`;
+          const htmlContent = getAppraisalQuarterAssignedTemplate({
+            employeeName: empName,
+            quarter: canonicalQuarter,
+            assignedByName: managerFullName,
+            assignedByRole: managerRole,
+            deadlineAt: endDateObj,
+            startDate: effectiveStartDate,
+            financialYear,
+            notes: dto.description || null,
+            portalUrl: frontendUrl,
+          });
+          await this.emailService.sendEmail(empEmail, subject, plainText, htmlContent);
+          this.logger.log(`[createReviewAssignment] Sent assignment email to employee ${saved.employeeId} (${empEmail})`);
+        } else {
+          this.logger.warn(`[createReviewAssignment] No email address found for employee ${saved.employeeId}`);
+        }
+      } catch (mailErr: any) {
+        this.logger.warn(
+          `[createReviewAssignment] Could not send assignment email to employee ${saved.employeeId}: ${mailErr.message}`,
+        );
+      }
+    }
+
+    // Confirmation email to Manager / Assigner
+    if (savedAssignments.length > 0) {
+      try {
+        let managerEmail = managerUser?.email;
+        if (!managerEmail && managerLoginId) {
+          const empRec = await this.employeeDetailsRepository.findOne({ where: { employeeId: managerLoginId } });
+          managerEmail = empRec?.email;
+        }
+
+        if (managerEmail) {
+          const empNamesList = successfullyAssignedEmployees.map((e) => `${e.name} (${e.id})`);
+          const subject = `Quarterly Review Assignment Confirmed: ${canonicalQuarter}`;
+          const plainText = `Hello ${managerFullName},\n\nYou have successfully assigned quarterly appraisal reviews for ${canonicalQuarter} to ${savedAssignments.length} employee(s):\n${empNamesList.join('\n')}\n\nSubmission Deadline: ${endDateObj.toLocaleDateString('en-IN')} ${endDateObj.toLocaleTimeString('en-IN')}.\n\nRegards,\nWorkSphere Team`;
+          const htmlContent = getAppraisalQuarterAssignedManagerTemplate({
+            managerName: managerFullName,
+            quarter: canonicalQuarter,
+            assignedCount: savedAssignments.length,
+            assignedEmployeeNames: empNamesList,
+            deadlineAt: endDateObj,
+            startDate: effectiveStartDate,
+            financialYear,
+            notes: dto.description || null,
+            portalUrl: frontendUrl,
+          });
+          await this.emailService.sendEmail(managerEmail, subject, plainText, htmlContent);
+          this.logger.log(`[createReviewAssignment] Sent confirmation email to manager ${managerLoginId} (${managerEmail})`);
+        } else {
+          this.logger.warn(`[createReviewAssignment] No email address found for manager ${managerLoginId}`);
+        }
+      } catch (mgrMailErr: any) {
+        this.logger.warn(
+          `[createReviewAssignment] Could not send confirmation email to manager ${managerLoginId}: ${mgrMailErr.message}`,
         );
       }
     }
@@ -1852,7 +2783,9 @@ export class ManagerQuarterlyReviewService {
         status: a.status,
         assignmentMode: a.assignmentMode,
         assignedAt: a.assignedAt,
-        startDate: a.startDate,
+        startDate: a.assignedAt ? new Date(a.assignedAt).toISOString().slice(0, 10) : null,
+        fromDate: a.assignedAt ? new Date(a.assignedAt).toISOString().slice(0, 10) : null,
+        toDate: a.deadlineAt ? new Date(a.deadlineAt).toISOString().slice(0, 10) : null,
         deadlineAt: a.deadlineAt,
         notes: a.notes,
         assignedByName: a.assignedByName,
@@ -1865,4 +2798,4 @@ export class ManagerQuarterlyReviewService {
       assignments: assignmentResponseRows,
     };
   }
-}
+}

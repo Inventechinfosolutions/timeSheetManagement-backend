@@ -1,7 +1,8 @@
-import { Entity, Column, PrimaryGeneratedColumn, CreateDateColumn } from 'typeorm';
+import { Entity, Column, PrimaryGeneratedColumn } from 'typeorm';
+import { BaseEntity } from '../../common/core/models/base.entity';
 
 @Entity('password_reset_tokens')
-export class PasswordResetToken {
+export class PasswordResetToken extends BaseEntity {
   @PrimaryGeneratedColumn()
   id: number;
 
@@ -19,7 +20,4 @@ export class PasswordResetToken {
 
   @Column()
   expiresAt: Date;
-
-  @CreateDateColumn()
-  createdAt: Date;
 }
