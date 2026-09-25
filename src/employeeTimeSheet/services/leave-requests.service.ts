@@ -723,7 +723,7 @@ export class LeaveRequestsService {
   async findUnifiedRequests(filters: {
     employeeId?: string;
     department?: string;
-    status?: string;
+    status?: string | string[];
     search?: string;
     month?: string;
     year?: string;
@@ -826,9 +826,22 @@ export class LeaveRequestsService {
         query.andWhere('ed.department = :department', { department });
       }
 
-      // 4. Status Filter
+      // 4. Status Filter (supports single status or multiple comma-separated / array statuses)
       if (status && status !== 'All') {
-        query.andWhere('lr.status = :status', { status });
+        const rawList = Array.isArray(status)
+          ? status
+          : typeof status === 'string'
+            ? status.split(',')
+            : [status];
+        const statusList = rawList
+          .map((s: any) => (typeof s === 'string' ? s.trim() : String(s)))
+          .filter((s: string) => s && s !== 'All');
+
+        if (statusList.length === 1) {
+          query.andWhere('lr.status = :singleStatus', { singleStatus: statusList[0] });
+        } else if (statusList.length > 1) {
+          query.andWhere('lr.status IN (:...statusList)', { statusList });
+        }
       }
 
       // 4b. Request Type Filter
@@ -5410,5 +5423,65 @@ export class LeaveRequestsService {
       }
       request.requestModifiedFrom = null as any;
     }
+  }
+
+  async bulkUpdateStatus(params: {
+    status: LeaveRequestStatus;
+    department?: string;
+    search?: string;
+    month?: string;
+    year?: string;
+    requestType?: string;
+    ids?: number[];
+    reviewerName?: string;
+    reviewerEmail?: string;
+  }): Promise<{ successCount: number; failCount: number; total: number }> {
+    const { status, department, search, month, year, requestType, ids: explicitIds, reviewerName, reviewerEmail } = params;
+
+    let ids: number[] = [];
+    if (explicitIds && Array.isArray(explicitIds) && explicitIds.length > 0) {
+      ids = explicitIds;
+      this.logger.log(`[BULK_STATUS] Using ${ids.length} explicitly provided request IDs to update to ${status}`);
+    } else {
+      const queryStatus =
+        status === LeaveRequestStatus.CANCELLATION_APPROVED ||
+        status === LeaveRequestStatus.CANCELLATION_REJECTED
+          ? LeaveRequestStatus.REQUESTING_FOR_CANCELLATION
+          : status === LeaveRequestStatus.MODIFICATION_APPROVED ||
+            status === LeaveRequestStatus.MODIFICATION_REJECTED
+          ? LeaveRequestStatus.REQUESTING_FOR_MODIFICATION
+          : LeaveRequestStatus.PENDING;
+
+      this.logger.log(`[BULK_STATUS] Fetching all ${queryStatus} requests matching filters to update to ${status}`);
+      const allResult = await this.findUnifiedRequests({
+        department,
+        search,
+        month: month || 'All',
+        year: year || 'All',
+        requestType,
+        status: queryStatus,
+        page: 1,
+        limit: 99999,
+        forExport: true,
+      });
+
+      ids = (allResult.data || []).map((r: any) => r.id).filter(Boolean);
+      this.logger.log(`[BULK_STATUS] Found ${ids.length} ${queryStatus} requests to update`);
+    }
+
+    let successCount = 0;
+    let failCount = 0;
+    for (const id of ids) {
+      try {
+        await this.updateStatus(id, status, undefined, reviewerName, reviewerEmail);
+        successCount++;
+      } catch (err) {
+        this.logger.warn(`[BULK_STATUS] Failed to update request ${id}: ${err?.message}`);
+        failCount++;
+      }
+    }
+
+    this.logger.log(`[BULK_STATUS] Done. success=${successCount}, fail=${failCount}`);
+    return { successCount, failCount, total: ids.length };
   }
 }
