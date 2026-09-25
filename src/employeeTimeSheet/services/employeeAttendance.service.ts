@@ -3443,6 +3443,28 @@ export class EmployeeAttendanceService {
               return half;
             };
 
+            const addHalfCount = (half: string) => {
+              if (
+                half === AttendanceStatus.LEAVE ||
+                half === AttendanceStatus.ABSENT
+              ) {
+                countLeave += 0.5;
+              } else if (half === WorkLocation.WFH) {
+                countWfh += 0.5;
+              } else if (half === WorkLocation.CLIENT_VISIT) {
+                countCv += 0.5;
+              } else if (half === WorkLocation.OFFICE) {
+                countFullDay += 0.5;
+              } else if (
+                half === AttendanceStatus.NOT_UPDATED ||
+                half === AttendanceStatus.PENDING
+              ) {
+                countNotUpdated += 0.5;
+              } else {
+                countFullDay += 0.5;
+              }
+            };
+
             if (record.status === AttendanceStatus.FULL_DAY) {
               const h1 = getHalfText(record.firstHalf);
               const h2 = getHalfText(record.secondHalf);
@@ -3476,6 +3498,8 @@ export class EmployeeAttendanceService {
                   color: 'half_day',
                 };
                 countHalfDay++;
+                addHalfCount(h1);
+                addHalfCount(h2);
               }
             } else if (record.status === AttendanceStatus.HALF_DAY) {
               const h1 = getHalfText(record.firstHalf);
@@ -3486,6 +3510,8 @@ export class EmployeeAttendanceService {
                 color: 'half_day',
               };
               countHalfDay++;
+              addHalfCount(h1);
+              addHalfCount(h2);
             } else if (record.status === AttendanceStatus.LEAVE) {
               dailyStatus[dateKey] = {
                 text: AttendanceStatus.LEAVE,
@@ -3544,12 +3570,12 @@ export class EmployeeAttendanceService {
           department: employee.department || 'N/A',
           dailyStatus,
           summary: {
-            fullDays: countFullDay,
-            wfh: countWfh,
-            clientVisit: countCv,
+            fullDays: Math.round(countFullDay * 10) / 10,
+            wfh: Math.round(countWfh * 10) / 10,
+            clientVisit: Math.round(countCv * 10) / 10,
             halfDays: countHalfDay,
-            leaves: countLeave,
-            notUpdated: countNotUpdated,
+            leaves: Math.round(countLeave * 10) / 10,
+            notUpdated: Math.round(countNotUpdated * 10) / 10,
             weekends: countWeekend,
             holidays: countHoliday,
           },

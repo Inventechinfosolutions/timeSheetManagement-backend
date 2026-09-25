@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, LessThanOrEqual, MoreThanOrEqual } from 'typeorm';
 import { TimesheetBlocker } from '../entities/timesheetBlocker.entity';
 import { ManagerMapping, ManagerMappingStatus } from '../../managerMapping/entities/managerMapping.entity';
+import dayjs from 'dayjs';
 
 @Injectable()
 export class TimesheetBlockerService {
@@ -96,27 +97,24 @@ export class TimesheetBlockerService {
   }
 
   async isBlocked(employeeId: string, date: Date | string): Promise<TimesheetBlocker | null> {
-    this.logger.log(`Checking block status for employee: ${employeeId} on date: ${date}`);
+    const dateStr = typeof date === 'string' ? date.slice(0, 10) : dayjs(date).format('YYYY-MM-DD');
+    this.logger.log(`Checking block status for employee: ${employeeId} on date: ${dateStr}`);
     try {
-      const checkDate = typeof date === 'string' ? new Date(date) : date;
-
-      const blocker = await this.blockerRepository.findOne({
-        where: {
-          employeeId,
-          blockedFrom: LessThanOrEqual(checkDate),
-          blockedTo: MoreThanOrEqual(checkDate),
-        },
-      });
+      const blocker = await this.blockerRepository
+        .createQueryBuilder('b')
+        .where('b.employeeId = :employeeId', { employeeId })
+        .andWhere(':dateStr >= b.blockedFrom AND :dateStr <= b.blockedTo', { dateStr })
+        .getOne();
 
       if (blocker) {
-        this.logger.log(`Found active block for employee ${employeeId} on date ${date} (Blocker ID: ${blocker.id})`);
+        this.logger.log(`Found active block for employee ${employeeId} on date ${dateStr} (Blocker ID: ${blocker.id})`);
       } else {
-        this.logger.debug(`No active block found for employee ${employeeId} on date ${date}`);
+        this.logger.debug(`No active block found for employee ${employeeId} on date ${dateStr}`);
       }
 
       return blocker;
     } catch (error) {
-      this.logger.error(`Failed to check block status for employee ${employeeId} on date ${date}: ${error.message}`, error.stack);
+      this.logger.error(`Failed to check block status for employee ${employeeId} on date ${dateStr}: ${error.message}`, error.stack);
       if (error instanceof HttpException) throw error;
       throw new HttpException(
         `Failed to check block status: ${error.message}`,
