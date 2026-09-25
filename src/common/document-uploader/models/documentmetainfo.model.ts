@@ -8,6 +8,7 @@ export enum ReferenceType {
   DOCUMENT = 'DOCUMENT',
   PROJECT_DOCUMENT = 'PROJECT_DOCUMENT',
   PROJECT_PHOTO = 'PROJECT_PHOTO',
+  NOTE_ATTACHMENT = 'NOTE_ATTACHMENT',
   // Add more as needed
 }
 
@@ -17,6 +18,7 @@ export enum EntityType {
   EMPLOYEE = 'EMPLOYEE',
   LEAVE_REQUEST = 'LEAVE_REQUEST',
   PROJECT = 'PROJECT',
+  NOTE = 'NOTE',
   // Add more as needed
 }
 
