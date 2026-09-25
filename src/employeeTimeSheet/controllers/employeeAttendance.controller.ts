@@ -89,6 +89,41 @@ export class EmployeeAttendanceController {
   }
 
   @UseGuards(JwtAuthGuard, ReceptionistReadOnlyGuard)
+  @Get('monthly-report-data')
+  @ApiOperation({ summary: 'Get monthly attendance matrix report data for UI grid' })
+  @ApiQuery({ name: 'month', type: Number })
+  @ApiQuery({ name: 'year', type: Number })
+  async getMonthlyReportData(
+    @Query() query: DownloadAttendanceDto,
+    @Req() req: any,
+  ) {
+    try {
+      this.logger.log(`Fetching monthly report data for month: ${query.month}, year: ${query.year}`);
+      const user = req.user;
+      let managerName: string | undefined;
+      let managerId: string | undefined;
+
+      const roleUpper = (user?.role || '').toUpperCase();
+      if (user && user.userType !== UserType.ADMIN && (user.userType === UserType.MANAGER || roleUpper.includes('MNG') || roleUpper.includes(UserType.MANAGER))) {
+        managerName = user.aliasLoginName;
+        managerId = user.loginId;
+      }
+
+      return await this.employeeAttendanceService.getMonthlyReportData(
+        query.month,
+        query.year,
+        managerName,
+        managerId,
+        query.search,
+        query.department,
+      );
+    } catch (error) {
+      this.logger.error(`Error fetching monthly report data: ${error.message}`, error.stack);
+      throw error;
+    }
+  }
+
+  @UseGuards(JwtAuthGuard, ReceptionistReadOnlyGuard)
   @Get('download-pdf')
   @ApiOperation({ summary: 'Download monthly attendance PDF report' })
   @ApiQuery({ name: 'month', type: Number })

@@ -3174,6 +3174,434 @@ export class EmployeeAttendanceService {
     }
   }
 
+  async getMonthlyReportData(
+    month: number,
+    year: number,
+    managerName?: string,
+    managerId?: string,
+    search?: string,
+    department?: string,
+  ): Promise<any> {
+    this.logger.log(
+      `Fetching monthly report data for ${month}/${year}. Filter Manager: ${managerName || 'None'}, Search: ${search || 'None'}, Dept: ${department || 'None'}`,
+    );
+    try {
+      const query = this.employeeDetailsRepository
+        .createQueryBuilder('employee')
+        .leftJoin(User, 'user_filter', 'user_filter.loginId = employee.employeeId');
+
+      const reportMonthStart = `${year}-${String(month).padStart(2, '0')}-01`;
+      const reportNextMonthStart =
+        month === 12
+          ? `${year + 1}-01-01`
+          : `${year}-${String(month + 1).padStart(2, '0')}-01`;
+
+      query.andWhere(
+        '(' +
+          'employee.userStatus = :activeStatus AND (user_filter.status IS NULL OR user_filter.status != :inactiveStatus)' +
+          ' OR (' +
+          '(employee.userStatus = :inactiveStatus OR user_filter.status = :inactiveStatus)' +
+          ' AND employee.inactiveDate IS NOT NULL' +
+          ' AND employee.inactiveDate >= :reportMonthStart' +
+          ' AND employee.inactiveDate < :reportNextMonthStart' +
+          ')' +
+          ')',
+        {
+          activeStatus: UserStatus.ACTIVE,
+          inactiveStatus: UserStatus.INACTIVE,
+          reportMonthStart,
+          reportNextMonthStart,
+        },
+      );
+
+      if (managerName || managerId) {
+        query.leftJoin(
+          ManagerMapping,
+          'mm',
+          'mm.employeeId = employee.employeeId',
+        );
+        query.andWhere(
+          '( (mm.status = :mappingStatus AND (mm.managerName LIKE :managerNameQuery OR mm.managerName LIKE :managerIdQuery)) OR (employee.employeeId = :exactManagerId OR employee.fullName = :exactManagerName) )',
+          {
+            managerNameQuery: `%${managerName}%`,
+            managerIdQuery: `%${managerId}%`,
+            exactManagerId: managerId,
+            exactManagerName: managerName,
+            mappingStatus: ManagerMappingStatus.ACTIVE,
+          },
+        );
+      }
+
+      if (search && search.trim()) {
+        const trimmedSearch = search.trim();
+        query.andWhere(
+          '(LOWER(employee.fullName) LIKE LOWER(:searchQuery) OR LOWER(employee.employeeId) LIKE LOWER(:searchQuery))',
+          { searchQuery: `%${trimmedSearch}%` },
+        );
+      }
+
+      if (department && department.trim() && department !== 'All Departments') {
+        query.andWhere('LOWER(employee.department) = LOWER(:deptFilter)', {
+          deptFilter: department.trim(),
+        });
+      }
+
+      query.orderBy('employee.fullName', 'ASC');
+      const employees = await query.getMany();
+
+      const startDate = new Date(year, month - 1, 1);
+      const endDate = new Date(year, month, 0);
+      const daysInMonth = endDate.getDate();
+
+      const holidays = await this.masterHolidayService.findAll();
+      const holidayMap = new Map<string, string>();
+      holidays.forEach((h) => {
+        const d = h.holidayDate || h.date;
+        const dateObj = new Date(d);
+        const y = dateObj.getFullYear();
+        const m = String(dateObj.getMonth() + 1).padStart(2, '0');
+        const day = String(dateObj.getDate()).padStart(2, '0');
+        const key = `${y}-${m}-${day}`;
+        holidayMap.set(key, h.name || AttendanceStatus.HOLIDAY);
+      });
+
+      const startStr = dayjs(startDate).format('YYYY-MM-DD');
+      const endStr = dayjs(endDate).format('YYYY-MM-DD');
+
+      const employeeIds: string[] = [];
+      const idToMainIdMap = new Map<string, string>();
+      employees.forEach((e) => {
+        if (e.employeeId) {
+          employeeIds.push(e.employeeId);
+          idToMainIdMap.set(e.employeeId, e.employeeId);
+          if (e.internId) {
+            employeeIds.push(e.internId);
+            idToMainIdMap.set(e.internId, e.employeeId);
+          }
+        }
+      });
+
+      const attendanceQuery = this.employeeAttendanceRepository
+        .createQueryBuilder('attendance')
+        .where('attendance.workingDate BETWEEN :start AND :end', {
+          start: new Date(startStr + 'T00:00:00'),
+          end: new Date(endStr + 'T23:59:59'),
+        });
+
+      if (employeeIds.length > 0) {
+        attendanceQuery.andWhere('attendance.employeeId IN (:...employeeIds)', {
+          employeeIds,
+        });
+      }
+
+      const allAttendance = await attendanceQuery.getMany();
+
+      const normalizeDate = (date: Date | string): string => {
+        const d = date instanceof Date ? date : new Date(date);
+        const y = d.getFullYear();
+        const m = String(d.getMonth() + 1).padStart(2, '0');
+        const dayVal = String(d.getDate()).padStart(2, '0');
+        return `${y}-${m}-${dayVal}`;
+      };
+
+      const attendanceMap = new Map<string, Map<string, EmployeeAttendance>>();
+      allAttendance.forEach((record) => {
+        const mainEmployeeId =
+          idToMainIdMap.get(record.employeeId) || record.employeeId;
+        if (!attendanceMap.has(mainEmployeeId)) {
+          attendanceMap.set(mainEmployeeId, new Map());
+        }
+        const dateKey = normalizeDate(record.workingDate);
+        const empMap = attendanceMap.get(mainEmployeeId);
+        if (empMap) {
+          empMap.set(dateKey, record);
+        }
+      });
+
+      const days: Array<{
+        date: string;
+        dayNum: number;
+        dayLabel: string;
+        dayName: string;
+        isWeekend: boolean;
+        isHoliday: boolean;
+        holidayName: string | null;
+      }> = [];
+
+      for (let day = 1; day <= daysInMonth; day++) {
+        const dateObj = new Date(year, month - 1, day);
+        const y = year;
+        const m = String(month).padStart(2, '0');
+        const d = String(day).padStart(2, '0');
+        const dateKey = `${y}-${m}-${d}`;
+        const dayFullName = dateObj.toLocaleDateString('en-US', { weekday: 'long' });
+        const isSun = dateObj.getDay() === 0;
+        const isSat = dateObj.getDay() === 6;
+        const holidayName = holidayMap.get(dateKey) || null;
+
+        days.push({
+          date: dateKey,
+          dayNum: day,
+          dayLabel: `${day}-${dateObj.toLocaleDateString('en-US', { month: 'short' })}`,
+          dayName: dayFullName,
+          isWeekend: isSun || isSat,
+          isHoliday: !!holidayName,
+          holidayName,
+        });
+      }
+
+      const today = dayjs().format('YYYY-MM-DD');
+
+      const employeeRows = employees.map((employee) => {
+        const employeeName =
+          employee.fullName || employee.employeeId || 'Unknown';
+        const inactiveDateStr = employee.inactiveDate
+          ? dayjs(employee.inactiveDate).format('YYYY-MM-DD')
+          : null;
+
+        const empAttendanceMap = attendanceMap.get(employee.employeeId);
+        const dailyStatus: Record<
+          string,
+          { text: string; type: string; color: string }
+        > = {};
+
+        let countFullDay = 0;
+        let countHalfDay = 0;
+        let countWfh = 0;
+        let countCv = 0;
+        let countLeave = 0;
+        let countNotUpdated = 0;
+        let countWeekend = 0;
+        let countHoliday = 0;
+
+        for (const day of days) {
+          const dateKey = day.date;
+          const dateObj = new Date(dateKey + 'T00:00:00');
+          const isSun = dateObj.getDay() === 0;
+          const isSat = dateObj.getDay() === 6;
+          const holidayName = day.holidayName;
+
+          if (inactiveDateStr && dateKey >= inactiveDateStr) {
+            dailyStatus[dateKey] = {
+              text: 'Inactive',
+              type: 'inactive',
+              color: 'inactive',
+            };
+            continue;
+          }
+
+          if (holidayName) {
+            dailyStatus[dateKey] = {
+              text: holidayName,
+              type: 'holiday',
+              color: 'holiday',
+            };
+            countHoliday++;
+            continue;
+          }
+
+          if (isSun) {
+            dailyStatus[dateKey] = {
+              text: AttendanceStatus.WEEKEND,
+              type: 'weekend',
+              color: 'weekend',
+            };
+            countWeekend++;
+            continue;
+          }
+
+          const record = empAttendanceMap?.get(dateKey);
+
+          if (isSat) {
+            const hasWork =
+              record && record.totalHours !== null && record.totalHours > 0;
+            if (!hasWork) {
+              dailyStatus[dateKey] = {
+                text: AttendanceStatus.WEEKEND,
+                type: 'weekend',
+                color: 'weekend',
+              };
+              countWeekend++;
+              continue;
+            }
+          }
+
+          if (record) {
+            const getHalfText = (half: string | null): string => {
+              if (!half) return AttendanceStatus.ABSENT;
+              if (this.isActivity(half, WorkLocation.CLIENT_VISIT.toLowerCase()))
+                return WorkLocation.CLIENT_VISIT;
+              if (
+                this.isActivity(half, WorkLocation.WFH.toLowerCase()) ||
+                this.isActivity(half, WorkLocation.WORK_FROM_HOME.toLowerCase())
+              )
+                return WorkLocation.WFH;
+              if (this.isActivity(half, WorkLocation.OFFICE.toLowerCase()))
+                return WorkLocation.OFFICE;
+              if (half === AttendanceStatus.LEAVE) return AttendanceStatus.LEAVE;
+              if (half === AttendanceStatus.ABSENT) return AttendanceStatus.ABSENT;
+              return half;
+            };
+
+            const addHalfCount = (half: string) => {
+              if (
+                half === AttendanceStatus.LEAVE ||
+                half === AttendanceStatus.ABSENT
+              ) {
+                countLeave += 0.5;
+              } else if (half === WorkLocation.WFH) {
+                countWfh += 0.5;
+              } else if (half === WorkLocation.CLIENT_VISIT) {
+                countCv += 0.5;
+              } else if (half === WorkLocation.OFFICE) {
+                countFullDay += 0.5;
+              } else if (
+                half === AttendanceStatus.NOT_UPDATED ||
+                half === AttendanceStatus.PENDING
+              ) {
+                countNotUpdated += 0.5;
+              } else {
+                countFullDay += 0.5;
+              }
+            };
+
+            if (record.status === AttendanceStatus.FULL_DAY) {
+              const h1 = getHalfText(record.firstHalf);
+              const h2 = getHalfText(record.secondHalf);
+              if (h1 === h2) {
+                if (h1 === WorkLocation.WFH) {
+                  dailyStatus[dateKey] = {
+                    text: WorkLocation.WFH,
+                    type: 'wfh',
+                    color: 'wfh',
+                  };
+                  countWfh++;
+                } else if (h1 === WorkLocation.CLIENT_VISIT) {
+                  dailyStatus[dateKey] = {
+                    text: WorkLocation.CLIENT_VISIT,
+                    type: 'client_visit',
+                    color: 'client_visit',
+                  };
+                  countCv++;
+                } else {
+                  dailyStatus[dateKey] = {
+                    text: AttendanceStatus.FULL_DAY,
+                    type: 'full_day',
+                    color: 'full_day',
+                  };
+                  countFullDay++;
+                }
+              } else {
+                dailyStatus[dateKey] = {
+                  text: `${h1} / ${h2}`,
+                  type: 'half_day',
+                  color: 'half_day',
+                };
+                countHalfDay++;
+                addHalfCount(h1);
+                addHalfCount(h2);
+              }
+            } else if (record.status === AttendanceStatus.HALF_DAY) {
+              const h1 = getHalfText(record.firstHalf);
+              const h2 = getHalfText(record.secondHalf);
+              dailyStatus[dateKey] = {
+                text: `${h1} / ${h2}`,
+                type: 'half_day',
+                color: 'half_day',
+              };
+              countHalfDay++;
+              addHalfCount(h1);
+              addHalfCount(h2);
+            } else if (record.status === AttendanceStatus.LEAVE) {
+              dailyStatus[dateKey] = {
+                text: AttendanceStatus.LEAVE,
+                type: 'leave',
+                color: 'leave',
+              };
+              countLeave++;
+            } else if (record.status === AttendanceStatus.ABSENT) {
+              dailyStatus[dateKey] = {
+                text: AttendanceStatus.ABSENT,
+                type: 'absent',
+                color: 'absent',
+              };
+              countLeave++;
+            } else if (
+              !record.status ||
+              record.status === AttendanceStatus.NOT_UPDATED ||
+              record.status === AttendanceStatus.PENDING
+            ) {
+              dailyStatus[dateKey] = {
+                text: AttendanceStatus.NOT_UPDATED,
+                type: 'not_updated',
+                color: 'not_updated',
+              };
+              countNotUpdated++;
+            } else {
+              dailyStatus[dateKey] = {
+                text: record.status,
+                type: 'full_day',
+                color: 'full_day',
+              };
+              countFullDay++;
+            }
+            continue;
+          }
+
+          if (dateKey > today) {
+            dailyStatus[dateKey] = {
+              text: AttendanceStatus.UPCOMING,
+              type: 'upcoming',
+              color: 'upcoming',
+            };
+          } else {
+            dailyStatus[dateKey] = {
+              text: AttendanceStatus.NOT_UPDATED,
+              type: 'not_updated',
+              color: 'not_updated',
+            };
+            countNotUpdated++;
+          }
+        }
+
+        return {
+          employeeId: employee.employeeId,
+          fullName: employeeName,
+          department: employee.department || 'N/A',
+          dailyStatus,
+          summary: {
+            fullDays: Math.round(countFullDay * 10) / 10,
+            wfh: Math.round(countWfh * 10) / 10,
+            clientVisit: Math.round(countCv * 10) / 10,
+            halfDays: countHalfDay,
+            leaves: Math.round(countLeave * 10) / 10,
+            notUpdated: Math.round(countNotUpdated * 10) / 10,
+            weekends: countWeekend,
+            holidays: countHoliday,
+          },
+        };
+      });
+
+      return {
+        month: Number(month),
+        year: Number(year),
+        daysInMonth,
+        days,
+        employees: employeeRows,
+      };
+    } catch (error) {
+      this.logger.error(
+        `Error fetching monthly report data for ${month}/${year}: ${error.message}`,
+        error.stack,
+      );
+      if (error instanceof HttpException) throw error;
+      throw new HttpException(
+        `Failed to fetch monthly report data: ${error.message}`,
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
+  }
+
   async generateIndividualPdfReport(
     employeeId: string,
     startDate: Date,
