@@ -34,4 +34,8 @@ export class CreateNoteDto {
   @IsOptional()
   @IsArray()
   subNotes?: CreateSubNoteDto[];
+
+  @IsOptional()
+  @IsArray()
+  attachmentKeys?: string[];
 }

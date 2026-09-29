@@ -1,4 +1,4 @@
-import { IsNotEmpty, IsOptional, IsString, IsNumber } from 'class-validator';
+import { IsNotEmpty, IsOptional, IsString, IsNumber, IsArray } from 'class-validator';
 
 export class CreateSubNoteDto {
   @IsNotEmpty()
@@ -16,5 +16,10 @@ export class CreateSubNoteDto {
   @IsOptional()
   @IsString()
   color?: string;
+
+  @IsOptional()
+  @IsArray()
+  attachmentKeys?: string[];
 }
+
 

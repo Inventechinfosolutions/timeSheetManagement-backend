@@ -4,10 +4,11 @@ import { Note } from './entities/note.entity';
 import { NotesService } from './services/notes.service';
 import { NotesController } from './controllers/notes.controller';
 import { DocumentUploaderModule } from '../common/document-uploader/document-uploader.module';
+import { DocumentMetaInfo } from '../common/document-uploader/models/documentmetainfo.model';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Note]),
+    TypeOrmModule.forFeature([Note, DocumentMetaInfo]),
     DocumentUploaderModule,
   ],
   controllers: [NotesController],
