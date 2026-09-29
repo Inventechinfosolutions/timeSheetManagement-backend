@@ -280,7 +280,7 @@ export class EmployeeLinkService {
         expiresIn: '24h',
       });
 
-      const activationLink = `${process.env.FRONTEND_URL || 'http://localhost:5175'}/timesheet/activate?token=${token}`;
+      const activationLink = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/timesheet/activate?token=${token}`;
       // const networkIp = '192.168.1.31';
       // const activationLink = `http://${networkIp}:5175/timesheet/activate?token=${token}`;
 

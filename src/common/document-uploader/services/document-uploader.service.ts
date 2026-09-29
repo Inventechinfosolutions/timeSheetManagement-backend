@@ -174,7 +174,7 @@ export class DocumentUploaderService {
     try {
       this.logger.log(`Attempting to delete document with key: ${key}`);
       const doc = await this.documentRepo.findOne({
-        where: { id: key },
+        where: [{ id: key }, { s3Key: key }],
       });
 
       if (!doc) {
@@ -185,8 +185,9 @@ export class DocumentUploaderService {
         );
       }
 
-      await this.deleteMinioDoc(key);
-      await this.documentRepo.delete(key);
+      const s3Key = doc.s3Key || doc.id || key;
+      await this.deleteMinioDoc(s3Key);
+      await this.documentRepo.delete(doc.id);
 
       this.logger.debug(`Successfully deleted document with key: ${key}`);
       return;
