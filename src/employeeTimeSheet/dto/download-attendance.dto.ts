@@ -27,4 +27,12 @@ export class DownloadAttendanceDto {
   @IsOptional()
   @IsString()
   endDate?: string;
+
+  @IsOptional()
+  @IsString()
+  search?: string;
+
+  @IsOptional()
+  @IsString()
+  department?: string;
 }

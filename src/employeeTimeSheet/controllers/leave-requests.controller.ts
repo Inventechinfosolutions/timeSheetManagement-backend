@@ -4,6 +4,7 @@ import { ReceptionistReadOnlyGuard } from '../../auth/guards/receptionist-readon
 import { FileFieldsInterceptor } from '@nestjs/platform-express';
 import { LeaveRequestsService } from '../services/leave-requests.service';
 import { LeaveRequestDto } from '../dto/leave-request.dto';
+import { LeaveRequestStatus } from '../enums/leave-notification-status.enum';
 import { DocumentUploaderService } from '../../common/document-uploader/services/document-uploader.service';
 import { FileService } from '../../common/core/utils/fileType.utils';
 import { EntityType, ReferenceType } from '../../common/document-uploader/models/documentmetainfo.model';
@@ -336,6 +337,78 @@ export class LeaveRequestsController {
       return this.leaveRequestsService.remove(+id);
     } catch (error) {
       this.logger.error(`Error deleting leave request ${id}: ${error.message}`, error.stack);
+      throw error;
+    }
+  }
+
+  @Post('bulk/approve')
+  @UseGuards(JwtAuthGuard, ReceptionistReadOnlyGuard)
+  async bulkApprove(
+    @Body() body: {
+      department?: string;
+      search?: string;
+      month?: string;
+      year?: string;
+      requestType?: string;
+      ids?: number[];
+    },
+    @Req() req: any,
+  ) {
+    try {
+      const { department, search, month, year, requestType, ids } = body;
+      this.logger.log(`Bulk approving ${ids?.length ? `${ids.length} selected` : 'all matching PENDING'} requests`);
+      const user = req.user;
+      const reviewerName = user?.aliasLoginName || user?.fullName || 'Admin';
+      const reviewerEmail = user?.loginId || user?.email;
+      return await this.leaveRequestsService.bulkUpdateStatus({
+        status: LeaveRequestStatus.APPROVED,
+        department,
+        search,
+        month,
+        year,
+        requestType,
+        ids,
+        reviewerName,
+        reviewerEmail,
+      });
+    } catch (error) {
+      this.logger.error(`Error in bulk approve: ${error.message}`, error.stack);
+      throw error;
+    }
+  }
+
+  @Post('bulk/reject')
+  @UseGuards(JwtAuthGuard, ReceptionistReadOnlyGuard)
+  async bulkReject(
+    @Body() body: {
+      department?: string;
+      search?: string;
+      month?: string;
+      year?: string;
+      requestType?: string;
+      ids?: number[];
+    },
+    @Req() req: any,
+  ) {
+    try {
+      const { department, search, month, year, requestType, ids } = body;
+      this.logger.log(`Bulk rejecting ${ids?.length ? `${ids.length} selected` : 'all matching PENDING'} requests`);
+      const user = req.user;
+      const reviewerName = user?.aliasLoginName || user?.fullName || 'Admin';
+      const reviewerEmail = user?.loginId || user?.email;
+      return await this.leaveRequestsService.bulkUpdateStatus({
+        status: LeaveRequestStatus.REJECTED,
+        department,
+        search,
+        month,
+        year,
+        requestType,
+        ids,
+        reviewerName,
+        reviewerEmail,
+      });
+    } catch (error) {
+      this.logger.error(`Error in bulk reject: ${error.message}`, error.stack);
       throw error;
     }
   }
