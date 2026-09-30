@@ -1,5 +1,6 @@
 import { IsNotEmpty, IsString, IsNumber, IsEmail, IsOptional, IsBoolean } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { NotePermission } from '../../notes/enums/note-permission.enum';
 
 export class CreateInboxDto {
   @ApiProperty({ description: 'Receiver employee ID' })
@@ -26,4 +27,14 @@ export class CreateInboxDto {
   @IsOptional()
   @IsBoolean()
   isRead?: boolean;
+
+  @ApiPropertyOptional({
+    description: 'Access permission granted to recipient',
+    enum: NotePermission,
+    default: NotePermission.CanView,
+    example: NotePermission.CanEdit,
+  })
+  @IsOptional()
+  @IsString()
+  permission?: NotePermission | string;
 }

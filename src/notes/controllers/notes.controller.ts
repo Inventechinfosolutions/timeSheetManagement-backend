@@ -21,6 +21,10 @@ import {
 } from '@nestjs/common';
 import { AnyFilesInterceptor } from '@nestjs/platform-express';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
+// import { Public } from '../../auth/decorators/public.decorator';
+import { NotePermissionGuard } from '../guards/note-permission.guard';
+import { Permission } from '../decorators/permission.decorator';
+import { NotePermission } from '../enums/note-permission.enum';
 import { NotesService } from '../services/notes.service';
 import { CreateNoteDto } from '../dto/create-note.dto';
 import { UpdateNoteDto } from '../dto/update-note.dto';
@@ -36,7 +40,7 @@ import { InboxService } from '../../inbox/services/inbox.service';
 
 @ApiTags('Notes')
 @Controller('notes')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, NotePermissionGuard)
 export class NotesController {
   private readonly logger = new Logger(NotesController.name);
 
@@ -144,11 +148,12 @@ export class NotesController {
   }
 
   @Delete('attachments/:key')
+  @Permission(NotePermission.CanEdit)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Delete attachment from object_store and storage' })
-  async deleteAttachment(@Param('key') key: string) {
+  async deleteAttachment(@Param('key') key: string, @Req() req: any) {
     this.logger.log(`Received request to delete attachment: ${key}`);
-    return await this.notesService.deleteAttachment(key);
+    return await this.notesService.deleteAttachment(key, req.user);
   }
 
   // =========================================================================
@@ -242,12 +247,14 @@ export class NotesController {
   }
 
   @Get(':id')
+  @Permission(NotePermission.CanView)
   @ApiOperation({ summary: 'Get single note by ID' })
   async findOne(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
     return await this.notesService.findOne(id, req.user);
   }
 
   @Patch(':id')
+  @Permission(NotePermission.CanEdit)
   @ApiOperation({ summary: 'Update note details' })
   async update(
     @Param('id', ParseIntPipe) id: number,
@@ -270,6 +277,7 @@ export class NotesController {
   }
 
   @Patch(':id/auto-save')
+  @Permission(NotePermission.CanEdit)
   @ApiOperation({ summary: 'Update note auto-save setting' })
   async updateAutoSave(
     @Param('id', ParseIntPipe) id: number,
@@ -281,12 +289,14 @@ export class NotesController {
   }
 
   @Delete(':id')
+  @Permission(NotePermission.CanEdit)
   @ApiOperation({ summary: 'Delete note and all nested sub-notes and attachments' })
   async remove(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
     return await this.notesService.removeNote(id, req.user);
   }
 
   @Post(':id/sub-notes')
+  @Permission(NotePermission.CanEdit)
   @UseInterceptors(AnyFilesInterceptor())
   @ApiOperation({ summary: 'Create a sub-note under an existing note' })
   async createSubNote(
@@ -344,6 +354,7 @@ export class NotesController {
         subject: body.subject,
         customMessage: body.customMessage || body.message,
         attachmentKeys: body.attachmentKeys,
+        permission: body.permission || (body.canEdit ? 'CanEdit' : 'CanView'),
       },
       req.user,
     );

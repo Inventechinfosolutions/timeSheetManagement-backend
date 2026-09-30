@@ -9,7 +9,8 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Note } from '../entities/note.entity';
-import { NoteRecipient, NotePermission } from '../entities/note-recipient.entity';
+import { NotePermission } from '../enums/note-permission.enum';
+import { Inbox } from '../../inbox/entities/inbox.entity';
 import { CreateNoteDto } from '../dto/create-note.dto';
 import { UpdateNoteDto } from '../dto/update-note.dto';
 import { CreateSubNoteDto } from '../dto/create-sub-note.dto';
@@ -40,8 +41,8 @@ export class NotesService {
   constructor(
     @InjectRepository(Note)
     private readonly noteRepo: Repository<Note>,
-    @InjectRepository(NoteRecipient)
-    private readonly noteRecipientRepo: Repository<NoteRecipient>,
+    @InjectRepository(Inbox)
+    private readonly inboxRepo: Repository<Inbox>,
     @InjectRepository(DocumentMetaInfo)
     private readonly documentRepo: Repository<DocumentMetaInfo>,
     private readonly documentUploaderService: DocumentUploaderService,
@@ -212,6 +213,29 @@ export class NotesService {
 
       await this.populateAttachments([note]);
 
+      if (user) {
+        const { userId, employeeId } = this.extractUserInfo(user);
+        const isOwner =
+          (userId && note.userId === userId) ||
+          (employeeId && note.employeeId === employeeId);
+        if (isOwner) {
+          (note as any).permission = NotePermission.CanEdit;
+          (note as any).userPermission = NotePermission.CanEdit;
+          (note as any).isOwner = true;
+        } else {
+          const recipient = await this.inboxRepo.findOne({
+            where: [
+              { notesId: note.id, employeeId: employeeId || '' },
+              { notesId: note.id, toMail: user.email || '' },
+              { notesId: note.id, employeeId: user.email || '' },
+            ],
+          });
+          (note as any).permission = recipient?.permission || NotePermission.CanView;
+          (note as any).userPermission = recipient?.permission || NotePermission.CanView;
+          (note as any).isOwner = false;
+        }
+      }
+
       return note;
     } catch (error) {
       if (error instanceof NotFoundException) throw error;
@@ -238,10 +262,11 @@ export class NotesService {
         (employeeId && note.employeeId === employeeId);
 
       if (!isOwner) {
-        const recipient = await this.noteRecipientRepo.findOne({
+        const recipient = await this.inboxRepo.findOne({
           where: [
-            { noteId: id, employeeId: employeeId || '' },
-            { noteId: id, employeeId: user?.email || '' },
+            { notesId: id, employeeId: employeeId || '' },
+            { notesId: id, toMail: user?.email || '' },
+            { notesId: id, employeeId: user?.email || '' },
           ],
         });
 
@@ -249,7 +274,7 @@ export class NotesService {
           throw new ForbiddenException('You do not have access to edit this note');
         }
 
-        if (recipient.permission !== NotePermission.CanEdit) {
+        if (recipient.permission !== NotePermission.CanEdit && (recipient.permission as any) !== 'CanEdit') {
           throw new ForbiddenException('You only have view permission for this note');
         }
       }
@@ -294,14 +319,15 @@ export class NotesService {
       (employeeId && note.employeeId === employeeId);
 
     if (!isOwner) {
-      const recipient = await this.noteRecipientRepo.findOne({
+      const recipient = await this.inboxRepo.findOne({
         where: [
-          { noteId: id, employeeId: employeeId || '' },
-          { noteId: id, employeeId: user?.email || '' },
+          { notesId: id, employeeId: employeeId || '' },
+          { notesId: id, toMail: user?.email || '' },
+          { notesId: id, employeeId: user?.email || '' },
         ],
       });
 
-      if (!recipient || recipient.permission !== NotePermission.CanEdit) {
+      if (!recipient || (recipient.permission !== NotePermission.CanEdit && (recipient.permission as any) !== 'CanEdit')) {
         throw new ForbiddenException('You need edit permission to change auto-save settings');
       }
     }
@@ -317,6 +343,7 @@ export class NotesService {
    */
   async removeNote(id: number, user: any): Promise<{ message: string }> {
     try {
+      const { userId, employeeId } = this.extractUserInfo(user);
       const note = await this.noteRepo.findOne({
         where: { id },
         relations: ['subNotes'],
@@ -324,6 +351,29 @@ export class NotesService {
 
       if (!note) {
         throw new NotFoundException(`Note with ID ${id} not found`);
+      }
+
+      // Check permission: Owner or NoteRecipient with CanEdit permission
+      const isOwner =
+        (userId && note.userId === userId) ||
+        (employeeId && note.employeeId === employeeId);
+
+      if (!isOwner) {
+        const recipient = await this.inboxRepo.findOne({
+          where: [
+            { notesId: id, employeeId: employeeId || '' },
+            { notesId: id, toMail: user?.email || '' },
+            { notesId: id, employeeId: user?.email || '' },
+          ],
+        });
+
+        if (!recipient) {
+          throw new ForbiddenException('You do not have access to delete this note');
+        }
+
+        if (recipient.permission !== NotePermission.CanEdit && (recipient.permission as any) !== 'CanEdit') {
+          throw new ForbiddenException('You only have view permission for this note');
+        }
       }
 
       const allNoteIds = [note.id, ...(note.subNotes || []).map((sub) => sub.id)];
@@ -337,7 +387,7 @@ export class NotesService {
       this.logger.log(`Note ${id} and related sub-notes/attachments deleted successfully`);
       return { message: 'Note deleted successfully' };
     } catch (error) {
-      if (error instanceof NotFoundException) throw error;
+      if (error instanceof NotFoundException || error instanceof ForbiddenException) throw error;
       this.logger.error(`Failed to delete note ${id}: ${error.message}`, error.stack);
       throw new InternalServerErrorException('Failed to delete note');
     }
@@ -1363,31 +1413,61 @@ if (!doclingUrl) {
 
   /**
    * Delete an attachment from storage and object_store database by key or ID.
+   * Requires owner access or recipient with CanEdit permission.
    */
-  async deleteAttachment(key: string): Promise<{ message: string }> {
+  async deleteAttachment(key: string, user?: any): Promise<{ message: string }> {
     try {
       this.logger.log(`Deleting attachment: ${key}`);
       const doc = await this.documentRepo.findOne({
         where: [{ id: key }, { s3Key: key }],
       });
 
-      if (doc) {
-        const s3KeyToDelete = doc.s3Key || doc.id;
-        if (s3KeyToDelete) {
-          try {
-            await this.documentUploaderService.deleteMinioDoc(s3KeyToDelete);
-          } catch (e: any) {
-            this.logger.warn(`Could not delete file from MinIO: ${e.message}`);
-          }
-        }
-        await this.documentRepo.delete(doc.id);
-        this.logger.log(`Successfully deleted document ${doc.id} from DB`);
-        return { message: 'Document deleted successfully' };
+      if (!doc) {
+        throw new NotFoundException(`Attachment with key ${key} not found`);
       }
 
-      await this.documentUploaderService.deleteDoc(key);
+      // If user context is provided and attachment belongs to a note, verify CanEdit or owner permission
+      if (user && doc.entityId && doc.entityType === EntityType.NOTE) {
+        const { userId, employeeId } = this.extractUserInfo(user);
+        const note = await this.noteRepo.findOne({ where: { id: doc.entityId } });
+        if (note) {
+          const isOwner =
+            (userId && note.userId === userId) ||
+            (employeeId && note.employeeId === employeeId);
+
+          if (!isOwner) {
+            const recipient = await this.inboxRepo.findOne({
+              where: [
+                { notesId: note.id, employeeId: employeeId || '' },
+                { notesId: note.id, toMail: user?.email || '' },
+                { notesId: note.id, employeeId: user?.email || '' },
+              ],
+            });
+
+            if (!recipient) {
+              throw new ForbiddenException('You do not have access to delete this attachment');
+            }
+
+            if (recipient.permission !== NotePermission.CanEdit && (recipient.permission as any) !== 'CanEdit') {
+              throw new ForbiddenException('You only have view permission for this note attachment');
+            }
+          }
+        }
+      }
+
+      const s3KeyToDelete = doc.s3Key || doc.id;
+      if (s3KeyToDelete) {
+        try {
+          await this.documentUploaderService.deleteMinioDoc(s3KeyToDelete);
+        } catch (e: any) {
+          this.logger.warn(`Could not delete file from MinIO: ${e.message}`);
+        }
+      }
+      await this.documentRepo.delete(doc.id);
+      this.logger.log(`Successfully deleted document ${doc.id} from DB`);
       return { message: 'Document deleted successfully' };
     } catch (error: any) {
+      if (error instanceof NotFoundException || error instanceof ForbiddenException) throw error;
       this.logger.error(`Failed to delete attachment ${key}: ${error.message}`, error.stack);
       throw new InternalServerErrorException(error.message || 'Failed to delete attachment');
     }

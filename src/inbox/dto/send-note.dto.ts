@@ -1,5 +1,6 @@
 import { IsNotEmpty, IsNumber, IsArray, IsString, IsOptional, ArrayMinSize } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { NotePermission } from '../../notes/enums/note-permission.enum';
 
 export class SendNoteDto {
   @ApiProperty({ description: 'The ID of the note being sent' })
@@ -32,12 +33,13 @@ export class SendNoteDto {
   attachmentKeys?: string[];
 
   @ApiPropertyOptional({
-    description: 'Access permission granted to the recipient (CanView or CanEdit)',
-    enum: ['CanView', 'CanEdit'],
-    default: 'CanView',
+    description: 'Access permission granted to the recipient',
+    enum: NotePermission,
+    default: NotePermission.CanView,
+    example: NotePermission.CanEdit,
   })
   @IsOptional()
   @IsString()
-  permission?: 'CanView' | 'CanEdit';
+  permission?: NotePermission | string;
 }
 

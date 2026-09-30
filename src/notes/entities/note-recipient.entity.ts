@@ -1,46 +1,26 @@
-import {
-  Entity,
-  Column,
-  PrimaryGeneratedColumn,
-  CreateDateColumn,
-  UpdateDateColumn,
-  ManyToOne,
-  JoinColumn,
-  Index,
-} from 'typeorm';
-import { Note } from './note.entity';
+import { Entity, Column, PrimaryGeneratedColumn } from 'typeorm';
+import { NotePermission } from '../enums/note-permission.enum';
 
-export enum NotePermission {
-  CanView = 'CanView',
-  CanEdit = 'CanEdit',
-}
+export { NotePermission };
 
-@Entity('note_permission')
-@Index('unique_note_employee', ['noteId', 'employeeId'], { unique: true })
-export class NoteRecipient {
-  @PrimaryGeneratedColumn({ type: 'bigint' })
+/**
+ * Master Data Entity for Note Permission.
+ * Contains only `id` and `permission` column.
+ * Options: CanView (default) and CanEdit.
+ */
+@Entity('master_note_permission')
+export class NotePermissionMaster {
+  @PrimaryGeneratedColumn()
   id: number;
-
-  @Column({ name: 'note_id', type: 'int' })
-  noteId: number;
-
-  @Column({ name: 'employee_id', type: 'varchar', length: 100 })
-  employeeId: string;
 
   @Column({
     type: 'enum',
     enum: NotePermission,
     default: NotePermission.CanView,
+    unique: true,
   })
   permission: NotePermission;
-
-  @CreateDateColumn({ name: 'created_at', type: 'datetime' })
-  createdAt: Date;
-
-  @UpdateDateColumn({ name: 'updated_at', type: 'datetime' })
-  updatedAt: Date;
-
-  @ManyToOne(() => Note, { onDelete: 'CASCADE', nullable: true })
-  @JoinColumn({ name: 'note_id' })
-  note: Note;
 }
+
+// Export aliases
+export { NotePermissionMaster as MasterNotePermission, NotePermissionMaster as NoteRecipient };

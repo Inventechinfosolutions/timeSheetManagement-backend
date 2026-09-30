@@ -86,6 +86,16 @@ export class InboxController {
     return await this.inboxService.markAsRead(id, req.user);
   }
 
+  @Patch(':id/permission')
+  @ApiOperation({ summary: 'Update permission (CanView or CanEdit) for an inbox note recipient' })
+  async updatePermission(
+    @Param('id', ParseIntPipe) id: number,
+    @Body('permission') permission: string,
+    @Req() req: any,
+  ) {
+    return await this.inboxService.updatePermission(id, permission, req.user);
+  }
+
   @Delete(':id')
   @ApiOperation({ summary: 'Delete inbox message' })
   async deleteInboxItem(

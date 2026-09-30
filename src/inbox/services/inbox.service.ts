@@ -7,10 +7,12 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In } from 'typeorm';
+import { Readable } from 'stream';
 import { Inbox } from '../entities/inbox.entity';
 import { Note } from '../../notes/entities/note.entity';
-import { NoteRecipient, NotePermission } from '../../notes/entities/note-recipient.entity';
+import { NotePermission } from '../../notes/enums/note-permission.enum';
 import { EmployeeDetails } from '../../employeeTimeSheet/entities/employeeDetails.entity';
+import { User } from '../../users/entities/user.entity';
 import { CreateInboxDto } from '../dto/create-inbox.dto';
 import { SendNoteDto } from '../dto/send-note.dto';
 import { QueryInboxDto } from '../dto/query-inbox.dto';
@@ -18,6 +20,22 @@ import { MailService } from '../../common/mail/mail.service';
 import { DocumentUploaderService } from '../../common/document-uploader/services/document-uploader.service';
 import { EntityType, ReferenceType } from '../../common/document-uploader/models/documentmetainfo.model';
 import { getNoteEmailTemplate } from '../../common/mail/email-templates';
+
+function parseNotePermission(val?: any): NotePermission {
+  if (!val) return NotePermission.CanView;
+  const s = String(val).trim().toLowerCase();
+  if (
+    s === 'canedit' ||
+    s === 'edit' ||
+    s === '2' ||
+    s === 'can_edit' ||
+    s === 'write' ||
+    s === 'canwrite'
+  ) {
+    return NotePermission.CanEdit;
+  }
+  return NotePermission.CanView;
+}
 
 @Injectable()
 export class InboxService {
@@ -28,10 +46,10 @@ export class InboxService {
     private readonly inboxRepo: Repository<Inbox>,
     @InjectRepository(Note)
     private readonly noteRepo: Repository<Note>,
-    @InjectRepository(NoteRecipient)
-    private readonly noteRecipientRepo: Repository<NoteRecipient>,
     @InjectRepository(EmployeeDetails)
     private readonly employeeRepo: Repository<EmployeeDetails>,
+    @InjectRepository(User)
+    private readonly userRepo: Repository<User>,
     private readonly mailService: MailService,
     private readonly documentUploaderService: DocumentUploaderService,
   ) {}
@@ -43,6 +61,7 @@ export class InboxService {
     const item = this.inboxRepo.create({
       employeeId: String(dto.employeeId),
       notesId: dto.notesId,
+      permission: parseNotePermission(dto.permission),
       fromMail: dto.fromMail,
       toMail: dto.toMail,
       isRead: dto.isRead || false,
@@ -52,7 +71,7 @@ export class InboxService {
 
   /**
    * Share / Send a note to one or more recipient employees with granular VIEW / EDIT permissions.
-   * Creates / Updates NoteRecipient records and Inbox delivery ledger entries.
+   * Creates / Updates Inbox delivery entries and assigned permissions.
    */
   async sendNote(dto: SendNoteDto, user: any): Promise<{ success: boolean; count: number; message: string }> {
     try {
@@ -61,7 +80,9 @@ export class InboxService {
         throw new NotFoundException(`Note with ID ${dto.notesId} not found`);
       }
 
-      const permission = dto.permission === 'CanEdit' ? NotePermission.CanEdit : NotePermission.CanView;
+      const permission = parseNotePermission(
+        dto.permission || (dto as any).canEdit || (dto as any).accessPermission || (dto as any).permissionType,
+      );
 
       // Determine sender details
       const senderEmpId = user?.employeeId || user?.loginId || user?.aliasLoginName;
@@ -90,54 +111,42 @@ export class InboxService {
       }
 
       for (const recipient of recipientList) {
-        // Match recipient by email or employeeId
-        let targetEmployeeId = recipient;
-        let targetEmail = recipient;
+        // Resolve Employee ID from recipient (whether email, ID, or login was entered)
+        const { employeeId: targetEmployeeId, email: targetEmail } =
+          await this.resolveRecipientEmployee(recipient);
 
-        const emp = await this.employeeRepo.findOne({
-          where: [{ email: recipient }, { employeeId: recipient }],
+        // Check if an inbox record already exists for this note and employee
+        const existingInbox = await this.inboxRepo.findOne({
+          where: [
+            { notesId: note.id, employeeId: targetEmployeeId },
+            { notesId: note.id, toMail: targetEmail },
+          ],
         });
 
-        if (emp) {
-          targetEmployeeId = emp.employeeId || emp.email;
-          targetEmail = emp.email || recipient;
-        }
-
-        // 1. Store / Update Note Recipient Permission
-        try {
-          const existingRecipient = await this.noteRecipientRepo.findOne({
-            where: { noteId: note.id, employeeId: targetEmployeeId },
+        let saved: Inbox;
+        if (existingInbox) {
+          existingInbox.permission = permission;
+          existingInbox.employeeId = targetEmployeeId;
+          existingInbox.fromMail = fromMail;
+          existingInbox.toMail = targetEmail;
+          existingInbox.isRead = false;
+          saved = await this.inboxRepo.save(existingInbox);
+        } else {
+          const inboxItem = this.inboxRepo.create({
+            employeeId: targetEmployeeId,
+            notesId: note.id,
+            permission,
+            fromMail,
+            toMail: targetEmail,
+            isRead: false,
           });
-
-          if (existingRecipient) {
-            existingRecipient.permission = permission;
-            await this.noteRecipientRepo.save(existingRecipient);
-          } else {
-            const newRecipient = this.noteRecipientRepo.create({
-              noteId: note.id,
-              employeeId: targetEmployeeId,
-              permission,
-            });
-            await this.noteRecipientRepo.save(newRecipient);
-          }
-        } catch (nrErr: any) {
-          this.logger.warn(`Could not save note_permission: ${nrErr.message}`);
+          saved = await this.inboxRepo.save(inboxItem);
         }
-
-        // 2. Create Inbox record
-        const inboxItem = this.inboxRepo.create({
-          employeeId: targetEmployeeId,
-          notesId: note.id,
-          fromMail,
-          toMail: targetEmail,
-          isRead: false,
-        });
-
-        const saved = await this.inboxRepo.save(inboxItem);
         createdEntries.push(saved);
 
-        // 3. Fetch note attachments for email
+        // 3. Fetch note attachments for email and nodemailer attachment payload
         let noteAttachments: Array<{ name: string; downloadUrl: string }> = [];
+        let emailAttachments: Array<{ filename: string; content: string; encoding: string }> = [];
         try {
           const docs = await this.documentUploaderService.getAllDocs(
             EntityType.NOTE,
@@ -146,18 +155,49 @@ export class InboxService {
             note.id,
           );
           if (docs && docs.length > 0) {
-            noteAttachments = docs.map((d: any) => ({
-              name: d.fileName || d.name || d.s3Key || 'Attachment',
-              downloadUrl: `https://worksphere.inventech-developer.in/api/notes/attachments/${d.s3Key || d.id}/download`,
-            }));
+            for (const d of docs) {
+              const fileKey = (d as any).key || (d as any).s3Key || (d as any).id;
+              const fileName = (d as any).name || (d as any).fileName || 'Attachment';
+              if (fileKey) {
+                noteAttachments.push({
+                  name: fileName,
+                  downloadUrl: `https://worksphere.inventech-developer.in/api/notes/attachments/${fileKey}/download`,
+                });
+                try {
+                  const dataStream = await this.documentUploaderService.downloadFile(fileKey);
+                  if (dataStream && dataStream.Body) {
+                    let buf: Buffer;
+                    if (dataStream.Body instanceof Readable) {
+                      const chunks: any[] = [];
+                      for await (const chunk of dataStream.Body) {
+                        chunks.push(chunk);
+                      }
+                      buf = Buffer.concat(chunks);
+                    } else if (typeof (dataStream.Body as any).transformToByteArray === 'function') {
+                      const bytes = await (dataStream.Body as any).transformToByteArray();
+                      buf = Buffer.from(bytes);
+                    } else {
+                      buf = Buffer.from(dataStream.Body as any);
+                    }
+                    if (buf && buf.length > 0) {
+                      emailAttachments.push({
+                        filename: fileName,
+                        content: buf.toString('base64'),
+                        encoding: 'base64',
+                      });
+                    }
+                  }
+                } catch (readErr: any) {
+                  this.logger.warn(`Could not read attachment ${fileKey} for direct email attach: ${readErr.message}`);
+                }
+              }
+            }
           }
         } catch (e: any) {
           this.logger.warn(`Could not fetch attachments for email: ${e.message}`);
         }
 
         // 4. Send email for BOTH CanView and CanEdit permissions
-        //    CanView → "Open in Inbox" CTA
-        //    CanEdit → "Open Portal to Edit" CTA
         const subject = dto.subject?.trim() || (
           permission === NotePermission.CanEdit
             ? `${senderName} gave you edit access to: "${note.title || 'WorkSphere Note'}"`
@@ -185,8 +225,11 @@ export class InboxService {
             subject,
             previewText,
             emailHtml,
+            undefined,
+            undefined,
+            emailAttachments.length > 0 ? emailAttachments : undefined,
           );
-          this.logger.log(`Email dispatched to ${targetEmail} with ${permission} permission`);
+          this.logger.log(`Email dispatched to ${targetEmail} (employeeId: ${targetEmployeeId}) with ${permission} permission`);
         } catch (err: any) {
           this.logger.warn(`Could not dispatch email to ${targetEmail}: ${err.message}`);
         }
@@ -237,19 +280,6 @@ export class InboxService {
       const notesMap = new Map<number, Note>();
       notes.forEach((n) => notesMap.set(n.id, n));
 
-      // Fetch permissions from note_recipients for this user
-      const targetIds = Array.from(new Set([employeeId, email].filter(Boolean)));
-      const recipientRecords = noteIds.length > 0 && targetIds.length > 0
-        ? await this.noteRecipientRepo.find({
-            where: {
-              noteId: In(noteIds),
-              employeeId: In(targetIds),
-            },
-          })
-        : [];
-      const permissionMap = new Map<number, string>();
-      recipientRecords.forEach((r) => permissionMap.set(r.noteId, r.permission));
-
       // Fetch sender employee details by fromMail
       const senderEmails = Array.from(new Set(inboxItems.map((item) => item.fromMail).filter(Boolean)));
       const senders = senderEmails.length > 0 ? await this.employeeRepo.findBy({ email: In(senderEmails) }) : [];
@@ -262,7 +292,7 @@ export class InboxService {
       for (const item of inboxItems) {
         const note = notesMap.get(item.notesId);
         const sender = sendersMap.get(item.fromMail);
-        const permission = permissionMap.get(item.notesId) || 'CanView';
+        const permission = item.permission || 'CanView';
 
         // Fetch attachments for this note
         let attachments: any[] = [];
@@ -376,16 +406,6 @@ export class InboxService {
     const note = await this.noteRepo.findOne({ where: { id: item.notesId } });
     const sender = await this.employeeRepo.findOne({ where: { email: item.fromMail } });
 
-    // Lookup recipient permission
-    const { employeeId, email } = this.resolveUserIdentifiers(user);
-    const recipient = await this.noteRecipientRepo.findOne({
-      where: [
-        { noteId: item.notesId, employeeId: item.employeeId },
-        { noteId: item.notesId, employeeId: employeeId },
-        { noteId: item.notesId, employeeId: email },
-      ],
-    });
-
     let attachments: any[] = [];
     if (note) {
       try {
@@ -406,7 +426,7 @@ export class InboxService {
       notesId: item.notesId,
       fromMail: item.fromMail,
       toMail: item.toMail,
-      permission: recipient?.permission || 'CanView',
+      permission: item.permission || 'CanView',
       isRead: Boolean(item.isRead),
       createdAt: item.createdAt,
       updatedAt: item.updatedAt,
@@ -492,5 +512,134 @@ export class InboxService {
       : user?.loginId || user?.aliasLoginName || '';
     const email = user?.email || user?.loginId || '';
     return { employeeId, email };
+  }
+
+  /**
+   * Resolve any recipient input (Employee ID, email, loginId, or username)
+   * into a guaranteed Employee ID and their associated email address.
+   */
+  async resolveRecipientEmployee(recipient: string): Promise<{ employeeId: string; email: string }> {
+    const trimmed = (recipient || '').trim();
+    if (!trimmed) {
+      throw new BadRequestException('Recipient cannot be empty');
+    }
+
+    // 1. Direct match by employeeId in employee_details (exact or case-insensitive)
+    const empById = await this.employeeRepo
+      .createQueryBuilder('emp')
+      .where('LOWER(emp.employeeId) = LOWER(:id)', { id: trimmed })
+      .getOne();
+
+    if (empById && empById.employeeId) {
+      return {
+        employeeId: empById.employeeId,
+        email: empById.email || (trimmed.includes('@') ? trimmed : ''),
+      };
+    }
+
+    // 2. Direct match by email in employee_details
+    const empByEmail = await this.employeeRepo
+      .createQueryBuilder('emp')
+      .where('LOWER(emp.email) = LOWER(:email)', { email: trimmed })
+      .getOne();
+
+    if (empByEmail && empByEmail.employeeId) {
+      return {
+        employeeId: empByEmail.employeeId,
+        email: trimmed,
+      };
+    }
+
+    // 3. Match in users table by loginId
+    const userByLogin = await this.userRepo
+      .createQueryBuilder('u')
+      .where('LOWER(u.loginId) = LOWER(:login)', { login: trimmed })
+      .getOne();
+
+    if (userByLogin && userByLogin.loginId) {
+      const linkedEmp = await this.employeeRepo.findOne({
+        where: { employeeId: userByLogin.loginId },
+      });
+      return {
+        employeeId: userByLogin.loginId,
+        email: linkedEmp?.email || (trimmed.includes('@') ? trimmed : ''),
+      };
+    }
+
+    // 4. If an email address was passed, perform intelligent match by name or prefix
+    if (trimmed.includes('@')) {
+      const userPart = trimmed.split('@')[0];
+      const cleanParts = userPart.split(/[._\-\s]+/).filter((p) => p.length >= 3);
+
+      for (const part of cleanParts) {
+        const fuzzyEmp = await this.employeeRepo
+          .createQueryBuilder('emp')
+          .where('LOWER(emp.fullName) LIKE LOWER(:part)', { part: `%${part}%` })
+          .orWhere('LOWER(emp.employeeId) LIKE LOWER(:part)', { part: `%${part}%` })
+          .getOne();
+
+        if (fuzzyEmp && fuzzyEmp.employeeId) {
+          return {
+            employeeId: fuzzyEmp.employeeId,
+            email: trimmed,
+          };
+        }
+
+        const fuzzyUser = await this.userRepo
+          .createQueryBuilder('u')
+          .where('LOWER(u.aliasLoginName) LIKE LOWER(:part)', { part: `%${part}%` })
+          .orWhere('LOWER(u.loginId) LIKE LOWER(:part)', { part: `%${part}%` })
+          .getOne();
+
+        if (fuzzyUser && fuzzyUser.loginId) {
+          return {
+            employeeId: fuzzyUser.loginId,
+            email: trimmed,
+          };
+        }
+      }
+    }
+
+    // 5. If it does not contain '@', it is already an employee ID format:
+    if (!trimmed.includes('@')) {
+      return {
+        employeeId: trimmed,
+        email: '',
+      };
+    }
+
+    // 6. Fallback: match by alphabetical first name from email
+    const firstName = trimmed.split('@')[0].replace(/[^a-zA-Z]/g, '');
+    if (firstName.length >= 3) {
+      const nameEmp = await this.employeeRepo
+        .createQueryBuilder('emp')
+        .where('LOWER(emp.fullName) LIKE LOWER(:name)', { name: `%${firstName}%` })
+        .getOne();
+      if (nameEmp && nameEmp.employeeId) {
+        return {
+          employeeId: nameEmp.employeeId,
+          email: trimmed,
+        };
+      }
+    }
+
+    // If still cannot resolve, fallback to trimmed
+    this.logger.warn(`Could not resolve Employee ID for recipient: ${trimmed}`);
+    return {
+      employeeId: trimmed,
+      email: trimmed,
+    };
+  }
+
+  /**
+   * Update permission for an inbox record
+   */
+  async updatePermission(inboxId: number, permission: string, user: any): Promise<Inbox> {
+    const item = await this.inboxRepo.findOne({ where: { inboxId } });
+    if (!item) {
+      throw new NotFoundException(`Inbox record with ID ${inboxId} not found`);
+    }
+    item.permission = parseNotePermission(permission);
+    return await this.inboxRepo.save(item);
   }
 }

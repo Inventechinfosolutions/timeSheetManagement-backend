@@ -8,6 +8,7 @@ import {
   JoinColumn,
 } from 'typeorm';
 import { Note } from '../../notes/entities/note.entity';
+import { NotePermission } from '../../notes/enums/note-permission.enum';
 
 @Entity('inbox')
 export class Inbox {
@@ -19,6 +20,13 @@ export class Inbox {
 
   @Column({ name: 'notes_id', type: 'int' })
   notesId: number;
+
+  @Column({
+    type: 'enum',
+    enum: NotePermission,
+    default: NotePermission.CanView,
+  })
+  permission: NotePermission;
 
   @Column({ name: 'from_mail', type: 'varchar', length: 255 })
   fromMail: string;
