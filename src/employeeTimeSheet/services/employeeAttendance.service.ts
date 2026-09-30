@@ -3181,9 +3181,10 @@ export class EmployeeAttendanceService {
     managerId?: string,
     search?: string,
     department?: string,
+    status?: string,
   ): Promise<any> {
     this.logger.log(
-      `Fetching monthly report data for ${month}/${year}. Filter Manager: ${managerName || 'None'}, Search: ${search || 'None'}, Dept: ${department || 'None'}`,
+      `Fetching monthly report data for ${month}/${year}. Filter Manager: ${managerName || 'None'}, Search: ${search || 'None'}, Dept: ${department || 'None'}, Status: ${status || 'None'}`,
     );
     try {
       const query = this.employeeDetailsRepository
@@ -3582,12 +3583,26 @@ export class EmployeeAttendanceService {
         };
       });
 
+      let filteredEmployees = employeeRows;
+      if (status && status.trim() && status.toLowerCase() !== 'all') {
+        const s = status.trim().toLowerCase();
+        if (s === 'submitted') {
+          filteredEmployees = employeeRows.filter(
+            (emp) => emp.summary.notUpdated === 0,
+          );
+        } else if (s === 'pending') {
+          filteredEmployees = employeeRows.filter(
+            (emp) => emp.summary.notUpdated > 0,
+          );
+        }
+      }
+
       return {
         month: Number(month),
         year: Number(year),
         daysInMonth,
         days,
-        employees: employeeRows,
+        employees: filteredEmployees,
       };
     } catch (error) {
       this.logger.error(

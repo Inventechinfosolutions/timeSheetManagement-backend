@@ -35,4 +35,8 @@ export class DownloadAttendanceDto {
   @IsOptional()
   @IsString()
   department?: string;
+
+  @IsOptional()
+  @IsString()
+  status?: string;
 }
