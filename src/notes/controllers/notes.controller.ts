@@ -57,19 +57,26 @@ export class NotesController {
 
   @Post('extract')
   @UseInterceptors(AnyFilesInterceptor())
-  @ApiOperation({ summary: 'Extract text contents from uploaded files' })
+  @ApiOperation({ summary: 'Extract text contents and styled HTML from uploaded files via Docling' })
   async extractText(
     @UploadedFiles() files: Express.Multer.File[],
+    @Body() body?: any,
   ) {
     if (!files || files.length === 0) {
       throw new BadRequestException('At least one file is required');
     }
     const file = files[0];
-    const extractedText = await this.notesService.extractFileText(file);
+    const useOcr = body?.useOcr === 'true' || body?.useOcr === true;
+    const bodyOnly = body?.bodyOnly !== 'false' && body?.bodyOnly !== false;
+
+    const result = await this.notesService.extractFileContent(file, { useOcr, bodyOnly });
     return {
       filename: file.originalname,
-      description: extractedText,
-      extractedText,
+      description: result.html || result.text || '',
+      html: result.html || '',
+      markdown: result.markdown || '',
+      json: result.json || null,
+      extractedText: result.html || result.text || '',
     };
   }
 

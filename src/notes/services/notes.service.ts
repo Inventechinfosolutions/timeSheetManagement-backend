@@ -19,6 +19,9 @@ import {
   EntityType,
   ReferenceType,
 } from '../../common/document-uploader/models/documentmetainfo.model';
+import { ConfigService } from '@nestjs/config';
+import axios from 'axios';
+import FormData from 'form-data';
 
 interface UserContext {
   userId: string | null;
@@ -36,6 +39,7 @@ export class NotesService {
     @InjectRepository(DocumentMetaInfo)
     private readonly documentRepo: Repository<DocumentMetaInfo>,
     private readonly documentUploaderService: DocumentUploaderService,
+    private readonly configService: ConfigService,
   ) {}
 
   // =========================================================================
@@ -454,10 +458,151 @@ export class NotesService {
   }
 
   /**
+   * Extract styled HTML and text content from a single file via Docling Python service.
+   */
+  async extractFileContent(
+    file: Express.Multer.File,
+    options?: { useOcr?: boolean; bodyOnly?: boolean },
+  ): Promise<{ filename: string; html: string; markdown: string; json: any; text: string }> {
+    if (!file) {
+      throw new BadRequestException('File is required for extraction');
+    }
+
+    const filename = file.originalname || 'document.pdf';
+    const ext = filename.substring(filename.lastIndexOf('.')).toLowerCase();
+
+    // 1. If it's a JSON file, parse and convert directly
+    if (ext === '.json') {
+      try {
+        const json = JSON.parse(file.buffer.toString('utf-8'));
+        const html = this.convertDoclingJsonToHtml(json);
+        return {
+          filename,
+          html,
+          text: html,
+          markdown: '',
+          json,
+        };
+      } catch (err: any) {
+        throw new BadRequestException('Invalid JSON file');
+      }
+    }
+
+    // 2. If it's a PDF / DOCX / Image -> Forward to Docling Python Service
+const doclingUrl = this.configService.get<string>('DOCLING_SERVICE_URL');
+
+if (!doclingUrl) {
+  throw new InternalServerErrorException('DOCLING_SERVICE_URL is not defined in environment variables');
+}
+
+    const formData = new FormData();
+    formData.append('file', file.buffer, {
+      filename: file.originalname,
+      contentType: file.mimetype || 'application/pdf',
+    });
+    if (options?.useOcr) {
+      formData.append('use_ocr', 'true');
+    }
+    formData.append('body_only', String(options?.bodyOnly !== false));
+
+    try {
+      this.logger.log(`Forwarding file ${file.originalname} to Docling service at ${doclingUrl}/extract`);
+      const response = await axios.post(`${doclingUrl}/extract`, formData, {
+        headers: {
+          ...formData.getHeaders(),
+        },
+        maxBodyLength: Infinity,
+        maxContentLength: Infinity,
+        timeout: 120000,
+      });
+
+      const html = response.data?.html || '';
+      return {
+        filename: response.data?.filename || filename,
+        html,
+        text: html,
+        markdown: response.data?.markdown || '',
+        json: response.data?.json || null,
+      };
+    } catch (err: any) {
+      this.logger.error(`Failed to connect to Docling service at ${doclingUrl}: ${err.message}`);
+      if (err.code === 'ECONNREFUSED' || err.message?.includes('ECONNREFUSED')) {
+        throw new BadRequestException(
+          `Docling Python service is not running on ${doclingUrl}. Please ensure python service is started on port 8000.`,
+        );
+      }
+      throw new BadRequestException(
+        err.response?.data?.detail || err.message || 'Failed to extract content from document',
+      );
+    }
+  }
+
+  /**
    * Extract text content from a single file.
    */
   async extractFileText(file: Express.Multer.File): Promise<string> {
-    return '';
+    const res = await this.extractFileContent(file);
+    return res.html || res.text || '';
+  }
+
+  /**
+   * Helper to convert Docling JSON to HTML if JSON is uploaded directly.
+   */
+  private convertDoclingJsonToHtml(document: any): string {
+    if (!document) return '';
+    const html: string[] = ['<div class="docling-document">'];
+    const children = document.body?.children || [];
+    let listOpen = false;
+
+    for (const child of children) {
+      const ref = child?.$ref;
+      if (!ref) continue;
+      const match = ref.match(/^#\/([^/]+)\/(\d+)$/);
+      if (!match) continue;
+      const collection = document[match[1]];
+      const item = collection ? collection[Number(match[2])] : null;
+      if (!item) continue;
+
+      if (item.label === 'list_item') {
+        if (!listOpen) {
+          html.push('<ul>');
+          listOpen = true;
+        }
+        html.push(`<li>${item.text || item.orig || ''}</li>`);
+        continue;
+      }
+
+      if (listOpen) {
+        html.push('</ul>');
+        listOpen = false;
+      }
+
+      if (item.label === 'title') {
+        html.push(`<h1 class="resume-name">${item.text || item.orig || ''}</h1>`);
+      } else if (item.label === 'section_header') {
+        html.push(`<h2 class="section-title">${item.text || item.orig || ''}</h2>`);
+      } else if (item.label === 'table') {
+        const rows = item.data?.grid || item.data?.rows || [];
+        html.push('<div class="table-container"><table>');
+        rows.forEach((row: any[], rIdx: number) => {
+          html.push('<tr>');
+          row.forEach((cell: any) => {
+            const cellText = typeof cell === 'string' ? cell : cell?.text || '';
+            const tag = cell?.column_header || rIdx === 0 ? 'th' : 'td';
+            html.push(`<${tag}>${cellText}</${tag}>`);
+          });
+          html.push('</tr>');
+        });
+        html.push('</table></div>');
+      } else {
+        const text = (item.text || item.orig || '').trim();
+        if (text) html.push(`<p>${text}</p>`);
+      }
+    }
+
+    if (listOpen) html.push('</ul>');
+    html.push('</div>');
+    return html.join('\n');
   }
 
   /**
