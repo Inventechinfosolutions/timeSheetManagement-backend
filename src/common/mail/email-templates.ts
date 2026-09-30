@@ -1,4 +1,4 @@
-import { NotePermission } from '../../notes/entities/note-recipient.entity';
+import { NotePermission } from '../../notes/enums/note-permission.enum';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Note share email — Wide, edge-to-edge corporate template with Inventech & WorkSphere header
@@ -8,16 +8,18 @@ export const getNoteEmailTemplate = (
   noteContent: string,
   senderName: string,
   senderEmail: string,
-  permission: NotePermission,
+  permission: NotePermission | string,
   customMessage?: string,
   attachments?: Array<{ name: string; downloadUrl: string }>,
 ): string => {
-  const isEdit = permission === NotePermission.CanEdit;
+  const permStr = String(permission || '');
+  const isEdit = permStr.includes('CanEdit') || permStr.includes('EDIT');
+  const isDelete = permStr.includes('CanDelete') || permStr.includes('DELETE');
   const senderInitial = (senderName || 'U').charAt(0).toUpperCase();
   const ctaText   = isEdit ? 'Open Portal to Edit &#8594;' : 'Open in WorkSphere Inbox &#8594;';
   const ctaColor  = isEdit ? '#16a34a' : '#0a8fe7';
   const ctaNote   = isEdit
-    ? 'You have edit access. Log in to WorkSphere to edit this note directly.'
+    ? `You have ${isDelete ? 'edit & delete' : 'edit'} access. Log in to WorkSphere to manage this note directly.`
     : 'This is a read-only view. Log in to WorkSphere to view it in your Inbox.';
   const year = new Date().getFullYear();
 

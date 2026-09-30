@@ -148,7 +148,7 @@ export class NotesController {
   }
 
   @Delete('attachments/:key')
-  @Permission(NotePermission.CanEdit)
+  @Permission(NotePermission.CanDelete)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Delete attachment from object_store and storage' })
   async deleteAttachment(@Param('key') key: string, @Req() req: any) {
@@ -289,7 +289,7 @@ export class NotesController {
   }
 
   @Delete(':id')
-  @Permission(NotePermission.CanEdit)
+  @Permission(NotePermission.CanDelete)
   @ApiOperation({ summary: 'Delete note and all nested sub-notes and attachments' })
   async remove(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
     return await this.notesService.removeNote(id, req.user);
@@ -354,7 +354,11 @@ export class NotesController {
         subject: body.subject,
         customMessage: body.customMessage || body.message,
         attachmentKeys: body.attachmentKeys,
-        permission: body.permission || (body.canEdit ? 'CanEdit' : 'CanView'),
+        permission: body.permission,
+        permissions: body.permissions,
+        canView: body.canView,
+        canEdit: body.canEdit,
+        canDelete: body.canDelete,
       },
       req.user,
     );

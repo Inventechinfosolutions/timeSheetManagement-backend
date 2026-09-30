@@ -13,4 +13,13 @@ export class QueryInboxDto {
   @IsOptional()
   @IsString()
   search?: string;
+
+  @ApiPropertyOptional({
+    description: 'Folder filter: INBOX (received) or SENT (sent by user)',
+    enum: ['INBOX', 'SENT'],
+    default: 'INBOX',
+  })
+  @IsOptional()
+  @IsString()
+  folder?: string;
 }

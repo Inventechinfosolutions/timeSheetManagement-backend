@@ -219,9 +219,12 @@ export class NotesService {
           (userId && note.userId === userId) ||
           (employeeId && note.employeeId === employeeId);
         if (isOwner) {
-          (note as any).permission = NotePermission.CanEdit;
-          (note as any).userPermission = NotePermission.CanEdit;
+          (note as any).permission = `${NotePermission.CanView},${NotePermission.CanEdit},${NotePermission.CanDelete}`;
+          (note as any).userPermission = (note as any).permission;
           (note as any).isOwner = true;
+          (note as any).canView = true;
+          (note as any).canEdit = true;
+          (note as any).canDelete = true;
         } else {
           const recipient = await this.inboxRepo.findOne({
             where: [
@@ -230,9 +233,14 @@ export class NotesService {
               { notesId: note.id, employeeId: user.email || '' },
             ],
           });
-          (note as any).permission = recipient?.permission || NotePermission.CanView;
-          (note as any).userPermission = recipient?.permission || NotePermission.CanView;
+          const perms = recipient?.permission || NotePermission.CanView;
+          const permsLower = perms.toLowerCase();
+          (note as any).permission = perms;
+          (note as any).userPermission = perms;
           (note as any).isOwner = false;
+          (note as any).canView = true;
+          (note as any).canEdit = permsLower.includes('edit');
+          (note as any).canDelete = permsLower.includes('delete');
         }
       }
 
@@ -274,8 +282,9 @@ export class NotesService {
           throw new ForbiddenException('You do not have access to edit this note');
         }
 
-        if (recipient.permission !== NotePermission.CanEdit && (recipient.permission as any) !== 'CanEdit') {
-          throw new ForbiddenException('You only have view permission for this note');
+        const perms = (recipient.permission || '').toLowerCase();
+        if (!perms.includes('canedit') && !perms.includes('edit')) {
+          throw new ForbiddenException('You do not have edit permission for this note');
         }
       }
 
@@ -371,8 +380,9 @@ export class NotesService {
           throw new ForbiddenException('You do not have access to delete this note');
         }
 
-        if (recipient.permission !== NotePermission.CanEdit && (recipient.permission as any) !== 'CanEdit') {
-          throw new ForbiddenException('You only have view permission for this note');
+        const perms = (recipient.permission || '').toLowerCase();
+        if (!perms.includes('candelete') && !perms.includes('delete')) {
+          throw new ForbiddenException('You do not have delete permission for this note');
         }
       }
 
@@ -1448,8 +1458,9 @@ if (!doclingUrl) {
               throw new ForbiddenException('You do not have access to delete this attachment');
             }
 
-            if (recipient.permission !== NotePermission.CanEdit && (recipient.permission as any) !== 'CanEdit') {
-              throw new ForbiddenException('You only have view permission for this note attachment');
+            const perms = (recipient.permission || '').toLowerCase();
+            if (!perms.includes('candelete') && !perms.includes('delete') && !perms.includes('canedit') && !perms.includes('edit')) {
+              throw new ForbiddenException('You do not have delete permission for this note attachment');
             }
           }
         }

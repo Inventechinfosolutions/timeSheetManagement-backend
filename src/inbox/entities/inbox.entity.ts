@@ -21,12 +21,22 @@ export class Inbox {
   @Column({ name: 'notes_id', type: 'int' })
   notesId: number;
 
+  @Column({ name: 'sender_id', type: 'varchar', length: 100, nullable: true })
+  senderId?: string;
+
+  @Column({ name: 'receiver_id', type: 'varchar', length: 100, nullable: true })
+  receiverId?: string;
+
+  @Column({ name: 'folder', type: 'varchar', length: 50, default: 'INBOX' })
+  folder: 'INBOX' | 'SENT' | string;
+
   @Column({
-    type: 'enum',
-    enum: NotePermission,
+    name: 'permission',
+    type: 'varchar',
+    length: 255,
     default: NotePermission.CanView,
   })
-  permission: NotePermission;
+  permission: string;
 
   @Column({ name: 'from_mail', type: 'varchar', length: 255 })
   fromMail: string;

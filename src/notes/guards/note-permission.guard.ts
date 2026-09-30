@@ -99,6 +99,22 @@ export class NotePermissionGuard implements CanActivate {
       throw new ForbiddenException('You do not have access to this note');
     }
 
+    const userPerms = (recipient.permission || '')
+      .split(',')
+      .map((p: string) => p.trim().toLowerCase());
+
+    // If CanDelete is required
+    if (
+      requiredPermission === NotePermission.CanDelete ||
+      requiredPermission === 'CanDelete' ||
+      requiredPermission === 'canDelete' ||
+      requiredPermission === 'DELETE'
+    ) {
+      if (!userPerms.includes('candelete') && !userPerms.includes('delete')) {
+        throw new ForbiddenException('You do not have delete permission for this note');
+      }
+    }
+
     // If CanEdit is required, verify recipient has CanEdit permission
     if (
       requiredPermission === NotePermission.CanEdit ||
@@ -106,11 +122,7 @@ export class NotePermissionGuard implements CanActivate {
       requiredPermission === 'canEdit' ||
       requiredPermission === 'EDIT'
     ) {
-      if (
-        recipient.permission !== NotePermission.CanEdit &&
-        (recipient.permission as any) !== 'CanEdit' &&
-        (recipient.permission as any) !== 'canEdit'
-      ) {
+      if (!userPerms.includes('canedit') && !userPerms.includes('edit')) {
         throw new ForbiddenException('You only have view permission for this note');
       }
     }

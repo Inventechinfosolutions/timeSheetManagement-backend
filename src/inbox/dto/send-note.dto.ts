@@ -33,13 +33,31 @@ export class SendNoteDto {
   attachmentKeys?: string[];
 
   @ApiPropertyOptional({
-    description: 'Access permission granted to the recipient',
+    description: 'Access permission granted to the recipient (e.g. CanView, CanEdit, CanDelete, or comma-separated)',
     enum: NotePermission,
     default: NotePermission.CanView,
-    example: NotePermission.CanEdit,
   })
   @IsOptional()
-  @IsString()
   permission?: NotePermission | string;
+
+  @ApiPropertyOptional({
+    description: 'Array of permissions granted to the recipient',
+    type: [String],
+    example: ['CanView', 'CanEdit', 'CanDelete'],
+  })
+  @IsOptional()
+  permissions?: string[] | string;
+
+  @ApiPropertyOptional({ description: 'Allow View permission', default: true })
+  @IsOptional()
+  canView?: boolean;
+
+  @ApiPropertyOptional({ description: 'Allow Edit permission', default: false })
+  @IsOptional()
+  canEdit?: boolean;
+
+  @ApiPropertyOptional({ description: 'Allow Delete permission', default: false })
+  @IsOptional()
+  canDelete?: boolean;
 }
 

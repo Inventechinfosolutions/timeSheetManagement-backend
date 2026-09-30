@@ -21,20 +21,67 @@ import { DocumentUploaderService } from '../../common/document-uploader/services
 import { EntityType, ReferenceType } from '../../common/document-uploader/models/documentmetainfo.model';
 import { getNoteEmailTemplate } from '../../common/mail/email-templates';
 
-function parseNotePermission(val?: any): NotePermission {
-  if (!val) return NotePermission.CanView;
-  const s = String(val).trim().toLowerCase();
-  if (
-    s === 'canedit' ||
-    s === 'edit' ||
-    s === '2' ||
-    s === 'can_edit' ||
-    s === 'write' ||
-    s === 'canwrite'
-  ) {
-    return NotePermission.CanEdit;
+export function parseNotePermissions(
+  val?: any,
+  extra?: { canView?: boolean; canEdit?: boolean; canDelete?: boolean; permissions?: any },
+): string {
+  const result = new Set<NotePermission>();
+
+  const addVal = (item: any) => {
+    if (!item) return;
+    const s = String(item).trim().toLowerCase();
+    if (s.includes('delete') || s === '3') {
+      result.add(NotePermission.CanDelete);
+    }
+    if (s.includes('edit') || s.includes('write') || s === '2') {
+      result.add(NotePermission.CanEdit);
+    }
+    if (s.includes('view') || s.includes('read') || s === '1') {
+      result.add(NotePermission.CanView);
+    }
+  };
+
+  if (Array.isArray(val)) {
+    val.forEach(addVal);
+  } else if (typeof val === 'string' && val.includes(',')) {
+    val.split(',').forEach(addVal);
+  } else if (val) {
+    addVal(val);
   }
-  return NotePermission.CanView;
+
+  if (extra?.permissions) {
+    if (Array.isArray(extra.permissions)) {
+      extra.permissions.forEach(addVal);
+    } else if (typeof extra.permissions === 'string') {
+      extra.permissions.split(',').forEach(addVal);
+    }
+  }
+
+  if (extra?.canDelete) result.add(NotePermission.CanDelete);
+  if (extra?.canEdit) result.add(NotePermission.CanEdit);
+  if (extra?.canView) result.add(NotePermission.CanView);
+
+  // If nothing specified, default to CanView
+  if (result.size === 0) {
+    result.add(NotePermission.CanView);
+  }
+
+  const ordered: string[] = [];
+  if (result.has(NotePermission.CanView)) ordered.push(NotePermission.CanView);
+  if (result.has(NotePermission.CanEdit)) ordered.push(NotePermission.CanEdit);
+  if (result.has(NotePermission.CanDelete)) ordered.push(NotePermission.CanDelete);
+
+  return ordered.join(',');
+}
+
+export function hasNotePermission(
+  assignedPermissions: string | undefined | null,
+  target: NotePermission | string,
+): boolean {
+  if (!assignedPermissions) return target === NotePermission.CanView;
+  const list = assignedPermissions.split(',').map((p) => p.trim().toLowerCase());
+  const targetLower = String(target).trim().toLowerCase();
+  return list.includes(targetLower);
 }
 
 @Injectable()
@@ -61,7 +108,7 @@ export class InboxService {
     const item = this.inboxRepo.create({
       employeeId: String(dto.employeeId),
       notesId: dto.notesId,
-      permission: parseNotePermission(dto.permission),
+      permission: parseNotePermissions(dto.permission),
       fromMail: dto.fromMail,
       toMail: dto.toMail,
       isRead: dto.isRead || false,
@@ -80,8 +127,14 @@ export class InboxService {
         throw new NotFoundException(`Note with ID ${dto.notesId} not found`);
       }
 
-      const permission = parseNotePermission(
-        dto.permission || (dto as any).canEdit || (dto as any).accessPermission || (dto as any).permissionType,
+      const permission = parseNotePermissions(
+        dto.permission || (dto as any).permissions,
+        {
+          canView: dto.canView,
+          canEdit: dto.canEdit,
+          canDelete: dto.canDelete,
+          permissions: (dto as any).permissions,
+        },
       );
 
       // Determine sender details
@@ -115,11 +168,11 @@ export class InboxService {
         const { employeeId: targetEmployeeId, email: targetEmail } =
           await this.resolveRecipientEmployee(recipient);
 
-        // Check if an inbox record already exists for this note and employee
+        // 1. Recipient record in INBOX folder
         const existingInbox = await this.inboxRepo.findOne({
           where: [
-            { notesId: note.id, employeeId: targetEmployeeId },
-            { notesId: note.id, toMail: targetEmail },
+            { notesId: note.id, employeeId: targetEmployeeId, folder: 'INBOX' },
+            { notesId: note.id, toMail: targetEmail, folder: 'INBOX' },
           ],
         });
 
@@ -127,6 +180,9 @@ export class InboxService {
         if (existingInbox) {
           existingInbox.permission = permission;
           existingInbox.employeeId = targetEmployeeId;
+          existingInbox.senderId = String(senderEmpId);
+          existingInbox.receiverId = targetEmployeeId;
+          existingInbox.folder = 'INBOX';
           existingInbox.fromMail = fromMail;
           existingInbox.toMail = targetEmail;
           existingInbox.isRead = false;
@@ -134,6 +190,9 @@ export class InboxService {
         } else {
           const inboxItem = this.inboxRepo.create({
             employeeId: targetEmployeeId,
+            senderId: String(senderEmpId),
+            receiverId: targetEmployeeId,
+            folder: 'INBOX',
             notesId: note.id,
             permission,
             fromMail,
@@ -143,6 +202,40 @@ export class InboxService {
           saved = await this.inboxRepo.save(inboxItem);
         }
         createdEntries.push(saved);
+
+        // 2. Sender record in SENT folder (independent copy for sender login, Gmail-style)
+        // Storing senderId and receiverId; deleting in sender login does not affect recipient login
+        const existingSent = await this.inboxRepo.findOne({
+          where: {
+            notesId: note.id,
+            employeeId: String(senderEmpId),
+            receiverId: targetEmployeeId,
+            folder: 'SENT',
+          },
+        });
+
+        if (existingSent) {
+          existingSent.permission = permission;
+          existingSent.senderId = String(senderEmpId);
+          existingSent.receiverId = targetEmployeeId;
+          existingSent.fromMail = fromMail;
+          existingSent.toMail = targetEmail;
+          existingSent.isRead = true;
+          await this.inboxRepo.save(existingSent);
+        } else {
+          const sentItem = this.inboxRepo.create({
+            employeeId: String(senderEmpId),
+            senderId: String(senderEmpId),
+            receiverId: targetEmployeeId,
+            folder: 'SENT',
+            notesId: note.id,
+            permission,
+            fromMail,
+            toMail: targetEmail,
+            isRead: true,
+          });
+          await this.inboxRepo.save(sentItem);
+        }
 
         // 3. Fetch note attachments for email and nodemailer attachment payload
         let noteAttachments: Array<{ name: string; downloadUrl: string }> = [];
@@ -255,13 +348,24 @@ export class InboxService {
   async getInbox(user: any, query?: QueryInboxDto): Promise<any[]> {
     try {
       const { employeeId, email } = this.resolveUserIdentifiers(user);
+      const folder = (query?.folder || 'INBOX').toUpperCase();
 
-      const qb = this.inboxRepo
-        .createQueryBuilder('inbox')
-        .where('(inbox.employeeId = :employeeId OR inbox.toMail = :email)', {
-          employeeId,
-          email,
-        });
+      const qb = this.inboxRepo.createQueryBuilder('inbox');
+
+      if (folder === 'SENT') {
+        qb.where('inbox.folder = :folder', { folder: 'SENT' })
+          .andWhere(
+            '(inbox.employeeId = :employeeId OR inbox.senderId = :employeeId OR inbox.fromMail = :email)',
+            { employeeId, email },
+          );
+      } else {
+        // Default: INBOX (received mail)
+        qb.where('(inbox.folder = :folder OR inbox.folder IS NULL)', { folder: 'INBOX' })
+          .andWhere(
+            '(inbox.employeeId = :employeeId OR inbox.receiverId = :employeeId OR inbox.toMail = :email)',
+            { employeeId, email },
+          );
+      }
 
       if (query?.isRead !== undefined) {
         qb.andWhere('inbox.isRead = :isRead', { isRead: query.isRead });
@@ -280,18 +384,49 @@ export class InboxService {
       const notesMap = new Map<number, Note>();
       notes.forEach((n) => notesMap.set(n.id, n));
 
-      // Fetch sender employee details by fromMail
+      // Fetch sender employee details by fromMail or senderId
       const senderEmails = Array.from(new Set(inboxItems.map((item) => item.fromMail).filter(Boolean)));
-      const senders = senderEmails.length > 0 ? await this.employeeRepo.findBy({ email: In(senderEmails) }) : [];
+      const senderIds = Array.from(new Set(inboxItems.map((item) => item.senderId).filter(Boolean))) as string[];
+      const senderWhere: any[] = [];
+      if (senderEmails.length > 0) senderWhere.push({ email: In(senderEmails) });
+      if (senderIds.length > 0) senderWhere.push({ employeeId: In(senderIds) });
+      const senders = senderWhere.length > 0 ? await this.employeeRepo.find({ where: senderWhere }) : [];
       const sendersMap = new Map<string, EmployeeDetails>();
-      senders.forEach((s) => sendersMap.set(s.email, s));
+      senders.forEach((s) => {
+        if (s.email) sendersMap.set(s.email.toLowerCase(), s);
+        if (s.employeeId) sendersMap.set(s.employeeId.toLowerCase(), s);
+      });
+
+      // Fetch receiver employee details by toMail or receiverId
+      const receiverEmails = Array.from(new Set(inboxItems.map((item) => item.toMail).filter(Boolean)));
+      const receiverIds = Array.from(new Set(inboxItems.map((item) => item.receiverId).filter(Boolean))) as string[];
+      const receiverWhere: any[] = [];
+      if (receiverEmails.length > 0) receiverWhere.push({ email: In(receiverEmails) });
+      if (receiverIds.length > 0) receiverWhere.push({ employeeId: In(receiverIds) });
+      const receivers = receiverWhere.length > 0 ? await this.employeeRepo.find({ where: receiverWhere }) : [];
+      const receiversMap = new Map<string, EmployeeDetails>();
+      receivers.forEach((r) => {
+        if (r.email) receiversMap.set(r.email.toLowerCase(), r);
+        if (r.employeeId) receiversMap.set(r.employeeId.toLowerCase(), r);
+      });
 
       // Assemble enriched response
       const results: any[] = [];
 
       for (const item of inboxItems) {
         const note = notesMap.get(item.notesId);
-        const sender = sendersMap.get(item.fromMail);
+        const sender =
+          sendersMap.get(item.fromMail?.toLowerCase()) ||
+          sendersMap.get(item.senderId?.toLowerCase() || '');
+        const senderDisplayName =
+          sender?.fullName || item.fromMail?.split('@')[0] || item.senderId || 'Unknown Sender';
+
+        const receiver =
+          receiversMap.get(item.toMail?.toLowerCase()) ||
+          receiversMap.get(item.receiverId?.toLowerCase() || '');
+        const receiverDisplayName =
+          receiver?.fullName || item.toMail?.split('@')[0] || item.receiverId || 'Recipient';
+
         const permission = item.permission || 'CanView';
 
         // Fetch attachments for this note
@@ -309,15 +444,16 @@ export class InboxService {
           }
         }
 
-        const senderDisplayName = sender?.fullName || item.fromMail.split('@')[0] || 'Unknown Sender';
-
         // Apply search filter if specified
         if (query?.search && query.search.trim()) {
           const s = query.search.trim().toLowerCase();
           const matchesTitle = note?.title?.toLowerCase().includes(s);
           const matchesDesc = note?.description?.toLowerCase().includes(s);
-          const matchesSender = senderDisplayName.toLowerCase().includes(s) || item.fromMail.toLowerCase().includes(s);
-          if (!matchesTitle && !matchesDesc && !matchesSender) {
+          const matchesSender =
+            senderDisplayName.toLowerCase().includes(s) || item.fromMail?.toLowerCase().includes(s);
+          const matchesReceiver =
+            receiverDisplayName.toLowerCase().includes(s) || item.toMail?.toLowerCase().includes(s);
+          if (!matchesTitle && !matchesDesc && !matchesSender && !matchesReceiver) {
             continue;
           }
         }
@@ -325,6 +461,9 @@ export class InboxService {
         results.push({
           inboxId: Number(item.inboxId),
           employeeId: item.employeeId,
+          senderId: item.senderId,
+          receiverId: item.receiverId,
+          folder: item.folder || 'INBOX',
           notesId: item.notesId,
           fromMail: item.fromMail,
           toMail: item.toMail,
@@ -335,6 +474,9 @@ export class InboxService {
           senderName: senderDisplayName,
           senderDesignation: sender?.designation || '',
           senderDepartment: sender?.department || '',
+          receiverName: receiverDisplayName,
+          receiverDesignation: receiver?.designation || '',
+          receiverDepartment: receiver?.department || '',
           note: note
             ? {
                 id: note.id,
@@ -366,7 +508,7 @@ export class InboxService {
   }
 
   /**
-   * Get unread message count for user sidebar badge.
+   * Get unread message count for user sidebar badge (INBOX only).
    */
   async getUnreadCount(user: any): Promise<{ count: number }> {
     try {
@@ -374,10 +516,11 @@ export class InboxService {
 
       const count = await this.inboxRepo
         .createQueryBuilder('inbox')
-        .where('(inbox.employeeId = :employeeId OR inbox.toMail = :email)', {
+        .where('(inbox.employeeId = :employeeId OR inbox.receiverId = :employeeId OR inbox.toMail = :email)', {
           employeeId,
           email,
         })
+        .andWhere('(inbox.folder = :folder OR inbox.folder IS NULL)', { folder: 'INBOX' })
         .andWhere('inbox.isRead = false')
         .getCount();
 
@@ -404,7 +547,12 @@ export class InboxService {
     }
 
     const note = await this.noteRepo.findOne({ where: { id: item.notesId } });
-    const sender = await this.employeeRepo.findOne({ where: { email: item.fromMail } });
+    const sender = await this.employeeRepo.findOne({
+      where: [{ email: item.fromMail }, { employeeId: item.senderId || '' }],
+    });
+    const receiver = await this.employeeRepo.findOne({
+      where: [{ email: item.toMail }, { employeeId: item.receiverId || '' }],
+    });
 
     let attachments: any[] = [];
     if (note) {
@@ -423,6 +571,9 @@ export class InboxService {
     return {
       inboxId: Number(item.inboxId),
       employeeId: item.employeeId,
+      senderId: item.senderId,
+      receiverId: item.receiverId,
+      folder: item.folder || 'INBOX',
       notesId: item.notesId,
       fromMail: item.fromMail,
       toMail: item.toMail,
@@ -430,8 +581,10 @@ export class InboxService {
       isRead: Boolean(item.isRead),
       createdAt: item.createdAt,
       updatedAt: item.updatedAt,
-      senderName: sender?.fullName || item.fromMail.split('@')[0] || 'Unknown Sender',
+      senderName: sender?.fullName || item.fromMail?.split('@')[0] || item.senderId || 'Unknown Sender',
       senderDesignation: sender?.designation || '',
+      receiverName: receiver?.fullName || item.toMail?.split('@')[0] || item.receiverId || 'Recipient',
+      receiverDesignation: receiver?.designation || '',
       note: note
         ? {
             id: note.id,
@@ -639,7 +792,7 @@ export class InboxService {
     if (!item) {
       throw new NotFoundException(`Inbox record with ID ${inboxId} not found`);
     }
-    item.permission = parseNotePermission(permission);
+    item.permission = parseNotePermissions(permission);
     return await this.inboxRepo.save(item);
   }
 }
