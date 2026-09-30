@@ -267,7 +267,7 @@ export class EmployeeDetailsService {
       }
 
       if (userStatus) {
-        query.andWhere('employee.userStatus = :userStatus', { userStatus });
+        query.andWhere('user_filter.status = :userStatus', { userStatus });
       }
 
       // Filter by Manager if provided

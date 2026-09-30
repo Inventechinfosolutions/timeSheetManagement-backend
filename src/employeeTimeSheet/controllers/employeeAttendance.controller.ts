@@ -93,12 +93,13 @@ export class EmployeeAttendanceController {
   @ApiOperation({ summary: 'Get monthly attendance matrix report data for UI grid' })
   @ApiQuery({ name: 'month', type: Number })
   @ApiQuery({ name: 'year', type: Number })
+  @ApiQuery({ name: 'status', type: String, required: false })
   async getMonthlyReportData(
     @Query() query: DownloadAttendanceDto,
     @Req() req: any,
   ) {
     try {
-      this.logger.log(`Fetching monthly report data for month: ${query.month}, year: ${query.year}`);
+      this.logger.log(`Fetching monthly report data for month: ${query.month}, year: ${query.year}, status: ${query.status || 'All'}`);
       const user = req.user;
       let managerName: string | undefined;
       let managerId: string | undefined;
@@ -116,6 +117,7 @@ export class EmployeeAttendanceController {
         managerId,
         query.search,
         query.department,
+        query.status,
       );
     } catch (error) {
       this.logger.error(`Error fetching monthly report data: ${error.message}`, error.stack);
