@@ -31,13 +31,20 @@ import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Response } from 'express';
 import { Readable } from 'stream';
 
+import { Inject, forwardRef } from '@nestjs/common';
+import { InboxService } from '../../inbox/services/inbox.service';
+
 @ApiTags('Notes')
 @Controller('notes')
 @UseGuards(JwtAuthGuard)
 export class NotesController {
   private readonly logger = new Logger(NotesController.name);
 
-  constructor(private readonly notesService: NotesService) {}
+  constructor(
+    private readonly notesService: NotesService,
+    @Inject(forwardRef(() => InboxService))
+    private readonly inboxService: InboxService,
+  ) {}
 
   // =========================================================================
   // 1. Static & Special Sub-path Endpoints (MUST come before :id wildcard routes)
@@ -203,6 +210,37 @@ export class NotesController {
   // 3. Parameterized Item Endpoints (:id)
   // =========================================================================
 
+  @Get(':id/download')
+  @ApiOperation({ summary: 'Download or export note document (PDF or Word)' })
+  async downloadNote(
+    @Param('id', ParseIntPipe) id: number,
+    @Query('format') format: string,
+    @Req() req: any,
+    @Res() res: Response,
+  ) {
+    const result = await this.notesService.exportNoteDocument(id, format || 'pdf', req.user);
+
+    res.set({
+      ...NO_CACHE_HEADERS,
+      'Content-Type': result.contentType,
+      'Content-Disposition': `attachment; filename="${encodeURIComponent(result.filename)}"`,
+      'Content-Length': result.buffer.length,
+    });
+
+    res.send(result.buffer);
+  }
+
+  @Get(':id/export')
+  @ApiOperation({ summary: 'Export note document (alias for download)' })
+  async exportNote(
+    @Param('id', ParseIntPipe) id: number,
+    @Query('format') format: string,
+    @Req() req: any,
+    @Res() res: Response,
+  ) {
+    return this.downloadNote(id, format, req.user, res);
+  }
+
   @Get(':id')
   @ApiOperation({ summary: 'Get single note by ID' })
   async findOne(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
@@ -223,6 +261,23 @@ export class NotesController {
   @ApiOperation({ summary: 'Toggle note pinned state' })
   async togglePin(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
     return await this.notesService.togglePin(id, req.user);
+  }
+
+  @Patch(':id/archive')
+  @ApiOperation({ summary: 'Toggle note archived state' })
+  async toggleArchive(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
+    return await this.notesService.toggleArchive(id, req.user);
+  }
+
+  @Patch(':id/auto-save')
+  @ApiOperation({ summary: 'Update note auto-save setting' })
+  async updateAutoSave(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() body: any,
+    @Req() req: any,
+  ) {
+    const autoSave = body.autoSave === true || body.autoSave === 'true';
+    return await this.notesService.updateAutoSave(id, autoSave, req.user);
   }
 
   @Delete(':id')
@@ -260,13 +315,48 @@ export class NotesController {
     return await this.notesService.createSubNote(id, createSubNoteDto, files, req.user);
   }
 
-  @Post(':id/attachments')
-  @UseInterceptors(AnyFilesInterceptor())
-  @ApiOperation({ summary: 'Upload attachments to existing note' })
-  async uploadAttachments(
+  @Post(':id/send')
+  @ApiOperation({ summary: 'Send note to recipients, creating inbox entries and notifications' })
+  async sendNote(
     @Param('id', ParseIntPipe) id: number,
-    @UploadedFiles() files: Express.Multer.File[],
+    @Body() body: any,
+    @Req() req: any,
   ) {
-    return await this.notesService.uploadAttachments(id, files);
+    let recipients = body.recipients;
+    if (typeof recipients === 'string') {
+      try {
+        recipients = JSON.parse(recipients);
+      } catch (e) {
+        recipients = recipients.split(',').map((s: string) => s.trim());
+      }
+    }
+    if (!recipients && (body.to || body.email)) {
+      recipients = [body.to || body.email];
+    }
+    if (!Array.isArray(recipients) || recipients.length === 0) {
+      throw new BadRequestException('At least one recipient email or employee ID is required');
+    }
+
+    return await this.inboxService.sendNote(
+      {
+        notesId: id,
+        recipients,
+        subject: body.subject,
+        customMessage: body.customMessage || body.message,
+        attachmentKeys: body.attachmentKeys,
+      },
+      req.user,
+    );
+  }
+
+  @Post(':id/share')
+  @ApiOperation({ summary: 'Alias for send note to recipients' })
+  async shareNote(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() body: any,
+    @Req() req: any,
+  ) {
+    return await this.sendNote(id, body, req);
   }
 }
+

@@ -3,11 +3,13 @@ import {
   Logger,
   NotFoundException,
   BadRequestException,
+  ForbiddenException,
   InternalServerErrorException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Note } from '../entities/note.entity';
+import { NoteRecipient, NotePermission } from '../entities/note-recipient.entity';
 import { CreateNoteDto } from '../dto/create-note.dto';
 import { UpdateNoteDto } from '../dto/update-note.dto';
 import { CreateSubNoteDto } from '../dto/create-sub-note.dto';
@@ -22,6 +24,8 @@ import {
 import { ConfigService } from '@nestjs/config';
 import axios from 'axios';
 import FormData from 'form-data';
+import dayjs from 'dayjs';
+import PDFDocument from 'pdfkit';
 
 interface UserContext {
   userId: string | null;
@@ -36,6 +40,8 @@ export class NotesService {
   constructor(
     @InjectRepository(Note)
     private readonly noteRepo: Repository<Note>,
+    @InjectRepository(NoteRecipient)
+    private readonly noteRecipientRepo: Repository<NoteRecipient>,
     @InjectRepository(DocumentMetaInfo)
     private readonly documentRepo: Repository<DocumentMetaInfo>,
     private readonly documentUploaderService: DocumentUploaderService,
@@ -67,6 +73,7 @@ export class NotesService {
         parentId: createDto.parentId || null,
         color: createDto.color || '#4318FF',
         isPinned: createDto.isPinned || false,
+        autoSave: createDto.autoSave || false,
         userId: userInfo.userId,
         employeeId: userInfo.employeeId,
         createdBy: userInfo.createdBy,
@@ -213,11 +220,33 @@ export class NotesService {
    */
   async updateNote(id: number, updateDto: UpdateNoteDto, user: any): Promise<Note> {
     try {
-      const { createdBy } = this.extractUserInfo(user);
+      const { userId, employeeId, createdBy } = this.extractUserInfo(user);
       const note = await this.noteRepo.findOne({ where: { id } });
 
       if (!note) {
         throw new NotFoundException(`Note with ID ${id} not found`);
+      }
+
+      // Check permission: Owner or NoteRecipient with EDIT permission
+      const isOwner =
+        (userId && note.userId === userId) ||
+        (employeeId && note.employeeId === employeeId);
+
+      if (!isOwner) {
+        const recipient = await this.noteRecipientRepo.findOne({
+          where: [
+            { noteId: id, employeeId: employeeId || '' },
+            { noteId: id, employeeId: user?.email || '' },
+          ],
+        });
+
+        if (!recipient) {
+          throw new ForbiddenException('You do not have access to edit this note');
+        }
+
+        if (recipient.permission !== NotePermission.CanEdit) {
+          throw new ForbiddenException('You only have view permission for this note');
+        }
       }
 
       if (updateDto.title !== undefined) note.title = updateDto.title;
@@ -229,6 +258,7 @@ export class NotesService {
       if (updateDto.color !== undefined) note.color = updateDto.color;
       if (updateDto.isPinned !== undefined) note.isPinned = updateDto.isPinned;
       if (updateDto.isArchived !== undefined) note.isArchived = updateDto.isArchived;
+      if (updateDto.autoSave !== undefined) note.autoSave = updateDto.autoSave;
       if (updateDto.orderIndex !== undefined) note.orderIndex = updateDto.orderIndex;
 
       note.updatedBy = createdBy;
@@ -236,10 +266,44 @@ export class NotesService {
       await this.noteRepo.save(note);
       return await this.findOne(id, user);
     } catch (error) {
-      if (error instanceof NotFoundException) throw error;
+      if (error instanceof NotFoundException || error instanceof ForbiddenException) throw error;
       this.logger.error(`Failed to update note ${id}: ${error.message}`, error.stack);
       throw new InternalServerErrorException('Failed to update note');
     }
+  }
+
+  /**
+   * Update auto-save setting for a note.
+   */
+  async updateAutoSave(id: number, autoSave: boolean, user: any): Promise<Note> {
+    const { userId, employeeId, createdBy } = this.extractUserInfo(user);
+    const note = await this.noteRepo.findOne({ where: { id } });
+
+    if (!note) {
+      throw new NotFoundException(`Note with ID ${id} not found`);
+    }
+
+    const isOwner =
+      (userId && note.userId === userId) ||
+      (employeeId && note.employeeId === employeeId);
+
+    if (!isOwner) {
+      const recipient = await this.noteRecipientRepo.findOne({
+        where: [
+          { noteId: id, employeeId: employeeId || '' },
+          { noteId: id, employeeId: user?.email || '' },
+        ],
+      });
+
+      if (!recipient || recipient.permission !== NotePermission.CanEdit) {
+        throw new ForbiddenException('You need edit permission to change auto-save settings');
+      }
+    }
+
+    note.autoSave = autoSave;
+    note.updatedBy = createdBy;
+    await this.noteRepo.save(note);
+    return await this.findOne(id, user);
   }
 
   /**
@@ -341,6 +405,19 @@ export class NotesService {
     return await this.findOne(id, user);
   }
 
+  /**
+   * Toggle the archived status of a note.
+   */
+  async toggleArchive(id: number, user: any): Promise<Note> {
+    const note = await this.noteRepo.findOne({ where: { id } });
+    if (!note) {
+      throw new NotFoundException(`Note with ID ${id} not found`);
+    }
+    note.isArchived = !note.isArchived;
+    await this.noteRepo.save(note);
+    return await this.findOne(id, user);
+  }
+
   // =========================================================================
   // Analytics & Summary Queries
   // =========================================================================
@@ -357,7 +434,9 @@ export class NotesService {
         .select('DISTINCT note.projectName', 'projectName')
         .where('note.type = :type', { type: NoteType.PROJECT })
         .andWhere('note.projectName IS NOT NULL')
-        .andWhere("note.projectName != ''");
+        .andWhere("note.projectName != ''")
+        .andWhere('note.parentId IS NULL')
+        .andWhere('note.isArchived = false');
 
       if (userId || employeeId) {
         qb.andWhere('(note.userId = :userId OR note.employeeId = :employeeId)', {
@@ -375,7 +454,7 @@ export class NotesService {
   }
 
   /**
-   * Retrieve overall note statistics (counts for total, personal, project, pinned).
+   * Retrieve overall note statistics (counts for total, personal, project, pinned, archived).
    */
   async getStats(user: any) {
     try {
@@ -393,9 +472,10 @@ export class NotesService {
       const allNotes = await qb.getMany();
       return {
         totalNotes: allNotes.length,
-        personalNotes: allNotes.filter((n) => n.type === NoteType.PERSONAL).length,
-        projectNotes: allNotes.filter((n) => n.type === NoteType.PROJECT).length,
-        pinnedNotes: allNotes.filter((n) => n.isPinned).length,
+        personalNotes: allNotes.filter((n) => n.type === NoteType.PERSONAL && !n.isArchived).length,
+        projectNotes: allNotes.filter((n) => n.type === NoteType.PROJECT && !n.isArchived).length,
+        pinnedNotes: allNotes.filter((n) => n.isPinned && !n.isArchived).length,
+        archivedNotes: allNotes.filter((n) => n.isArchived).length,
         totalAttachments: 0,
       };
     } catch (error) {
@@ -405,6 +485,7 @@ export class NotesService {
         personalNotes: 0,
         projectNotes: 0,
         pinnedNotes: 0,
+        archivedNotes: 0,
         totalAttachments: 0,
       };
     }
@@ -603,6 +684,647 @@ if (!doclingUrl) {
     if (listOpen) html.push('</ul>');
     html.push('</div>');
     return html.join('\n');
+  }
+
+
+  // =========================================================================
+  // Note Export & Download (Word .doc & PDF)
+  // =========================================================================
+
+  /**
+   * Export note document in requested format (Word or PDF) preserving all styling,
+   * highlighters, font colors, sub-notes, attachments, and metadata.
+   */
+  async exportNoteDocument(
+    id: number,
+    format: string = "pdf",
+    user: any,
+  ): Promise<{ buffer: Buffer; contentType: string; filename: string }> {
+    const note = await this.findOne(id, user);
+    if (!note) {
+      throw new NotFoundException(`Note with ID ${id} not found`);
+    }
+
+    const normalizedFormat = (format || "pdf").toLowerCase().trim();
+    if (normalizedFormat === "word" || normalizedFormat === "doc" || normalizedFormat === "docx") {
+      return this.generateWordDoc(note);
+    }
+
+    return await this.generatePdfDoc(note);
+  }
+
+  /**
+   * Generate high-fidelity Microsoft Word (.doc) document preserving all HTML formatting,
+   * highlighters, font colors, boxes, callouts, tables, sub-notes, and attachments.
+   */
+  private generateWordDoc(note: Note): { buffer: Buffer; contentType: string; filename: string } {
+    const safeTitle = (note.title || "Note").replace(/[/\\?%*:|"<>]/g, "_");
+    const isProject = note.type === NoteType.PROJECT;
+    const projectLabel = note.projectName || "Worksphere Project";
+    const createdDate = dayjs(note.createdAt).format("MMMM DD, YYYY");
+    const updatedDate = dayjs(note.updatedAt).format("MMMM DD, YYYY");
+    const author = note.createdBy || "User";
+
+    // Build Sub-notes HTML table if sub-notes exist
+    let subNotesHtml = "";
+    if (note.subNotes && note.subNotes.length > 0) {
+      const subRows = note.subNotes
+        .map((sub, idx) => {
+          const subDate = dayjs(sub.createdAt).format("MMM DD, YYYY");
+          return `
+            <tr>
+              <td style="padding: 8pt; border: 1pt solid #CBD5E1; text-align: center; font-weight: bold; width: 40pt; background-color: #F8FAFC;">${idx + 1}</td>
+              <td style="padding: 8pt; border: 1pt solid #CBD5E1; font-weight: bold; color: #1E293B; width: 140pt;">${this.escapeXml(sub.title || "")}</td>
+              <td style="padding: 8pt; border: 1pt solid #CBD5E1; color: #64748B; width: 80pt;">${this.escapeXml(sub.createdBy || "User")}</td>
+              <td style="padding: 8pt; border: 1pt solid #CBD5E1; color: #64748B; width: 80pt;">${subDate}</td>
+              <td style="padding: 8pt; border: 1pt solid #CBD5E1; color: #334155;">${sub.description || '<span style="color:#94A3B8; font-style:italic;">No description</span>'}</td>
+            </tr>
+          `;
+        })
+        .join("");
+
+      subNotesHtml = `
+        <div class="section-title">Sub-Notes (${note.subNotes.length})</div>
+        <table class="subnotes-table" style="width: 100%; border-collapse: collapse; margin-top: 10pt; margin-bottom: 20pt;">
+          <thead>
+            <tr style="background-color: #4318FF; color: #FFFFFF;">
+              <th style="padding: 8pt; border: 1pt solid #3730A3; text-align: center; width: 40pt;">#</th>
+              <th style="padding: 8pt; border: 1pt solid #3730A3; text-align: left; width: 140pt;">Title</th>
+              <th style="padding: 8pt; border: 1pt solid #3730A3; text-align: left; width: 80pt;">Author</th>
+              <th style="padding: 8pt; border: 1pt solid #3730A3; text-align: left; width: 80pt;">Date</th>
+              <th style="padding: 8pt; border: 1pt solid #3730A3; text-align: left;">Description</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${subRows}
+          </tbody>
+        </table>
+      `;
+    }
+
+    // Build Attachments HTML list if attachments exist
+    let attachmentsHtml = "";
+    if (note.attachments && note.attachments.length > 0) {
+      const attRows = note.attachments
+        .map((att, idx) => {
+          const name = (att as any).name || (att as any).fileName || 'Attachment';
+          const fileSize = (att as any).fileSize || (att as any).size;
+          const size = fileSize ? `${Math.round(fileSize / 1024)} KB` : 'Attached file';
+          return `
+            <li style="margin-bottom: 6pt; color: #334155;">
+              <strong>${idx + 1}. ${this.escapeXml(name)}</strong> <span style="color: #64748B; font-size: 9.5pt;">(${size})</span>
+            </li>
+          `;
+        })
+        .join("");
+
+      attachmentsHtml = `
+        <div class="section-title">Files & Attachments (${note.attachments.length})</div>
+        <ul style="padding-left: 20pt; margin-top: 8pt; margin-bottom: 20pt;">
+          ${attRows}
+        </ul>
+      `;
+    }
+
+    const wordHtml = `
+      <html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
+      <head>
+        <meta charset='utf-8'>
+        <!--[if gte mso 9]>
+        <xml>
+          <w:WordDocument>
+            <w:View>Print</w:View>
+            <w:Zoom>100</w:Zoom>
+            <w:DoNotOptimizeForBrowser/>
+          </w:WordDocument>
+        </xml>
+        <![endif]-->
+        <title>${this.escapeXml(note.title || "Note")}</title>
+        <style>
+          @page Section1 {
+            size: 595.3pt 841.9pt;
+            margin: 1.0in 1.0in 1.0in 1.0in;
+            mso-header-margin: 35.4pt;
+            mso-footer-margin: 35.4pt;
+            mso-paper-source: 0;
+          }
+          div.Section1 { page: Section1; }
+          body {
+            font-family: 'Segoe UI', Calibri, Arial, Helvetica, sans-serif;
+            font-size: 11pt;
+            line-height: 1.6;
+            color: #1E293B;
+            background-color: #FFFFFF;
+          }
+          h1, h2, h3, h4, h5, h6 {
+            color: #1E293B;
+            font-family: 'Segoe UI', Calibri, Arial, sans-serif;
+            margin-top: 14pt;
+            margin-bottom: 6pt;
+          }
+          h1 {
+            color: #4318FF;
+            font-size: 22pt;
+            font-weight: bold;
+            margin-top: 0;
+            margin-bottom: 12pt;
+          }
+          h2 { font-size: 16pt; color: #1E293B; }
+          h3 { font-size: 13pt; color: #334155; }
+          p { margin-top: 0; margin-bottom: 10pt; line-height: 1.6; }
+          .header-box {
+            background-color: #F8FAFC;
+            border: 1.5pt solid #E2E8F0;
+            padding: 14pt 18pt;
+            border-radius: 8pt;
+            margin-bottom: 18pt;
+          }
+          .badge {
+            display: inline-block;
+            padding: 3pt 10pt;
+            font-size: 9.5pt;
+            font-weight: bold;
+            text-transform: uppercase;
+            letter-spacing: 0.5pt;
+            border-radius: 4pt;
+            background-color: #EEF2FF;
+            color: #4318FF;
+            border: 1pt solid #C7D2FE;
+          }
+          .badge-personal {
+            background-color: #ECFDF5;
+            color: #059669;
+            border: 1pt solid #A7F3D0;
+          }
+          .meta-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 8pt;
+          }
+          .meta-table td {
+            padding: 4pt 6pt;
+            font-size: 9.5pt;
+            color: #64748B;
+            border: none;
+          }
+          .section-title {
+            font-size: 12pt;
+            font-weight: bold;
+            color: #4318FF;
+            text-transform: uppercase;
+            letter-spacing: 0.8pt;
+            border-bottom: 1.5pt solid #E2E8F0;
+            padding-bottom: 4pt;
+            margin-top: 18pt;
+            margin-bottom: 10pt;
+          }
+          .content-container {
+            font-size: 11pt;
+            line-height: 1.65;
+            color: #1E293B;
+          }
+          mark, span[style*="background-color"] {
+            padding: 2pt 4pt;
+            border-radius: 2pt;
+          }
+          blockquote {
+            border-left: 3.5pt solid #4318FF;
+            background-color: #F8FAFC;
+            padding: 8pt 14pt;
+            margin: 10pt 0;
+            font-style: italic;
+            color: #475569;
+          }
+          pre, code {
+            font-family: 'Consolas', 'Courier New', monospace;
+            background-color: #F1F5F9;
+            padding: 3pt 6pt;
+            border-radius: 3pt;
+            font-size: 10pt;
+          }
+          table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 12pt 0;
+          }
+          table th, table td {
+            border: 1pt solid #CBD5E1;
+            padding: 7pt 10pt;
+            text-align: left;
+            font-size: 10pt;
+          }
+          table th {
+            background-color: #F1F5F9;
+            font-weight: bold;
+            color: #1E293B;
+          }
+          .footer-note {
+            margin-top: 30pt;
+            padding-top: 10pt;
+            border-top: 1pt solid #E2E8F0;
+            font-size: 9pt;
+            color: #94A3B8;
+            text-align: center;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="Section1">
+          <div class="header-box">
+            <span class="${isProject ? "badge" : "badge badge-personal"}">
+              ${isProject ? `PROJECT NOTE: ${this.escapeXml(projectLabel)}` : "PERSONAL NOTE"}
+            </span>
+            <h1 style="margin-top: 10pt; margin-bottom: 6pt;">${this.escapeXml(note.title || "Untitled Note")}</h1>
+            <table class="meta-table">
+              <tr>
+                <td><strong>Author:</strong> ${this.escapeXml(author)}</td>
+                <td><strong>Created:</strong> ${createdDate}</td>
+                <td><strong>Last Modified:</strong> ${updatedDate}</td>
+              </tr>
+            </table>
+          </div>
+
+          <div class="section-title">Description & Content</div>
+          <div class="content-container">
+            ${note.description || '<p style="color: #94A3B8; font-style: italic;">No description provided.</p>'}
+          </div>
+
+          ${subNotesHtml}
+          ${attachmentsHtml}
+
+          <div class="footer-note">
+            © ${new Date().getFullYear()} WorkSphere Powered by inventech &nbsp;|&nbsp; Exported on ${dayjs().format("MMMM DD, YYYY HH:mm")}
+          </div>
+        </div>
+      </body>
+      </html>
+    `;
+
+    const buffer = Buffer.from("\ufeff" + wordHtml, "utf-8");
+    return {
+      buffer,
+      contentType: "application/msword; charset=utf-8",
+      filename: `${safeTitle}.doc`,
+    };
+  }
+
+  /**
+   * Generate high-fidelity PDF document preserving metadata, formatted description,
+   * highlights, sub-notes, attachments, and brand header/footer.
+   */
+  private async generatePdfDoc(
+    note: Note,
+  ): Promise<{ buffer: Buffer; contentType: string; filename: string }> {
+    const safeTitle = (note.title || "Note").replace(/[/\\?%*:|"<>]/g, "_");
+    const isProject = note.type === NoteType.PROJECT;
+    const projectLabel = note.projectName || "Worksphere Project";
+    const createdDate = dayjs(note.createdAt).format("MMMM DD, YYYY");
+    const author = note.createdBy || "User";
+
+    return new Promise<{ buffer: Buffer; contentType: string; filename: string }>((resolve, reject) => {
+      try {
+        const doc = new (PDFDocument as any)({
+          size: "A4",
+          margin: 40,
+          info: {
+            Title: note.title || "Note",
+            Author: author,
+            Subject: isProject ? `Project: ${projectLabel}` : "Personal Note",
+          },
+        });
+
+        const buffers: Buffer[] = [];
+        doc.on("data", (chunk: any) => buffers.push(chunk));
+        doc.on("end", () => {
+          resolve({
+            buffer: Buffer.concat(buffers),
+            contentType: "application/pdf",
+            filename: `${safeTitle}.pdf`,
+          });
+        });
+        doc.on("error", (err: any) => reject(err));
+
+        const pageWidth = 595.28;
+        const pageHeight = 841.89;
+        const margin = 40;
+        const contentWidth = pageWidth - margin * 2;
+
+        // Top Accent Bar
+        doc.rect(margin, 20, contentWidth, 4).fill("#4318FF");
+
+        // Brand Sub-Header
+        doc
+          .font("Helvetica-Bold")
+          .fontSize(9)
+          .fillColor("#4318FF")
+          .text("WORKSPHERE NOTE DOCUMENT", margin, 32);
+
+        // Note Title
+        doc
+          .font("Helvetica-Bold")
+          .fontSize(18)
+          .fillColor("#1B2559")
+          .text(note.title || "Untitled Note", margin, 46, { width: contentWidth });
+
+        let currentY = doc.y + 10;
+
+        // Metadata Card Box
+        const cardHeight = 44;
+        doc
+          .roundedRect(margin, currentY, contentWidth, cardHeight, 6)
+          .fillAndStroke("#F8FAFC", "#E2E8F0");
+
+        doc
+          .font("Helvetica-Bold")
+          .fontSize(9)
+          .fillColor(isProject ? "#4318FF" : "#059669")
+          .text(
+            isProject ? `PROJECT: ${projectLabel.toUpperCase()}` : "PERSONAL NOTE",
+            margin + 12,
+            currentY + 10,
+          );
+
+        doc
+          .font("Helvetica")
+          .fontSize(8.5)
+          .fillColor("#64748B")
+          .text(`Created by: ${author}  |  Date: ${createdDate}`, margin + 12, currentY + 24);
+
+        if (note.attachments && note.attachments.length > 0) {
+          doc
+            .font("Helvetica-Bold")
+            .fontSize(8.5)
+            .fillColor("#4318FF")
+            .text(
+              `${note.attachments.length} attachment${note.attachments.length > 1 ? "s" : ""}`,
+              margin + contentWidth - 110,
+              currentY + 16,
+              { align: "right", width: 98 },
+            );
+        }
+
+        currentY += cardHeight + 16;
+
+        // Section Title: Description
+        doc
+          .font("Helvetica-Bold")
+          .fontSize(11)
+          .fillColor("#4318FF")
+          .text("DESCRIPTION & CONTENT", margin, currentY);
+
+        currentY = doc.y + 4;
+        doc.strokeColor("#E2E8F0").lineWidth(1).moveTo(margin, currentY).lineTo(pageWidth - margin, currentY).stroke();
+        currentY += 10;
+        doc.y = currentY;
+
+        // Render Description Content (Extract and render rich text chunks)
+        const descHtml = note.description || "";
+        this.renderHtmlToPdf(doc, descHtml, margin, contentWidth, pageHeight);
+
+        // Render Sub-notes if any
+        if (note.subNotes && note.subNotes.length > 0) {
+          if (doc.y > pageHeight - 120) doc.addPage();
+
+          doc.moveDown(1.5);
+          doc
+            .font("Helvetica-Bold")
+            .fontSize(11)
+            .fillColor("#4318FF")
+            .text(`SUB-NOTES (${note.subNotes.length})`, margin, doc.y);
+
+          const divY = doc.y + 4;
+          doc.strokeColor("#E2E8F0").lineWidth(1).moveTo(margin, divY).lineTo(pageWidth - margin, divY).stroke();
+          doc.y = divY + 8;
+
+          note.subNotes.forEach((sub, idx) => {
+            if (doc.y > pageHeight - 90) doc.addPage();
+
+            doc
+              .font("Helvetica-Bold")
+              .fontSize(10)
+              .fillColor("#1E293B")
+              .text(`${idx + 1}. ${sub.title || "Untitled Sub-note"}`, margin + 6, doc.y);
+
+            const subDate = dayjs(sub.createdAt).format("MMM DD, YYYY");
+            doc
+              .font("Helvetica")
+              .fontSize(8)
+              .fillColor("#64748B")
+              .text(`By ${sub.createdBy || "User"}  |  ${subDate}`, margin + 18, doc.y + 2);
+
+            if (sub.description && sub.description.trim()) {
+              const cleanSubText = this.stripHtml(sub.description);
+              doc
+                .font("Helvetica")
+                .fontSize(9)
+                .fillColor("#334155")
+                .text(cleanSubText, margin + 18, doc.y + 4, { width: contentWidth - 24 });
+            }
+            doc.moveDown(0.8);
+          });
+        }
+
+        // Render Attachments List if any
+        if (note.attachments && note.attachments.length > 0) {
+          if (doc.y > pageHeight - 100) doc.addPage();
+
+          doc.moveDown(1.5);
+          doc
+            .font("Helvetica-Bold")
+            .fontSize(11)
+            .fillColor("#4318FF")
+            .text(`ATTACHMENTS (${note.attachments.length})`, margin, doc.y);
+
+          const attDivY = doc.y + 4;
+          doc.strokeColor("#E2E8F0").lineWidth(1).moveTo(margin, attDivY).lineTo(pageWidth - margin, attDivY).stroke();
+          doc.y = attDivY + 8;
+
+          note.attachments.forEach((att, idx) => {
+            const name = (att as any).name || (att as any).fileName || 'Attachment';
+            const fileSize = (att as any).fileSize || (att as any).size;
+          const size = fileSize ? `${Math.round(fileSize / 1024)} KB` : 'Attached file';
+            doc
+              .font("Helvetica")
+              .fontSize(9)
+              .fillColor("#334155")
+              .text(`• ${idx + 1}. ${name} (${size})`, margin + 6, doc.y);
+            doc.moveDown(0.3);
+          });
+        }
+
+        // Global Page Footers
+        const range = doc.bufferedPageRange();
+        for (let i = range.start; i < range.start + range.count; i++) {
+          doc.switchToPage(i);
+          doc
+            .font("Helvetica")
+            .fontSize(8)
+            .fillColor("#94A3B8")
+            .text(
+              `© ${new Date().getFullYear()} WorkSphere Powered by inventech  |  Page ${i + 1} of ${range.count}`,
+              margin,
+              pageHeight - 25,
+              { align: "center", width: contentWidth },
+            );
+        }
+
+        doc.end();
+      } catch (err) {
+        reject(err);
+      }
+    });
+  }
+
+  /**
+   * Render HTML content to PDF preserving paragraphs, headings, blockquotes, lists,
+   * highlights and text colors.
+   */
+  private renderHtmlToPdf(
+    doc: any,
+    html: string,
+    margin: number,
+    contentWidth: number,
+    pageHeight: number,
+  ): void {
+    if (!html || !html.trim()) {
+      doc
+        .font("Helvetica-Oblique")
+        .fontSize(10)
+        .fillColor("#94A3B8")
+        .text("No description provided.", margin, doc.y);
+      return;
+    }
+
+    // Split HTML into blocks (paragraphs, headers, blockquotes, lists, tables)
+    const normalizedHtml = html
+      .replace(/<br\s*\/?>/gi, "\n")
+      .replace(/<\/(p|div|h1|h2|h3|h4|h5|h6|li|tr|blockquote)>/gi, "</$1>\n");
+
+    const lines = normalizedHtml.split("\n");
+
+    for (let rawLine of lines) {
+      const trimmed = rawLine.trim();
+      if (!trimmed) {
+        doc.moveDown(0.4);
+        continue;
+      }
+
+      if (doc.y > pageHeight - 60) {
+        doc.addPage();
+        doc.y = 40;
+      }
+
+      // 1. Heading 1-3
+      if (/<h[1-3][^>]*>/i.test(trimmed)) {
+        const headingText = this.stripHtml(trimmed);
+        doc
+          .font("Helvetica-Bold")
+          .fontSize(14)
+          .fillColor("#1B2559")
+          .text(headingText, margin, doc.y, { width: contentWidth });
+        doc.moveDown(0.5);
+        continue;
+      }
+
+      // 2. Heading 4-6
+      if (/<h[4-6][^>]*>/i.test(trimmed)) {
+        const headingText = this.stripHtml(trimmed);
+        doc
+          .font("Helvetica-Bold")
+          .fontSize(12)
+          .fillColor("#334155")
+          .text(headingText, margin, doc.y, { width: contentWidth });
+        doc.moveDown(0.4);
+        continue;
+      }
+
+      // 3. Blockquote / Callout Box
+      if (/<blockquote[^>]*>/i.test(trimmed)) {
+        const quoteText = this.stripHtml(trimmed);
+        const quoteY = doc.y;
+        doc
+          .strokeColor("#4318FF")
+          .lineWidth(3)
+          .moveTo(margin, quoteY)
+          .lineTo(margin, quoteY + 20)
+          .stroke();
+
+        doc
+          .font("Helvetica-Oblique")
+          .fontSize(10)
+          .fillColor("#475569")
+          .text(quoteText, margin + 12, quoteY + 2, { width: contentWidth - 16 });
+        doc.moveDown(0.5);
+        continue;
+      }
+
+      // 4. List item
+      if (/<li[^>]*>/i.test(trimmed)) {
+        const itemText = this.stripHtml(trimmed);
+        doc
+          .font("Helvetica")
+          .fontSize(10)
+          .fillColor("#334155")
+          .text(`• ${itemText}`, margin + 10, doc.y, { width: contentWidth - 10 });
+        doc.moveDown(0.3);
+        continue;
+      }
+
+      // 5. Check if line contains highlight (background-color or mark)
+      const isHighlighted = /background-color:|mark>/i.test(trimmed);
+      const text = this.stripHtml(trimmed);
+
+      if (!text) continue;
+
+      if (isHighlighted) {
+        // Render highlighted card/pill
+        const currentY = doc.y;
+        const textHeight = doc.heightOfString(text, { width: contentWidth - 16, fontSize: 10 });
+        doc
+          .roundedRect(margin, currentY, contentWidth, textHeight + 8, 4)
+          .fillAndStroke("#FEF9C3", "#FEF08A");
+
+        doc
+          .font("Helvetica")
+          .fontSize(10)
+          .fillColor("#713F12")
+          .text(text, margin + 8, currentY + 4, { width: contentWidth - 16 });
+
+        doc.y = currentY + textHeight + 12;
+      } else {
+        // Regular paragraph text
+        doc
+          .font("Helvetica")
+          .fontSize(10)
+          .fillColor("#334155")
+          .text(text, margin, doc.y, { width: contentWidth, lineGap: 3 });
+        doc.moveDown(0.4);
+      }
+    }
+  }
+
+  private escapeXml(unsafe: string): string {
+    return (unsafe || "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&apos;");
+  }
+
+  private stripHtml(html: string): string {
+    return (html || "")
+      .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
+      .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
+      .replace(/<[^>]+>/g, " ")
+      .replace(/&nbsp;/g, " ")
+      .replace(/&amp;/g, "&")
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">")
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'")
+      .replace(/\s+/g, " ")
+      .trim();
   }
 
   /**

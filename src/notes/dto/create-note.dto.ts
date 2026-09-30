@@ -32,6 +32,10 @@ export class CreateNoteDto {
   isPinned?: boolean;
 
   @IsOptional()
+  @IsBoolean()
+  autoSave?: boolean;
+
+  @IsOptional()
   @IsArray()
   subNotes?: CreateSubNoteDto[];
 
@@ -39,3 +43,4 @@ export class CreateNoteDto {
   @IsArray()
   attachmentKeys?: string[];
 }
+
