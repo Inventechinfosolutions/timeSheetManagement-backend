@@ -73,7 +73,12 @@ export class NotesService {
         parentId: createDto.parentId || null,
         color: createDto.color || '#4318FF',
         isPinned: createDto.isPinned || false,
-        autoSave: createDto.autoSave || false,
+        autoSave:
+          createDto.autoSave !== undefined
+            ? createDto.autoSave
+            : ((createDto as any).isAutoSave !== undefined
+              ? (createDto as any).isAutoSave
+              : true),
         userId: userInfo.userId,
         employeeId: userInfo.employeeId,
         createdBy: userInfo.createdBy,
@@ -259,6 +264,7 @@ export class NotesService {
       if (updateDto.isPinned !== undefined) note.isPinned = updateDto.isPinned;
       if (updateDto.isArchived !== undefined) note.isArchived = updateDto.isArchived;
       if (updateDto.autoSave !== undefined) note.autoSave = updateDto.autoSave;
+      else if (updateDto.isAutoSave !== undefined) note.autoSave = updateDto.isAutoSave;
       if (updateDto.orderIndex !== undefined) note.orderIndex = updateDto.orderIndex;
 
       note.updatedBy = createdBy;

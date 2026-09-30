@@ -35,6 +35,10 @@ export class UpdateNoteDto {
   autoSave?: boolean;
 
   @IsOptional()
+  @IsBoolean()
+  isAutoSave?: boolean;
+
+  @IsOptional()
   @IsNumber()
   orderIndex?: number;
 }
