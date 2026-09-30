@@ -99,7 +99,7 @@ export class InboxService {
     private readonly userRepo: Repository<User>,
     private readonly mailService: MailService,
     private readonly documentUploaderService: DocumentUploaderService,
-  ) {}
+  ) { }
 
   /**
    * Create a single inbox record.
@@ -112,6 +112,8 @@ export class InboxService {
       fromMail: dto.fromMail,
       toMail: dto.toMail,
       isRead: dto.isRead || false,
+      hasDocument: dto.hasDocument || false,
+      hasDescription: dto.hasDescription !== undefined ? dto.hasDescription : true,
     });
     return await this.inboxRepo.save(item);
   }
@@ -136,6 +138,14 @@ export class InboxService {
           permissions: (dto as any).permissions,
         },
       );
+
+      const hasDocument = dto.hasDocument !== undefined
+        ? Boolean(dto.hasDocument)
+        : (dto.includeFiles !== undefined ? Boolean(dto.includeFiles) : false);
+
+      const hasDescription = dto.hasDescription !== undefined
+        ? Boolean(dto.hasDescription)
+        : (dto.includeDescription !== undefined ? Boolean(dto.includeDescription) : true);
 
       // Determine sender details
       const senderEmpId = user?.employeeId || user?.loginId || user?.aliasLoginName;
@@ -186,6 +196,8 @@ export class InboxService {
           existingInbox.fromMail = fromMail;
           existingInbox.toMail = targetEmail;
           existingInbox.isRead = false;
+          existingInbox.hasDocument = hasDocument;
+          existingInbox.hasDescription = hasDescription;
           saved = await this.inboxRepo.save(existingInbox);
         } else {
           const inboxItem = this.inboxRepo.create({
@@ -198,6 +210,8 @@ export class InboxService {
             fromMail,
             toMail: targetEmail,
             isRead: false,
+            hasDocument,
+            hasDescription,
           });
           saved = await this.inboxRepo.save(inboxItem);
         }
@@ -221,6 +235,8 @@ export class InboxService {
           existingSent.fromMail = fromMail;
           existingSent.toMail = targetEmail;
           existingSent.isRead = true;
+          existingSent.hasDocument = hasDocument;
+          existingSent.hasDescription = hasDescription;
           await this.inboxRepo.save(existingSent);
         } else {
           const sentItem = this.inboxRepo.create({
@@ -233,61 +249,72 @@ export class InboxService {
             fromMail,
             toMail: targetEmail,
             isRead: true,
+            hasDocument,
+            hasDescription,
           });
           await this.inboxRepo.save(sentItem);
         }
 
-        // 3. Fetch note attachments for email and nodemailer attachment payload
+        // 3. Fetch note attachments for email template display AND direct Outlook file attachments
         let noteAttachments: Array<{ name: string; downloadUrl: string }> = [];
-        let emailAttachments: Array<{ filename: string; content: string; encoding: string }> = [];
-        try {
-          const docs = await this.documentUploaderService.getAllDocs(
-            EntityType.NOTE,
-            note.id,
-            ReferenceType.NOTE_ATTACHMENT,
-            note.id,
-          );
-          if (docs && docs.length > 0) {
-            for (const d of docs) {
-              const fileKey = (d as any).key || (d as any).s3Key || (d as any).id;
-              const fileName = (d as any).name || (d as any).fileName || 'Attachment';
-              if (fileKey) {
-                noteAttachments.push({
-                  name: fileName,
-                  downloadUrl: `https://worksphere.inventech-developer.in/api/notes/attachments/${fileKey}/download`,
-                });
-                try {
-                  const dataStream = await this.documentUploaderService.downloadFile(fileKey);
-                  if (dataStream && dataStream.Body) {
-                    let buf: Buffer;
-                    if (dataStream.Body instanceof Readable) {
-                      const chunks: any[] = [];
-                      for await (const chunk of dataStream.Body) {
-                        chunks.push(chunk);
+        let emailAttachments: Array<{ filename: string; content: string; encoding: string; contentType?: string }> = [];
+
+        if (hasDocument) {
+          try {
+            const docs = await this.documentUploaderService.getAllDocs(
+              EntityType.NOTE,
+              note.id,
+              ReferenceType.NOTE_ATTACHMENT,
+              note.id,
+            );
+            if (docs && docs.length > 0) {
+              const selectedKeys = dto.attachmentKeys && dto.attachmentKeys.length > 0 ? dto.attachmentKeys : null;
+              for (const d of docs) {
+                const fileKey = (d as any).key || (d as any).s3Key || (d as any).id;
+                const fileName = (d as any).name || (d as any).fileName || 'Attachment';
+                if (fileKey) {
+                  if (!selectedKeys || selectedKeys.includes(fileKey) || selectedKeys.includes(String((d as any).id))) {
+                    noteAttachments.push({
+                      name: fileName,
+                      downloadUrl: `https://worksphere.inventech-developer.in/api/notes/attachments/${fileKey}/download`,
+                    });
+
+                    // Download attachment stream to attach directly into email for Outlook
+                    try {
+                      const dataStream = await this.documentUploaderService.downloadFile(fileKey);
+                      if (dataStream && dataStream.Body) {
+                        let buf: Buffer;
+                        if (dataStream.Body instanceof Readable) {
+                          const chunks: any[] = [];
+                          for await (const chunk of dataStream.Body) {
+                            chunks.push(chunk);
+                          }
+                          buf = Buffer.concat(chunks);
+                        } else if (typeof (dataStream.Body as any).transformToByteArray === 'function') {
+                          const bytes = await (dataStream.Body as any).transformToByteArray();
+                          buf = Buffer.from(bytes);
+                        } else {
+                          buf = Buffer.from(dataStream.Body as any);
+                        }
+                        if (buf && buf.length > 0) {
+                          emailAttachments.push({
+                            filename: fileName,
+                            content: buf.toString('base64'),
+                            encoding: 'base64',
+                            contentType: (d as any).mimetype || (d as any).mimeType || 'application/octet-stream',
+                          });
+                        }
                       }
-                      buf = Buffer.concat(chunks);
-                    } else if (typeof (dataStream.Body as any).transformToByteArray === 'function') {
-                      const bytes = await (dataStream.Body as any).transformToByteArray();
-                      buf = Buffer.from(bytes);
-                    } else {
-                      buf = Buffer.from(dataStream.Body as any);
-                    }
-                    if (buf && buf.length > 0) {
-                      emailAttachments.push({
-                        filename: fileName,
-                        content: buf.toString('base64'),
-                        encoding: 'base64',
-                      });
+                    } catch (readErr: any) {
+                      this.logger.warn(`Could not read attachment ${fileKey} for direct email attach: ${readErr.message}`);
                     }
                   }
-                } catch (readErr: any) {
-                  this.logger.warn(`Could not read attachment ${fileKey} for direct email attach: ${readErr.message}`);
                 }
               }
             }
+          } catch (e: any) {
+            this.logger.warn(`Could not fetch attachments for email: ${e.message}`);
           }
-        } catch (e: any) {
-          this.logger.warn(`Could not fetch attachments for email: ${e.message}`);
         }
 
         // 4. Send email for BOTH CanView and CanEdit permissions
@@ -296,7 +323,7 @@ export class InboxService {
             ? `${senderName} gave you edit access to: "${note.title || 'WorkSphere Note'}"`
             : `${senderName} shared a note with you: "${note.title || 'WorkSphere Note'}"`
         );
-        const previewText = note.description
+        const previewText = hasDescription && note.description
           ? note.description.replace(/<[^>]*>?/gm, '').substring(0, 300)
           : permission === NotePermission.CanEdit
             ? 'You have been given edit access to a note in WorkSphere.'
@@ -304,15 +331,17 @@ export class InboxService {
 
         const emailHtml = getNoteEmailTemplate(
           note.title || 'WorkSphere Note',
-          note.description || '',
+          hasDescription ? (note.description || '') : '',
           senderName,
           fromMail,
           permission,
           dto.customMessage,
           noteAttachments,
+          { hasDescription, hasDocument },
         );
 
         try {
+          // Send with physical file attachments so Outlook users can open/download directly
           this.mailService.sendMailAsync(
             targetEmail,
             subject,
@@ -322,7 +351,7 @@ export class InboxService {
             undefined,
             emailAttachments.length > 0 ? emailAttachments : undefined,
           );
-          this.logger.log(`Email dispatched to ${targetEmail} (employeeId: ${targetEmployeeId}) with ${permission} permission`);
+          this.logger.log(`Email dispatched to ${targetEmail} (employeeId: ${targetEmployeeId}) with ${permission} permission (hasDocument: ${hasDocument}, hasDescription: ${hasDescription}, attachments: ${emailAttachments.length})`);
         } catch (err: any) {
           this.logger.warn(`Could not dispatch email to ${targetEmail}: ${err.message}`);
         }
@@ -469,6 +498,8 @@ export class InboxService {
           toMail: item.toMail,
           permission,
           isRead: Boolean(item.isRead),
+          hasDocument: Boolean(item.hasDocument),
+          hasDescription: item.hasDescription !== undefined ? Boolean(item.hasDescription) : true,
           createdAt: item.createdAt,
           updatedAt: item.updatedAt,
           senderName: senderDisplayName,
@@ -479,16 +510,16 @@ export class InboxService {
           receiverDepartment: receiver?.department || '',
           note: note
             ? {
-                id: note.id,
-                title: note.title,
-                description: note.description,
-                type: note.type,
-                projectName: note.projectName,
-                color: note.color,
-                isPinned: note.isPinned,
-                createdAt: note.createdAt,
-                attachments: attachments || [],
-              }
+              id: note.id,
+              title: note.title,
+              description: item.hasDescription !== false ? note.description : '',
+              type: note.type,
+              projectName: note.projectName,
+              color: note.color,
+              isPinned: note.isPinned,
+              createdAt: note.createdAt,
+              attachments: item.hasDocument ? (attachments || []) : [],
+            }
             : null,
         });
       }
@@ -587,16 +618,16 @@ export class InboxService {
       receiverDesignation: receiver?.designation || '',
       note: note
         ? {
-            id: note.id,
-            title: note.title,
-            description: note.description,
-            type: note.type,
-            projectName: note.projectName,
-            color: note.color,
-            isPinned: note.isPinned,
-            createdAt: note.createdAt,
-            attachments: attachments || [],
-          }
+          id: note.id,
+          title: note.title,
+          description: note.description,
+          type: note.type,
+          projectName: note.projectName,
+          color: note.color,
+          isPinned: note.isPinned,
+          createdAt: note.createdAt,
+          attachments: attachments || [],
+        }
         : null,
     };
   }

@@ -1,4 +1,31 @@
+import * as fs from 'fs';
+import * as path from 'path';
 import { NotePermission } from '../../notes/enums/note-permission.enum';
+
+let inLogoBase64 = '';
+try {
+  const possiblePaths = [
+    path.join(__dirname, '../../../assets/in-logo.png'),
+    path.join(__dirname, '../../assets/in-logo.png'),
+    path.join(__dirname, '../assets/in-logo.png'),
+    path.join(process.cwd(), 'assets/in-logo.png'),
+    path.join(process.cwd(), 'src/assets/in-logo.png'),
+    'c:\\Timesheet\\timeSheetManagement-backend\\assets\\in-logo.png',
+  ];
+  for (const p of possiblePaths) {
+    if (fs.existsSync(p)) {
+      const buffer = fs.readFileSync(p);
+      inLogoBase64 = `data:image/png;base64,${buffer.toString('base64')}`;
+      break;
+    }
+  }
+} catch (err) {
+  // Ignore fallback
+}
+
+export const IN_LOGO_SRC =
+  inLogoBase64 ||
+  'https://worksphere.inventech-developer.in/assets/inventech-logo-Cp1E027l.jpg';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Note share email — Wide, edge-to-edge corporate template with Inventech & WorkSphere header
@@ -11,17 +38,21 @@ export const getNoteEmailTemplate = (
   permission: NotePermission | string,
   customMessage?: string,
   attachments?: Array<{ name: string; downloadUrl: string }>,
+  options?: { hasDescription?: boolean; hasDocument?: boolean },
 ): string => {
   const permStr = String(permission || '');
   const isEdit = permStr.includes('CanEdit') || permStr.includes('EDIT');
   const isDelete = permStr.includes('CanDelete') || permStr.includes('DELETE');
   const senderInitial = (senderName || 'U').charAt(0).toUpperCase();
-  const ctaText   = isEdit ? 'Open Portal to Edit &#8594;' : 'Open in WorkSphere Inbox &#8594;';
-  const ctaColor  = isEdit ? '#16a34a' : '#0a8fe7';
-  const ctaNote   = isEdit
+  const ctaText = isEdit ? 'Open Portal to Edit &#8594;' : 'Open in WorkSphere Inbox &#8594;';
+  const ctaColor = isEdit ? '#16a34a' : '#0a8fe7';
+  const ctaNote = isEdit
     ? `You have ${isDelete ? 'edit & delete' : 'edit'} access. Log in to WorkSphere to manage this note directly.`
     : 'This is a read-only view. Log in to WorkSphere to view it in your Inbox.';
   const year = new Date().getFullYear();
+
+  const showDescription = options?.hasDescription !== false;
+  const showAttachments = options?.hasDocument !== false && attachments && attachments.length > 0;
 
   const customMsgBlock = customMessage ? `
 <tr>
@@ -37,16 +68,16 @@ export const getNoteEmailTemplate = (
   </td>
 </tr>` : '';
 
-  const attachmentsBlock = attachments && attachments.length > 0 ? `
+  const attachmentsBlock = showAttachments ? `
 <tr>
   <td style="padding:0 44px 28px 44px;">
     <table width="100%" cellpadding="0" cellspacing="0" border="0">
       <tr>
         <td style="padding:0 0 12px 0;">
-          <p style="margin:0;font-family:Arial,sans-serif;font-size:12px;font-weight:bold;color:#4a5568;text-transform:uppercase;letter-spacing:1px;">&#128206; Attached Documents (${attachments.length})</p>
+          <p style="margin:0;font-family:Arial,sans-serif;font-size:12px;font-weight:bold;color:#4a5568;text-transform:uppercase;letter-spacing:1px;">&#128206; Attached Documents (${attachments!.length})</p>
         </td>
       </tr>
-      ${attachments.map(att => `
+      ${attachments!.map(att => `
       <tr>
         <td style="padding:5px 0;">
           <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;">
@@ -55,16 +86,30 @@ export const getNoteEmailTemplate = (
                 &#128196; &nbsp;${att.name}
               </td>
               <td align="right" style="padding:12px 18px;">
-                <a href="${att.downloadUrl}"
-                   target="_blank"
-                   style="display:inline-block;background-color:#eff6ff;color:#0a8fe7;border:1px solid #bfdbfe;padding:6px 14px;font-family:Arial,sans-serif;font-size:12px;font-weight:bold;text-decoration:none;border-radius:4px;">
-                  &#8595; Download
-                </a>
+                <span style="display:inline-block;background-color:#eff6ff;color:#1e40af;border:1px solid #bfdbfe;padding:5px 12px;font-family:Arial,sans-serif;font-size:11.5px;font-weight:600;border-radius:4px;">
+                  &#128206; Attached to email
+                </span>
               </td>
             </tr>
           </table>
         </td>
       </tr>`).join('')}
+    </table>
+  </td>
+</tr>` : '';
+
+  const contentBlock = showDescription ? `
+<!-- NOTE CONTENT (EXPANDED WIDTH) -->
+<tr>
+  <td class="pad" style="padding:16px 44px 26px 44px;">
+    <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#ffffff;border:1px solid #e2e8f0;border-radius:8px;">
+      <tr>
+        <td style="padding:28px 32px;font-family:Arial,sans-serif;font-size:14.5px;color:#1e293b;line-height:1.8;">
+          <div class="note-content">
+            ${noteContent || '<p style="color:#94a3b8;font-style:italic;font-family:Arial,sans-serif;font-size:14.5px;">No content provided.</p>'}
+          </div>
+        </td>
+      </tr>
     </table>
   </td>
 </tr>` : '';
@@ -136,11 +181,11 @@ export const getNoteEmailTemplate = (
           <table cellpadding="0" cellspacing="0" border="0">
             <tr>
               <td style="vertical-align:middle;padding-right:14px;">
-                <img src="https://worksphere.inventech-developer.in/assets/inventech-logo-Cp1E027l.jpg"
+                <img src="cid:inventech-logo"
                      alt="InvenTech Logo"
                      width="42"
                      height="42"
-                     style="display:block;width:42px;height:42px;border-radius:6px;border:0;background-color:#ffffff;" />
+                     style="display:block;width:42px;height:42px;border-radius:6px;border:0;background-color:#ffffff;object-fit:contain;" />
               </td>
               <td style="vertical-align:middle;">
                 <span style="font-family:'Segoe UI',Arial,sans-serif;font-size:19px;font-weight:bold;color:#ffffff;letter-spacing:1px;line-height:1.2;display:block;">INVENTECH</span>
@@ -200,20 +245,7 @@ export const getNoteEmailTemplate = (
 
 ${customMsgBlock}
 
-<!-- NOTE CONTENT (EXPANDED WIDTH) -->
-<tr>
-  <td class="pad" style="padding:16px 44px 26px 44px;">
-    <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#ffffff;border:1px solid #e2e8f0;border-radius:8px;">
-      <tr>
-        <td style="padding:28px 32px;font-family:Arial,sans-serif;font-size:14.5px;color:#1e293b;line-height:1.8;">
-          <div class="note-content">
-            ${noteContent || '<p style="color:#94a3b8;font-style:italic;font-family:Arial,sans-serif;font-size:14.5px;">No content provided.</p>'}
-          </div>
-        </td>
-      </tr>
-    </table>
-  </td>
-</tr>
+${contentBlock}
 
 ${attachmentsBlock}
 
@@ -301,11 +333,11 @@ export const getNotificationEmailTemplate = (
           <table cellpadding="0" cellspacing="0" border="0">
             <tr>
               <td style="vertical-align:middle;padding-right:14px;">
-                <img src="https://worksphere.inventech-developer.in/assets/inventech-logo-Cp1E027l.jpg"
+                <img src="cid:inventech-logo"
                      alt="InvenTech Logo"
                      width="42"
                      height="42"
-                     style="display:block;width:42px;height:42px;border-radius:6px;border:0;background-color:#ffffff;" />
+                     style="display:block;width:42px;height:42px;border-radius:6px;border:0;background-color:#ffffff;object-fit:contain;" />
               </td>
               <td style="vertical-align:middle;">
                 <span style="font-family:'Segoe UI',Arial,sans-serif;font-size:18px;font-weight:bold;color:#ffffff;letter-spacing:1px;line-height:1.2;display:block;">INVENTECH</span>

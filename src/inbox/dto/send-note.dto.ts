@@ -59,5 +59,21 @@ export class SendNoteDto {
   @ApiPropertyOptional({ description: 'Allow Delete permission', default: false })
   @IsOptional()
   canDelete?: boolean;
+
+  @ApiPropertyOptional({ description: 'Indicates whether documents/attachments are selected to send', default: false })
+  @IsOptional()
+  hasDocument?: boolean;
+
+  @ApiPropertyOptional({ description: 'Indicates whether description is selected to send', default: true })
+  @IsOptional()
+  hasDescription?: boolean;
+
+  @ApiPropertyOptional({ description: 'Alternative alias for hasDocument', default: false })
+  @IsOptional()
+  includeFiles?: boolean;
+
+  @ApiPropertyOptional({ description: 'Alternative alias for hasDescription', default: true })
+  @IsOptional()
+  includeDescription?: boolean;
 }
 

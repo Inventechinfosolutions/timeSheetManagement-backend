@@ -37,4 +37,14 @@ export class CreateInboxDto {
   @IsOptional()
   @IsString()
   permission?: NotePermission | string;
+
+  @ApiPropertyOptional({ description: 'Indicates if documents are attached/included', default: false })
+  @IsOptional()
+  @IsBoolean()
+  hasDocument?: boolean;
+
+  @ApiPropertyOptional({ description: 'Indicates if description is included', default: false })
+  @IsOptional()
+  @IsBoolean()
+  hasDescription?: boolean;
 }

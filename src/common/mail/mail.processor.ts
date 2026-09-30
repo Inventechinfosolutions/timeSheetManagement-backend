@@ -12,10 +12,10 @@ export class MailProcessor {
   @Process('send-email')
   async handleSendEmail(job: Job<any>) {
     this.logger.debug(`Processing email job ${job.id}...`);
-    const { to, subject, text, html, cc, replyTo } = job.data;
+    const { to, subject, text, html, cc, replyTo, attachments } = job.data;
     
     try {
-      await this.mailService.sendMail(to, subject, text, html, cc, replyTo);
+      await this.mailService.sendMail(to, subject, text, html, cc, replyTo, attachments);
       this.logger.debug(`Email job ${job.id} completed.`);
     } catch (error) {
       this.logger.error(`Email job ${job.id} failed: ${error.message}`);

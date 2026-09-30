@@ -21,7 +21,6 @@ import {
 } from '@nestjs/common';
 import { AnyFilesInterceptor } from '@nestjs/platform-express';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
-// import { Public } from '../../auth/decorators/public.decorator';
 import { NotePermissionGuard } from '../guards/note-permission.guard';
 import { Permission } from '../decorators/permission.decorator';
 import { NotePermission } from '../enums/note-permission.enum';
@@ -48,7 +47,7 @@ export class NotesController {
     private readonly notesService: NotesService,
     @Inject(forwardRef(() => InboxService))
     private readonly inboxService: InboxService,
-  ) {}
+  ) { }
 
   // =========================================================================
   // 1. Static & Special Sub-path Endpoints (MUST come before :id wildcard routes)
@@ -359,6 +358,8 @@ export class NotesController {
         canView: body.canView,
         canEdit: body.canEdit,
         canDelete: body.canDelete,
+        hasDocument: body.hasDocument ?? body.includeFiles ?? false,
+        hasDescription: body.hasDescription ?? body.includeDescription ?? true,
       },
       req.user,
     );

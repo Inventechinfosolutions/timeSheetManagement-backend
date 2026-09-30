@@ -47,6 +47,12 @@ export class Inbox {
   @Column({ name: 'is_read', type: 'boolean', default: false })
   isRead: boolean;
 
+  @Column({ name: 'has_document', type: 'boolean', default: false })
+  hasDocument: boolean;
+
+  @Column({ name: 'has_description', type: 'boolean', default: false })
+  hasDescription: boolean;
+
   @CreateDateColumn({ name: 'created_at', type: 'datetime' })
   createdAt: Date;
 
