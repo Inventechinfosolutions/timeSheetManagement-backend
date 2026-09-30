@@ -29,7 +29,7 @@ import * as redisStore from 'cache-manager-redis-store';
 import * as fs from 'fs';
 import * as path from 'path';
 import { CachingUtil } from './common/utils/caching.util';
- 
+
 function getEnvFiles(): string[] {
   if (!process.env.PROFILE) {
     const baseEnvPath = path.resolve(process.cwd(), '.env');
