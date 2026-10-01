@@ -237,11 +237,13 @@ export const getNoteEmailTemplate = (
 <tr>
   <td class="pad" style="padding:24px 44px 10px 44px;">
     ${options?.projectName ? `
-    <div style="margin-bottom:10px;">
-      <span style="display:inline-block;background-color:#eff6ff;color:#2563eb;border:1px solid #bfdbfe;padding:3px 10px;font-family:Arial,sans-serif;font-size:11.5px;font-weight:bold;border-radius:4px;text-transform:uppercase;letter-spacing:0.5px;">
-        &#128193; Project: ${options.projectName}
-      </span>
-    </div>
+    <table cellpadding="0" cellspacing="0" border="0" style="margin-bottom:10px;">
+      <tr>
+        <td style="background-color:#eff6ff;color:#2563eb;border:1px solid #bfdbfe;padding:4px 12px;font-family:Arial,sans-serif;font-size:11.5px;font-weight:bold;border-radius:4px;text-transform:uppercase;letter-spacing:0.5px;line-height:16px;">
+          &#128193; Project: ${options.projectName}
+        </td>
+      </tr>
+    </table>
     ` : ""}
     <table cellpadding="0" cellspacing="0" border="0" style="margin:0;padding:0;">
       <tr>
