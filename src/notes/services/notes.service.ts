@@ -787,70 +787,6 @@ if (!doclingUrl) {
     const safeTitle = (note.title || "Note").replace(/[/\\?%*:|"<>]/g, "_");
     const isProject = note.type === NoteType.PROJECT;
     const projectLabel = note.projectName || "Worksphere Project";
-    const createdDate = dayjs(note.createdAt).format("MMMM DD, YYYY");
-    const updatedDate = dayjs(note.updatedAt).format("MMMM DD, YYYY");
-    const author = note.createdBy || "User";
-
-    // Build Sub-notes HTML table if sub-notes exist
-    let subNotesHtml = "";
-    if (note.subNotes && note.subNotes.length > 0) {
-      const subRows = note.subNotes
-        .map((sub, idx) => {
-          const subDate = dayjs(sub.createdAt).format("MMM DD, YYYY");
-          return `
-            <tr>
-              <td style="padding: 8pt; border: 1pt solid #CBD5E1; text-align: center; font-weight: bold; width: 40pt; background-color: #F8FAFC;">${idx + 1}</td>
-              <td style="padding: 8pt; border: 1pt solid #CBD5E1; font-weight: bold; color: #1E293B; width: 140pt;">${this.escapeXml(sub.title || "")}</td>
-              <td style="padding: 8pt; border: 1pt solid #CBD5E1; color: #64748B; width: 80pt;">${this.escapeXml(sub.createdBy || "User")}</td>
-              <td style="padding: 8pt; border: 1pt solid #CBD5E1; color: #64748B; width: 80pt;">${subDate}</td>
-              <td style="padding: 8pt; border: 1pt solid #CBD5E1; color: #334155;">${sub.description || '<span style="color:#94A3B8; font-style:italic;">No description</span>'}</td>
-            </tr>
-          `;
-        })
-        .join("");
-
-      subNotesHtml = `
-        <div class="section-title">Sub-Notes (${note.subNotes.length})</div>
-        <table class="subnotes-table" style="width: 100%; border-collapse: collapse; margin-top: 10pt; margin-bottom: 20pt;">
-          <thead>
-            <tr style="background-color: #4318FF; color: #FFFFFF;">
-              <th style="padding: 8pt; border: 1pt solid #3730A3; text-align: center; width: 40pt;">#</th>
-              <th style="padding: 8pt; border: 1pt solid #3730A3; text-align: left; width: 140pt;">Title</th>
-              <th style="padding: 8pt; border: 1pt solid #3730A3; text-align: left; width: 80pt;">Author</th>
-              <th style="padding: 8pt; border: 1pt solid #3730A3; text-align: left; width: 80pt;">Date</th>
-              <th style="padding: 8pt; border: 1pt solid #3730A3; text-align: left;">Description</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${subRows}
-          </tbody>
-        </table>
-      `;
-    }
-
-    // Build Attachments HTML list if attachments exist
-    let attachmentsHtml = "";
-    if (note.attachments && note.attachments.length > 0) {
-      const attRows = note.attachments
-        .map((att, idx) => {
-          const name = (att as any).name || (att as any).fileName || 'Attachment';
-          const fileSize = (att as any).fileSize || (att as any).size;
-          const size = fileSize ? `${Math.round(fileSize / 1024)} KB` : 'Attached file';
-          return `
-            <li style="margin-bottom: 6pt; color: #334155;">
-              <strong>${idx + 1}. ${this.escapeXml(name)}</strong> <span style="color: #64748B; font-size: 9.5pt;">(${size})</span>
-            </li>
-          `;
-        })
-        .join("");
-
-      attachmentsHtml = `
-        <div class="section-title">Files & Attachments (${note.attachments.length})</div>
-        <ul style="padding-left: 20pt; margin-top: 8pt; margin-bottom: 20pt;">
-          ${attRows}
-        </ul>
-      `;
-    }
 
     const wordHtml = `
       <html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
@@ -882,72 +818,52 @@ if (!doclingUrl) {
             color: #1E293B;
             background-color: #FFFFFF;
           }
-          h1, h2, h3, h4, h5, h6 {
-            color: #1E293B;
-            font-family: 'Segoe UI', Calibri, Arial, sans-serif;
-            margin-top: 14pt;
-            margin-bottom: 6pt;
-          }
-          h1 {
-            color: #4318FF;
-            font-size: 22pt;
-            font-weight: bold;
-            margin-top: 0;
-            margin-bottom: 12pt;
-          }
-          h2 { font-size: 16pt; color: #1E293B; }
-          h3 { font-size: 13pt; color: #334155; }
-          p { margin-top: 0; margin-bottom: 10pt; line-height: 1.6; }
-          .header-box {
-            background-color: #F8FAFC;
-            border: 1.5pt solid #E2E8F0;
-            padding: 14pt 18pt;
-            border-radius: 8pt;
-            margin-bottom: 18pt;
-          }
-          .badge {
-            display: inline-block;
-            padding: 3pt 10pt;
-            font-size: 9.5pt;
-            font-weight: bold;
-            text-transform: uppercase;
-            letter-spacing: 0.5pt;
-            border-radius: 4pt;
-            background-color: #EEF2FF;
-            color: #4318FF;
-            border: 1pt solid #C7D2FE;
-          }
-          .badge-personal {
-            background-color: #ECFDF5;
-            color: #059669;
-            border: 1pt solid #A7F3D0;
-          }
-          .meta-table {
+          table.structured-table {
             width: 100%;
             border-collapse: collapse;
-            margin-top: 8pt;
+            margin-bottom: 18pt;
+            border: 1.5pt solid #CBD5E1;
           }
-          .meta-table td {
-            padding: 4pt 6pt;
+          table.structured-table td {
+            padding: 9pt 14pt;
+            border: 1pt solid #CBD5E1;
+            vertical-align: middle;
+          }
+          .label-cell {
+            width: 110pt;
+            background-color: #F8FAFC;
             font-size: 9.5pt;
-            color: #64748B;
-            border: none;
-          }
-          .section-title {
-            font-size: 12pt;
             font-weight: bold;
-            color: #4318FF;
+            color: #475569;
             text-transform: uppercase;
-            letter-spacing: 0.8pt;
-            border-bottom: 1.5pt solid #E2E8F0;
-            padding-bottom: 4pt;
-            margin-top: 18pt;
-            margin-bottom: 10pt;
+            letter-spacing: 0.5pt;
           }
-          .content-container {
+          .val-cell {
+            background-color: #FFFFFF;
+            font-size: 11pt;
+            font-weight: bold;
+            color: #1E293B;
+          }
+          .desc-container {
+            border: 1.5pt solid #CBD5E1;
+            margin-bottom: 18pt;
+          }
+          .desc-header {
+            padding: 9pt 14pt;
+            background-color: #F8FAFC;
+            border-bottom: 1.5pt solid #CBD5E1;
+            font-size: 9.5pt;
+            font-weight: bold;
+            color: #475569;
+            text-transform: uppercase;
+            letter-spacing: 0.5pt;
+          }
+          .desc-body {
+            padding: 16pt 18pt;
             font-size: 11pt;
             line-height: 1.65;
             color: #1E293B;
+            background-color: #FFFFFF;
           }
           mark, span[style*="background-color"] {
             padding: 2pt 4pt;
@@ -984,42 +900,26 @@ if (!doclingUrl) {
             font-weight: bold;
             color: #1E293B;
           }
-          .footer-note {
-            margin-top: 30pt;
-            padding-top: 10pt;
-            border-top: 1pt solid #E2E8F0;
-            font-size: 9pt;
-            color: #94A3B8;
-            text-align: center;
-          }
         </style>
       </head>
       <body>
         <div class="Section1">
-          <div class="header-box">
-            <span class="${isProject ? "badge" : "badge badge-personal"}">
-              ${isProject ? `PROJECT NOTE: ${this.escapeXml(projectLabel)}` : "PERSONAL NOTE"}
-            </span>
-            <h1 style="margin-top: 10pt; margin-bottom: 6pt;">${this.escapeXml(note.title || "Untitled Note")}</h1>
-            <table class="meta-table">
-              <tr>
-                <td><strong>Author:</strong> ${this.escapeXml(author)}</td>
-                <td><strong>Created:</strong> ${createdDate}</td>
-                <td><strong>Last Modified:</strong> ${updatedDate}</td>
-              </tr>
-            </table>
-          </div>
+          <table class="structured-table">
+            <tr>
+              <td class="label-cell">PROJECT:</td>
+              <td class="val-cell">${isProject ? this.escapeXml(projectLabel) : "Personal Note"}</td>
+            </tr>
+            <tr>
+              <td class="label-cell">TITLE:</td>
+              <td class="val-cell">${this.escapeXml(note.title || "Untitled Note")}</td>
+            </tr>
+          </table>
 
-          <div class="section-title">Description & Content</div>
-          <div class="content-container">
-            ${note.description || '<p style="color: #94A3B8; font-style: italic;">No description provided.</p>'}
-          </div>
-
-          ${subNotesHtml}
-          ${attachmentsHtml}
-
-          <div class="footer-note">
-            © ${new Date().getFullYear()} WorkSphere Powered by inventech &nbsp;|&nbsp; Exported on ${dayjs().format("MMMM DD, YYYY HH:mm")}
+          <div class="desc-container">
+            <div class="desc-header">DESCRIPTION</div>
+            <div class="desc-body">
+              ${note.description && note.description.trim() ? note.description : '<p style="color: #94A3B8; font-style: italic; margin: 0;">No description provided.</p>'}
+            </div>
           </div>
         </div>
       </body>
@@ -1034,29 +934,18 @@ if (!doclingUrl) {
     };
   }
 
-  /**
-   * Generate high-fidelity PDF document preserving metadata, formatted description,
-   * highlights, sub-notes, attachments, and brand header/footer.
-   */
   private async generatePdfDoc(
     note: Note,
   ): Promise<{ buffer: Buffer; contentType: string; filename: string }> {
     const safeTitle = (note.title || "Note").replace(/[/\\?%*:|"<>]/g, "_");
     const isProject = note.type === NoteType.PROJECT;
     const projectLabel = note.projectName || "Worksphere Project";
-    const createdDate = dayjs(note.createdAt).format("MMMM DD, YYYY");
-    const author = note.createdBy || "User";
 
     return new Promise<{ buffer: Buffer; contentType: string; filename: string }>((resolve, reject) => {
       try {
         const doc = new (PDFDocument as any)({
           size: "A4",
           margin: 40,
-          info: {
-            Title: note.title || "Note",
-            Author: author,
-            Subject: isProject ? `Project: ${projectLabel}` : "Personal Note",
-          },
         });
 
         const buffers: Buffer[] = [];
@@ -1075,164 +964,39 @@ if (!doclingUrl) {
         const margin = 40;
         const contentWidth = pageWidth - margin * 2;
 
-        // Top Accent Bar
-        doc.rect(margin, 20, contentWidth, 4).fill("#4318FF");
+        let currentY = 40;
 
-        // Brand Sub-Header
-        doc
-          .font("Helvetica-Bold")
-          .fontSize(9)
-          .fillColor("#4318FF")
-          .text("WORKSPHERE NOTE DOCUMENT", margin, 32);
+        // Structured Table for Project and Title
+        const labelWidth = 110;
+        const valueWidth = contentWidth - labelWidth;
+        const rowHeight = 32;
 
-        // Note Title
-        doc
-          .font("Helvetica-Bold")
-          .fontSize(18)
-          .fillColor("#1B2559")
-          .text(note.title || "Untitled Note", margin, 46, { width: contentWidth });
+        // Project Row
+        doc.rect(margin, currentY, labelWidth, rowHeight).fillAndStroke("#F8FAFC", "#CBD5E1");
+        doc.rect(margin + labelWidth, currentY, valueWidth, rowHeight).fillAndStroke("#FFFFFF", "#CBD5E1");
+        doc.font("Helvetica-Bold").fontSize(9.5).fillColor("#475569").text("PROJECT", margin + 12, currentY + 10);
+        doc.font("Helvetica-Bold").fontSize(10.5).fillColor("#1E293B").text(isProject ? projectLabel : "Personal Note", margin + labelWidth + 12, currentY + 10, { width: valueWidth - 24, ellipsis: true });
 
-        let currentY = doc.y + 10;
+        currentY += rowHeight;
 
-        // Metadata Card Box
-        const cardHeight = 44;
-        doc
-          .roundedRect(margin, currentY, contentWidth, cardHeight, 6)
-          .fillAndStroke("#F8FAFC", "#E2E8F0");
+        // Title Row
+        doc.rect(margin, currentY, labelWidth, rowHeight).fillAndStroke("#F8FAFC", "#CBD5E1");
+        doc.rect(margin + labelWidth, currentY, valueWidth, rowHeight).fillAndStroke("#FFFFFF", "#CBD5E1");
+        doc.font("Helvetica-Bold").fontSize(9.5).fillColor("#475569").text("TITLE", margin + 12, currentY + 10);
+        doc.font("Helvetica-Bold").fontSize(11.5).fillColor("#1E293B").text(note.title || "Untitled Note", margin + labelWidth + 12, currentY + 9, { width: valueWidth - 24, ellipsis: true });
 
-        doc
-          .font("Helvetica-Bold")
-          .fontSize(9)
-          .fillColor(isProject ? "#4318FF" : "#059669")
-          .text(
-            isProject ? `PROJECT: ${projectLabel.toUpperCase()}` : "PERSONAL NOTE",
-            margin + 12,
-            currentY + 10,
-          );
+        currentY += rowHeight + 20;
 
-        doc
-          .font("Helvetica")
-          .fontSize(8.5)
-          .fillColor("#64748B")
-          .text(`Created by: ${author}  |  Date: ${createdDate}`, margin + 12, currentY + 24);
+        // Description Section Box
+        const descHeaderHeight = 28;
+        doc.rect(margin, currentY, contentWidth, descHeaderHeight).fillAndStroke("#F8FAFC", "#CBD5E1");
+        doc.font("Helvetica-Bold").fontSize(9.5).fillColor("#475569").text("DESCRIPTION", margin + 12, currentY + 9);
 
-        if (note.attachments && note.attachments.length > 0) {
-          doc
-            .font("Helvetica-Bold")
-            .fontSize(8.5)
-            .fillColor("#4318FF")
-            .text(
-              `${note.attachments.length} attachment${note.attachments.length > 1 ? "s" : ""}`,
-              margin + contentWidth - 110,
-              currentY + 16,
-              { align: "right", width: 98 },
-            );
-        }
+        currentY += descHeaderHeight;
+        doc.y = currentY + 12;
 
-        currentY += cardHeight + 16;
-
-        // Section Title: Description
-        doc
-          .font("Helvetica-Bold")
-          .fontSize(11)
-          .fillColor("#4318FF")
-          .text("DESCRIPTION & CONTENT", margin, currentY);
-
-        currentY = doc.y + 4;
-        doc.strokeColor("#E2E8F0").lineWidth(1).moveTo(margin, currentY).lineTo(pageWidth - margin, currentY).stroke();
-        currentY += 10;
-        doc.y = currentY;
-
-        // Render Description Content (Extract and render rich text chunks)
         const descHtml = note.description || "";
         this.renderHtmlToPdf(doc, descHtml, margin, contentWidth, pageHeight);
-
-        // Render Sub-notes if any
-        if (note.subNotes && note.subNotes.length > 0) {
-          if (doc.y > pageHeight - 120) doc.addPage();
-
-          doc.moveDown(1.5);
-          doc
-            .font("Helvetica-Bold")
-            .fontSize(11)
-            .fillColor("#4318FF")
-            .text(`SUB-NOTES (${note.subNotes.length})`, margin, doc.y);
-
-          const divY = doc.y + 4;
-          doc.strokeColor("#E2E8F0").lineWidth(1).moveTo(margin, divY).lineTo(pageWidth - margin, divY).stroke();
-          doc.y = divY + 8;
-
-          note.subNotes.forEach((sub, idx) => {
-            if (doc.y > pageHeight - 90) doc.addPage();
-
-            doc
-              .font("Helvetica-Bold")
-              .fontSize(10)
-              .fillColor("#1E293B")
-              .text(`${idx + 1}. ${sub.title || "Untitled Sub-note"}`, margin + 6, doc.y);
-
-            const subDate = dayjs(sub.createdAt).format("MMM DD, YYYY");
-            doc
-              .font("Helvetica")
-              .fontSize(8)
-              .fillColor("#64748B")
-              .text(`By ${sub.createdBy || "User"}  |  ${subDate}`, margin + 18, doc.y + 2);
-
-            if (sub.description && sub.description.trim()) {
-              const cleanSubText = this.stripHtml(sub.description);
-              doc
-                .font("Helvetica")
-                .fontSize(9)
-                .fillColor("#334155")
-                .text(cleanSubText, margin + 18, doc.y + 4, { width: contentWidth - 24 });
-            }
-            doc.moveDown(0.8);
-          });
-        }
-
-        // Render Attachments List if any
-        if (note.attachments && note.attachments.length > 0) {
-          if (doc.y > pageHeight - 100) doc.addPage();
-
-          doc.moveDown(1.5);
-          doc
-            .font("Helvetica-Bold")
-            .fontSize(11)
-            .fillColor("#4318FF")
-            .text(`ATTACHMENTS (${note.attachments.length})`, margin, doc.y);
-
-          const attDivY = doc.y + 4;
-          doc.strokeColor("#E2E8F0").lineWidth(1).moveTo(margin, attDivY).lineTo(pageWidth - margin, attDivY).stroke();
-          doc.y = attDivY + 8;
-
-          note.attachments.forEach((att, idx) => {
-            const name = (att as any).name || (att as any).fileName || 'Attachment';
-            const fileSize = (att as any).fileSize || (att as any).size;
-          const size = fileSize ? `${Math.round(fileSize / 1024)} KB` : 'Attached file';
-            doc
-              .font("Helvetica")
-              .fontSize(9)
-              .fillColor("#334155")
-              .text(`• ${idx + 1}. ${name} (${size})`, margin + 6, doc.y);
-            doc.moveDown(0.3);
-          });
-        }
-
-        // Global Page Footers
-        const range = doc.bufferedPageRange();
-        for (let i = range.start; i < range.start + range.count; i++) {
-          doc.switchToPage(i);
-          doc
-            .font("Helvetica")
-            .fontSize(8)
-            .fillColor("#94A3B8")
-            .text(
-              `© ${new Date().getFullYear()} WorkSphere Powered by inventech  |  Page ${i + 1} of ${range.count}`,
-              margin,
-              pageHeight - 25,
-              { align: "center", width: contentWidth },
-            );
-        }
 
         doc.end();
       } catch (err) {
@@ -1241,10 +1005,6 @@ if (!doclingUrl) {
     });
   }
 
-  /**
-   * Render HTML content to PDF preserving paragraphs, headings, blockquotes, lists,
-   * highlights and text colors.
-   */
   private renderHtmlToPdf(
     doc: any,
     html: string,
