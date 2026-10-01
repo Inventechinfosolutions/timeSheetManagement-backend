@@ -61,6 +61,9 @@ export class Note extends BaseEntity {
   @Column({ type: 'boolean', default: false })
   isArchived: boolean;
 
+  @Column({ name: 'auto_save', type: 'boolean', default: true })
+  autoSave: boolean;
+
   @Column({ type: 'int', default: 0 })
   orderIndex: number;
 

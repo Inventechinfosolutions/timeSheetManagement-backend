@@ -23,6 +23,9 @@ import { MailModule } from './common/mail/mail.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { NotesModule } from './notes/notes.module';
 import { Note } from './notes/entities/note.entity';
+import { NoteRecipient } from './notes/entities/note-recipient.entity';
+import { InboxModule } from './inbox/inbox.module';
+import { Inbox } from './inbox/entities/inbox.entity';
 import { CacheModule } from '@nestjs/cache-manager';
 import { BullModule } from '@nestjs/bull';
 import * as redisStore from 'cache-manager-redis-store';
@@ -66,10 +69,13 @@ function getEnvFiles(): string[] {
       ManagerMapping,
       LeaveRequest,
       Note,
+      NoteRecipient,
+      Inbox,
     ]),
     MailModule,
     NotificationsModule,
     NotesModule,
+    InboxModule,
     BullModule.forRootAsync({
       imports: [ConfigModule],
       useFactory: (configService: ConfigService) => ({

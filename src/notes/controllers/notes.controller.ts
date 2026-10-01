@@ -21,6 +21,9 @@ import {
 } from '@nestjs/common';
 import { AnyFilesInterceptor } from '@nestjs/platform-express';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
+import { NotePermissionGuard } from '../guards/note-permission.guard';
+import { Permission } from '../decorators/permission.decorator';
+import { NotePermission } from '../enums/note-permission.enum';
 import { NotesService } from '../services/notes.service';
 import { CreateNoteDto } from '../dto/create-note.dto';
 import { UpdateNoteDto } from '../dto/update-note.dto';
@@ -31,13 +34,20 @@ import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Response } from 'express';
 import { Readable } from 'stream';
 
+import { Inject, forwardRef } from '@nestjs/common';
+import { InboxService } from '../../inbox/services/inbox.service';
+
 @ApiTags('Notes')
 @Controller('notes')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, NotePermissionGuard)
 export class NotesController {
   private readonly logger = new Logger(NotesController.name);
 
-  constructor(private readonly notesService: NotesService) {}
+  constructor(
+    private readonly notesService: NotesService,
+    @Inject(forwardRef(() => InboxService))
+    private readonly inboxService: InboxService,
+  ) { }
 
   // =========================================================================
   // 1. Static & Special Sub-path Endpoints (MUST come before :id wildcard routes)
@@ -137,11 +147,12 @@ export class NotesController {
   }
 
   @Delete('attachments/:key')
+  @Permission(NotePermission.CanDelete)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Delete attachment from object_store and storage' })
-  async deleteAttachment(@Param('key') key: string) {
+  async deleteAttachment(@Param('key') key: string, @Req() req: any) {
     this.logger.log(`Received request to delete attachment: ${key}`);
-    return await this.notesService.deleteAttachment(key);
+    return await this.notesService.deleteAttachment(key, req.user);
   }
 
   // =========================================================================
@@ -203,13 +214,46 @@ export class NotesController {
   // 3. Parameterized Item Endpoints (:id)
   // =========================================================================
 
+  @Get(':id/download')
+  @ApiOperation({ summary: 'Download or export note document (PDF or Word)' })
+  async downloadNote(
+    @Param('id', ParseIntPipe) id: number,
+    @Query('format') format: string,
+    @Req() req: any,
+    @Res() res: Response,
+  ) {
+    const result = await this.notesService.exportNoteDocument(id, format || 'pdf', req.user);
+
+    res.set({
+      ...NO_CACHE_HEADERS,
+      'Content-Type': result.contentType,
+      'Content-Disposition': `attachment; filename="${encodeURIComponent(result.filename)}"`,
+      'Content-Length': result.buffer.length,
+    });
+
+    res.send(result.buffer);
+  }
+
+  @Get(':id/export')
+  @ApiOperation({ summary: 'Export note document (alias for download)' })
+  async exportNote(
+    @Param('id', ParseIntPipe) id: number,
+    @Query('format') format: string,
+    @Req() req: any,
+    @Res() res: Response,
+  ) {
+    return this.downloadNote(id, format, req.user, res);
+  }
+
   @Get(':id')
+  @Permission(NotePermission.CanView)
   @ApiOperation({ summary: 'Get single note by ID' })
   async findOne(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
     return await this.notesService.findOne(id, req.user);
   }
 
   @Patch(':id')
+  @Permission(NotePermission.CanEdit)
   @ApiOperation({ summary: 'Update note details' })
   async update(
     @Param('id', ParseIntPipe) id: number,
@@ -225,13 +269,33 @@ export class NotesController {
     return await this.notesService.togglePin(id, req.user);
   }
 
+  @Patch(':id/archive')
+  @ApiOperation({ summary: 'Toggle note archived state' })
+  async toggleArchive(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
+    return await this.notesService.toggleArchive(id, req.user);
+  }
+
+  @Patch(':id/auto-save')
+  @Permission(NotePermission.CanEdit)
+  @ApiOperation({ summary: 'Update note auto-save setting' })
+  async updateAutoSave(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() body: any,
+    @Req() req: any,
+  ) {
+    const autoSave = body.autoSave === true || body.autoSave === 'true';
+    return await this.notesService.updateAutoSave(id, autoSave, req.user);
+  }
+
   @Delete(':id')
+  @Permission(NotePermission.CanDelete)
   @ApiOperation({ summary: 'Delete note and all nested sub-notes and attachments' })
   async remove(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
     return await this.notesService.removeNote(id, req.user);
   }
 
   @Post(':id/sub-notes')
+  @Permission(NotePermission.CanEdit)
   @UseInterceptors(AnyFilesInterceptor())
   @ApiOperation({ summary: 'Create a sub-note under an existing note' })
   async createSubNote(
@@ -260,13 +324,55 @@ export class NotesController {
     return await this.notesService.createSubNote(id, createSubNoteDto, files, req.user);
   }
 
-  @Post(':id/attachments')
-  @UseInterceptors(AnyFilesInterceptor())
-  @ApiOperation({ summary: 'Upload attachments to existing note' })
-  async uploadAttachments(
+  @Post(':id/send')
+  @ApiOperation({ summary: 'Send note to recipients, creating inbox entries and notifications' })
+  async sendNote(
     @Param('id', ParseIntPipe) id: number,
-    @UploadedFiles() files: Express.Multer.File[],
+    @Body() body: any,
+    @Req() req: any,
   ) {
-    return await this.notesService.uploadAttachments(id, files);
+    let recipients = body.recipients;
+    if (typeof recipients === 'string') {
+      try {
+        recipients = JSON.parse(recipients);
+      } catch (e) {
+        recipients = recipients.split(',').map((s: string) => s.trim());
+      }
+    }
+    if (!recipients && (body.to || body.email)) {
+      recipients = [body.to || body.email];
+    }
+    if (!Array.isArray(recipients) || recipients.length === 0) {
+      throw new BadRequestException('At least one recipient email or employee ID is required');
+    }
+
+    return await this.inboxService.sendNote(
+      {
+        notesId: id,
+        recipients,
+        subject: body.subject,
+        customMessage: body.customMessage || body.message,
+        attachmentKeys: body.attachmentKeys,
+        permission: body.permission,
+        permissions: body.permissions,
+        canView: body.canView,
+        canEdit: body.canEdit,
+        canDelete: body.canDelete,
+        hasDocument: body.hasDocument ?? body.includeFiles ?? false,
+        hasDescription: body.hasDescription ?? body.includeDescription ?? true,
+      },
+      req.user,
+    );
+  }
+
+  @Post(':id/share')
+  @ApiOperation({ summary: 'Alias for send note to recipients' })
+  async shareNote(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() body: any,
+    @Req() req: any,
+  ) {
+    return await this.sendNote(id, body, req);
   }
 }
+
