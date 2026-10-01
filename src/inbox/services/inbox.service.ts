@@ -299,7 +299,7 @@ export class InboxService {
           permission,
           dto.customMessage,
           noteAttachments,
-          { hasDescription, hasDocument },
+          { hasDescription, hasDocument, projectName: note.projectName, noteType: note.type },
         );
 
         try {
