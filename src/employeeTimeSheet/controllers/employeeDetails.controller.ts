@@ -109,6 +109,20 @@ export class EmployeeDetailsController {
     }
   }
 
+  @Get('search-directory')
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({ summary: 'Search active employee directory for recipient selection' })
+  @ApiQuery({ name: 'search', required: false, type: String })
+  async searchDirectory(@Query('search') search: string) {
+    try {
+      this.logger.log(`Searching employee directory: search=${search}`);
+      return await this.employeeDetailsService.searchDirectory(search);
+    } catch (error) {
+      this.logger.error(`Error searching employee directory: ${error.message}`, error.stack);
+      throw error;
+    }
+  }
+
   @Post()
   @ApiOperation({ summary: 'Create a new employee' })
   @ApiBody({ type: EmployeeDetailsDto })

@@ -407,6 +407,45 @@ export class EmployeeDetailsService {
     }
   }
 
+  async searchDirectory(search?: string): Promise<any[]> {
+    try {
+      const query = this.employeeDetailsRepository
+        .createQueryBuilder('employee')
+        .select([
+          'employee.id',
+          'employee.fullName',
+          'employee.employeeId',
+          'employee.email',
+          'employee.designation',
+        ])
+        .leftJoin(User, 'user', 'user.loginId = employee.employeeId')
+        .where('user.status = :activeStatus', { activeStatus: UserStatus.ACTIVE })
+        .andWhere('employee.email IS NOT NULL AND employee.email != :empty', { empty: '' });
+
+      if (search && search.trim()) {
+        const term = `%${search.trim()}%`;
+        query.andWhere(
+          '(employee.fullName LIKE :term OR employee.employeeId LIKE :term OR employee.email LIKE :term OR employee.designation LIKE :term)',
+          { term },
+        );
+      }
+
+      query.orderBy('employee.fullName', 'ASC').limit(50);
+
+      const list = await query.getMany();
+      return list.map((emp) => ({
+        id: emp.id,
+        employeeId: emp.employeeId,
+        fullName: emp.fullName,
+        email: emp.email,
+        designation: emp.designation || '',
+      }));
+    } catch (error) {
+      this.logger.error(`Error in searchDirectory: ${error.message}`, error.stack);
+      throw new HttpException('Failed to search employee directory', HttpStatus.INTERNAL_SERVER_ERROR);
+    }
+  }
+
   async getTimesheetList(
     search: string = '',
     sortBy: string = 'id',
