@@ -29,6 +29,13 @@ export class InboxController {
 
   constructor(private readonly inboxService: InboxService) {}
 
+  @Get('counts')
+  @ApiOperation({ summary: 'Get unified inbox, unread, read, and sent counts for current user' })
+  @ApiResponse({ status: 200, description: 'Returns unified inbox counts' })
+  async getCounts(@Req() req: any) {
+    return await this.inboxService.getInboxCounts(req.user);
+  }
+
   @Get('unread-count')
   @ApiOperation({ summary: 'Get unread message count for current user inbox' })
   @ApiResponse({ status: 200, description: 'Returns unread count' })

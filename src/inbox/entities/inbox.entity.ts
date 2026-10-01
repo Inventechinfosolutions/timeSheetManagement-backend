@@ -9,6 +9,7 @@ import {
 } from 'typeorm';
 import { Note } from '../../notes/entities/note.entity';
 import { NotePermission } from '../../notes/enums/note-permission.enum';
+import { InboxFolder } from '../enums/note-permission.enum';
 
 @Entity('inbox')
 export class Inbox {
@@ -27,8 +28,8 @@ export class Inbox {
   @Column({ name: 'receiver_id', type: 'varchar', length: 100, nullable: true })
   receiverId?: string;
 
-  @Column({ name: 'folder', type: 'varchar', length: 50, default: 'INBOX' })
-  folder: 'INBOX' | 'SENT' | string;
+  @Column({ name: 'folder', type: 'enum', enum: InboxFolder, default: InboxFolder.INBOX })
+  folder: InboxFolder;
 
   @Column({
     name: 'permission',

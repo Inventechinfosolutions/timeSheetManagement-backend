@@ -11,6 +11,7 @@ import { Readable } from 'stream';
 import { Inbox } from '../entities/inbox.entity';
 import { Note } from '../../notes/entities/note.entity';
 import { NotePermission } from '../../notes/enums/note-permission.enum';
+import { InboxFolder } from '../enums/note-permission.enum';
 import { EmployeeDetails } from '../../employeeTimeSheet/entities/employeeDetails.entity';
 import { User } from '../../users/entities/user.entity';
 import { CreateInboxDto } from '../dto/create-inbox.dto';
@@ -139,9 +140,14 @@ export class InboxService {
         },
       );
 
-      const hasDocument = dto.hasDocument !== undefined
+      let hasDocument = dto.hasDocument !== undefined
         ? Boolean(dto.hasDocument)
         : (dto.includeFiles !== undefined ? Boolean(dto.includeFiles) : false);
+
+      const attachmentKeys = dto.attachmentKeys || (dto as any).selectedAttachmentKeys;
+      if (Array.isArray(attachmentKeys) && attachmentKeys.length === 0) {
+        hasDocument = false;
+      }
 
       const hasDescription = dto.hasDescription !== undefined
         ? Boolean(dto.hasDescription)
@@ -178,88 +184,44 @@ export class InboxService {
         const { employeeId: targetEmployeeId, email: targetEmail } =
           await this.resolveRecipientEmployee(recipient);
 
-        // 1. Recipient record in INBOX folder
-        const existingInbox = await this.inboxRepo.findOne({
-          where: [
-            { notesId: note.id, employeeId: targetEmployeeId, folder: 'INBOX' },
-            { notesId: note.id, toMail: targetEmail, folder: 'INBOX' },
-          ],
+        // 1. Recipient record in INBOX folder (create a new record for every send)
+        const inboxItem = this.inboxRepo.create({
+          employeeId: targetEmployeeId,
+          senderId: String(senderEmpId),
+          receiverId: targetEmployeeId,
+          folder: InboxFolder.INBOX,
+          notesId: note.id,
+          permission,
+          fromMail,
+          toMail: targetEmail,
+          isRead: false,
+          hasDocument,
+          hasDescription,
         });
-
-        let saved: Inbox;
-        if (existingInbox) {
-          existingInbox.permission = permission;
-          existingInbox.employeeId = targetEmployeeId;
-          existingInbox.senderId = String(senderEmpId);
-          existingInbox.receiverId = targetEmployeeId;
-          existingInbox.folder = 'INBOX';
-          existingInbox.fromMail = fromMail;
-          existingInbox.toMail = targetEmail;
-          existingInbox.isRead = false;
-          existingInbox.hasDocument = hasDocument;
-          existingInbox.hasDescription = hasDescription;
-          saved = await this.inboxRepo.save(existingInbox);
-        } else {
-          const inboxItem = this.inboxRepo.create({
-            employeeId: targetEmployeeId,
-            senderId: String(senderEmpId),
-            receiverId: targetEmployeeId,
-            folder: 'INBOX',
-            notesId: note.id,
-            permission,
-            fromMail,
-            toMail: targetEmail,
-            isRead: false,
-            hasDocument,
-            hasDescription,
-          });
-          saved = await this.inboxRepo.save(inboxItem);
-        }
+        const saved = await this.inboxRepo.save(inboxItem);
         createdEntries.push(saved);
 
-        // 2. Sender record in SENT folder (independent copy for sender login, Gmail-style)
-        // Storing senderId and receiverId; deleting in sender login does not affect recipient login
-        const existingSent = await this.inboxRepo.findOne({
-          where: {
-            notesId: note.id,
-            employeeId: String(senderEmpId),
-            receiverId: targetEmployeeId,
-            folder: 'SENT',
-          },
+        // 2. Sender record in SENT folder (create a new record for every send)
+        const sentItem = this.inboxRepo.create({
+          employeeId: String(senderEmpId),
+          senderId: String(senderEmpId),
+          receiverId: targetEmployeeId,
+          folder: InboxFolder.SENT,
+          notesId: note.id,
+          permission,
+          fromMail,
+          toMail: targetEmail,
+          isRead: true,
+          hasDocument,
+          hasDescription,
         });
-
-        if (existingSent) {
-          existingSent.permission = permission;
-          existingSent.senderId = String(senderEmpId);
-          existingSent.receiverId = targetEmployeeId;
-          existingSent.fromMail = fromMail;
-          existingSent.toMail = targetEmail;
-          existingSent.isRead = true;
-          existingSent.hasDocument = hasDocument;
-          existingSent.hasDescription = hasDescription;
-          await this.inboxRepo.save(existingSent);
-        } else {
-          const sentItem = this.inboxRepo.create({
-            employeeId: String(senderEmpId),
-            senderId: String(senderEmpId),
-            receiverId: targetEmployeeId,
-            folder: 'SENT',
-            notesId: note.id,
-            permission,
-            fromMail,
-            toMail: targetEmail,
-            isRead: true,
-            hasDocument,
-            hasDescription,
-          });
-          await this.inboxRepo.save(sentItem);
-        }
+        await this.inboxRepo.save(sentItem);
 
         // 3. Fetch note attachments for email template display AND direct Outlook file attachments
         let noteAttachments: Array<{ name: string; downloadUrl: string }> = [];
         let emailAttachments: Array<{ filename: string; content: string; encoding: string; contentType?: string }> = [];
 
-        if (hasDocument) {
+        if (hasDocument && (!Array.isArray(attachmentKeys) || attachmentKeys.length > 0)) {
           try {
             const docs = await this.documentUploaderService.getAllDocs(
               EntityType.NOTE,
@@ -268,7 +230,7 @@ export class InboxService {
               note.id,
             );
             if (docs && docs.length > 0) {
-              const selectedKeys = dto.attachmentKeys && dto.attachmentKeys.length > 0 ? dto.attachmentKeys : null;
+              const selectedKeys = Array.isArray(attachmentKeys) && attachmentKeys.length > 0 ? attachmentKeys : null;
               for (const d of docs) {
                 const fileKey = (d as any).key || (d as any).s3Key || (d as any).id;
                 const fileName = (d as any).name || (d as any).fileName || 'Attachment';
@@ -377,19 +339,19 @@ export class InboxService {
   async getInbox(user: any, query?: QueryInboxDto): Promise<any[]> {
     try {
       const { employeeId, email } = this.resolveUserIdentifiers(user);
-      const folder = (query?.folder || 'INBOX').toUpperCase();
+      const folder = (query?.folder || InboxFolder.INBOX).toUpperCase();
 
       const qb = this.inboxRepo.createQueryBuilder('inbox');
 
-      if (folder === 'SENT') {
-        qb.where('inbox.folder = :folder', { folder: 'SENT' })
+      if (folder === InboxFolder.SENT) {
+        qb.where('inbox.folder = :folder', { folder: InboxFolder.SENT })
           .andWhere(
             '(inbox.employeeId = :employeeId OR inbox.senderId = :employeeId OR inbox.fromMail = :email)',
             { employeeId, email },
           );
       } else {
         // Default: INBOX (received mail)
-        qb.where('(inbox.folder = :folder OR inbox.folder IS NULL)', { folder: 'INBOX' })
+        qb.where('(inbox.folder = :folder OR inbox.folder IS NULL)', { folder: InboxFolder.INBOX })
           .andWhere(
             '(inbox.employeeId = :employeeId OR inbox.receiverId = :employeeId OR inbox.toMail = :email)',
             { employeeId, email },
@@ -482,7 +444,8 @@ export class InboxService {
             senderDisplayName.toLowerCase().includes(s) || item.fromMail?.toLowerCase().includes(s);
           const matchesReceiver =
             receiverDisplayName.toLowerCase().includes(s) || item.toMail?.toLowerCase().includes(s);
-          if (!matchesTitle && !matchesDesc && !matchesSender && !matchesReceiver) {
+          const matchesProject = note?.projectName?.toLowerCase().includes(s);
+          if (!matchesTitle && !matchesDesc && !matchesSender && !matchesReceiver && !matchesProject) {
             continue;
           }
         }
@@ -492,7 +455,7 @@ export class InboxService {
           employeeId: item.employeeId,
           senderId: item.senderId,
           receiverId: item.receiverId,
-          folder: item.folder || 'INBOX',
+          folder: (item.folder as InboxFolder) || InboxFolder.INBOX,
           notesId: item.notesId,
           fromMail: item.fromMail,
           toMail: item.toMail,
@@ -539,27 +502,74 @@ export class InboxService {
   }
 
   /**
-   * Get unread message count for user sidebar badge (INBOX only).
+   * Get unified counts (inbox total, unread, read, sent) in a single call.
    */
-  async getUnreadCount(user: any): Promise<{ count: number }> {
+  async getInboxCounts(user: any): Promise<{ inbox: number; unread: number; read: number; sent: number; count: number }> {
     try {
       const { employeeId, email } = this.resolveUserIdentifiers(user);
 
-      const count = await this.inboxRepo
-        .createQueryBuilder('inbox')
-        .where('(inbox.employeeId = :employeeId OR inbox.receiverId = :employeeId OR inbox.toMail = :email)', {
-          employeeId,
-          email,
-        })
-        .andWhere('(inbox.folder = :folder OR inbox.folder IS NULL)', { folder: 'INBOX' })
-        .andWhere('inbox.isRead = false')
-        .getCount();
+      const [inboxTotal, unreadCount, readCount, sentCount] = await Promise.all([
+        // Total Inbox (received messages)
+        this.inboxRepo
+          .createQueryBuilder('inbox')
+          .where('(inbox.folder = :folder OR inbox.folder IS NULL)', { folder: InboxFolder.INBOX })
+          .andWhere('(inbox.employeeId = :employeeId OR inbox.receiverId = :employeeId OR inbox.toMail = :email)', {
+            employeeId,
+            email,
+          })
+          .getCount(),
 
-      return { count };
+        // Unread in Inbox
+        this.inboxRepo
+          .createQueryBuilder('inbox')
+          .where('(inbox.folder = :folder OR inbox.folder IS NULL)', { folder: InboxFolder.INBOX })
+          .andWhere('(inbox.employeeId = :employeeId OR inbox.receiverId = :employeeId OR inbox.toMail = :email)', {
+            employeeId,
+            email,
+          })
+          .andWhere('inbox.isRead = false')
+          .getCount(),
+
+        // Read in Inbox
+        this.inboxRepo
+          .createQueryBuilder('inbox')
+          .where('(inbox.folder = :folder OR inbox.folder IS NULL)', { folder: InboxFolder.INBOX })
+          .andWhere('(inbox.employeeId = :employeeId OR inbox.receiverId = :employeeId OR inbox.toMail = :email)', {
+            employeeId,
+            email,
+          })
+          .andWhere('inbox.isRead = true')
+          .getCount(),
+
+        // Total Sent messages
+        this.inboxRepo
+          .createQueryBuilder('inbox')
+          .where('inbox.folder = :folder', { folder: InboxFolder.SENT })
+          .andWhere('(inbox.employeeId = :employeeId OR inbox.senderId = :employeeId OR inbox.fromMail = :email)', {
+            employeeId,
+            email,
+          })
+          .getCount(),
+      ]);
+
+      return {
+        inbox: inboxTotal,
+        unread: unreadCount,
+        read: readCount,
+        sent: sentCount,
+        count: unreadCount,
+      };
     } catch (error: any) {
-      this.logger.error(`Failed to get unread count: ${error.message}`, error.stack);
-      return { count: 0 };
+      this.logger.error(`Failed to get inbox counts: ${error.message}`, error.stack);
+      return { inbox: 0, unread: 0, read: 0, sent: 0, count: 0 };
     }
+  }
+
+  /**
+   * Get unread message count for user sidebar badge (INBOX only).
+   */
+  async getUnreadCount(user: any): Promise<{ inbox: number; unread: number; read: number; sent: number; count: number }> {
+    return await this.getInboxCounts(user);
   }
 
   /**
@@ -604,7 +614,7 @@ export class InboxService {
       employeeId: item.employeeId,
       senderId: item.senderId,
       receiverId: item.receiverId,
-      folder: item.folder || 'INBOX',
+      folder: (item.folder as InboxFolder) || InboxFolder.INBOX,
       notesId: item.notesId,
       fromMail: item.fromMail,
       toMail: item.toMail,

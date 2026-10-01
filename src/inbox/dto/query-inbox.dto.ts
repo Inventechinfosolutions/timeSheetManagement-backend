@@ -1,6 +1,7 @@
-import { IsOptional, IsBoolean, IsString } from 'class-validator';
+import { IsOptional, IsBoolean, IsString, IsEnum } from 'class-validator';
 import { Type, Transform } from 'class-transformer';
 import { ApiPropertyOptional } from '@nestjs/swagger';
+import { InboxFolder } from '../enums/note-permission.enum';
 
 export class QueryInboxDto {
   @ApiPropertyOptional({ description: 'Filter by read status (true/false)' })
@@ -16,10 +17,10 @@ export class QueryInboxDto {
 
   @ApiPropertyOptional({
     description: 'Folder filter: INBOX (received) or SENT (sent by user)',
-    enum: ['INBOX', 'SENT'],
-    default: 'INBOX',
+    enum: InboxFolder,
+    default: InboxFolder.INBOX,
   })
   @IsOptional()
-  @IsString()
-  folder?: string;
+  @IsEnum(InboxFolder)
+  folder?: InboxFolder;
 }
