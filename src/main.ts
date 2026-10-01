@@ -2,11 +2,16 @@ import { NestFactory } from '@nestjs/core';
 import { Logger, ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import cookieParser from 'cookie-parser';
+import express from 'express';
 import { AppModule } from './app.module';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
   const configService = app.get(ConfigService);
+
+  // Increase body parser limits to allow large note content
+  app.use(express.json({ limit: '100mb' }));
+  app.use(express.urlencoded({ limit: '100mb', extended: true }));
 
   app.use(cookieParser());
 
