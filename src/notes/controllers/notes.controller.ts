@@ -195,6 +195,10 @@ export class NotesController {
       }
     }
 
+    const isVertical = body.isVertical !== undefined
+      ? (body.isVertical === 'true' || body.isVertical === true)
+      : true;
+
     const createDto: CreateNoteDto = {
       title: body.title,
       description: body.description,
@@ -203,6 +207,8 @@ export class NotesController {
       parentId: body.parentId ? Number(body.parentId) : undefined,
       color: body.color,
       isPinned: body.isPinned === 'true' || body.isPinned === true,
+      autoSave: body.autoSave !== undefined ? (body.autoSave === 'true' || body.autoSave === true) : undefined,
+      isVertical,
       subNotes,
       attachmentKeys: Array.isArray(attachmentKeys) ? attachmentKeys : undefined,
     };
