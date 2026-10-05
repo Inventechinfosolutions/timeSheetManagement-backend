@@ -640,6 +640,68 @@ export class NotesService {
       }
     }
 
+    // 2a. If it's an Excel / CSV file -> Parse with xlsx (SheetJS)
+    const excelExtensions = ['.xlsx', '.xls', '.csv'];
+    if (excelExtensions.includes(ext)) {
+      try {
+        const XLSX = require('xlsx');
+        const workbook = XLSX.read(file.buffer, { type: 'buffer', cellDates: true });
+        
+        if (!workbook.SheetNames || workbook.SheetNames.length === 0) {
+          throw new BadRequestException('No sheets found in the workbook');
+        }
+        
+        let html = `
+          <style>
+            .excel-import-wrapper table {
+              border-collapse: collapse;
+              width: max-content;
+              min-width: 100%;
+              font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+              font-size: 13px;
+              margin-bottom: 16px;
+            }
+            .excel-import-wrapper th, .excel-import-wrapper td {
+              border: 1px solid #d0d7de;
+              padding: 6px 8px;
+              text-align: left;
+              min-width: 80px;
+            }
+            .excel-import-wrapper th, .excel-import-wrapper tr:first-child td {
+              background-color: #f6f8fa;
+              font-weight: 600;
+              color: #24292f;
+            }
+            .excel-import-wrapper tr:nth-child(even) {
+              background-color: #fcfcfc;
+            }
+          </style>
+          <div class="excel-import-wrapper" style="width:100%;overflow-x:auto;">
+        `;
+        
+        workbook.SheetNames.forEach((sheetName, index) => {
+          const ws = workbook.Sheets[sheetName];
+          const sheetHtml = XLSX.utils.sheet_to_html(ws, { editable: false });
+          
+          html += `<h3 style="color:#2B3674;margin:${index > 0 ? '24px' : '0'} 0 8px 0;font-size:14px;font-weight:700;border-bottom:2px solid #4318FF;padding-bottom:4px;font-family:sans-serif;">📊 ${sheetName}</h3>`;
+          html += sheetHtml;
+        });
+        
+        html += `</div>`;
+        
+        return {
+          filename,
+          html,
+          text: html,
+          markdown: '',
+          json: null,
+        };
+      } catch (err: any) {
+        this.logger.error(`Failed to parse Excel file: ${err.message}`);
+        throw new BadRequestException(`Failed to parse Excel file: ${err.message}`);
+      }
+    }
+
     // 2. If it's a PDF / DOCX / Image -> Forward to Docling Python Service
 const doclingUrl = this.configService.get<string>('DOCLING_SERVICE_URL');
 
