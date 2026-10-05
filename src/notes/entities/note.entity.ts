@@ -64,6 +64,9 @@ export class Note extends BaseEntity {
   @Column({ name: 'auto_save', type: 'boolean', default: true })
   autoSave: boolean;
 
+  @Column({ name: 'is_vertical', type: 'boolean', default: true })
+  isVertical: boolean;
+
   @Column({ type: 'int', default: 0 })
   orderIndex: number;
 

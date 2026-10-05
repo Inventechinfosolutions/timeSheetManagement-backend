@@ -49,6 +49,11 @@ export class UpdateNoteDto {
   @IsBoolean()
   isAutoSave?: boolean;
 
+  @ApiPropertyOptional({ description: 'Whether note page is vertical (portrait)' })
+  @IsOptional()
+  @IsBoolean()
+  isVertical?: boolean;
+
   @IsOptional()
   @IsNumber()
   orderIndex?: number;
