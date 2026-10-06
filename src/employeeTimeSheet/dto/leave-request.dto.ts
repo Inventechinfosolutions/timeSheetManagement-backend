@@ -8,6 +8,7 @@ import {
   IsString,
   IsArray,
   ArrayMaxSize,
+  IsBoolean,
 } from 'class-validator';
 
 export class LeaveRequestDto {
@@ -85,4 +86,8 @@ export class LeaveRequestDto {
   @IsOptional()
   @IsString()
   availableDates?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  suppressEmail?: boolean;
 }
