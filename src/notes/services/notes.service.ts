@@ -855,6 +855,20 @@ if (!doclingUrl) {
     const isProject = note.type === NoteType.PROJECT;
     const projectLabel = note.projectName || "Worksphere Project";
 
+    const isHorizontal = (note as any).isVertical === false;
+    const firstRowMatch = (note.description || "").match(/<tr[^>]*>([\s\S]*?)<\/tr>/i);
+    let colCount = 0;
+    if (firstRowMatch) {
+      const cells = firstRowMatch[1].match(/<t[dh][^>]*>/gi);
+      colCount = cells ? cells.length : 0;
+    }
+    const isWide = isHorizontal || colCount > 3;
+    let pageWidthPt = isWide ? 841.9 : 595.3;
+    let pageHeightPt = isWide ? 595.3 : 841.9;
+    if (colCount > 5) {
+      pageWidthPt = Math.max(841.9, colCount * 135 + 72);
+    }
+
     const wordHtml = `
       <html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
       <head>
@@ -871,10 +885,11 @@ if (!doclingUrl) {
         <title>${this.escapeXml(note.title || "Note")}</title>
         <style>
           @page Section1 {
-            size: 595.3pt 841.9pt;
-            margin: 1.0in 1.0in 1.0in 1.0in;
-            mso-header-margin: 35.4pt;
-            mso-footer-margin: 35.4pt;
+            size: ${pageWidthPt}pt ${pageHeightPt}pt;
+            mso-page-orientation: ${isWide ? "landscape" : "portrait"};
+            margin: 0.4in 0.4in 0.4in 0.4in;
+            mso-header-margin: 28pt;
+            mso-footer-margin: 28pt;
             mso-paper-source: 0;
           }
           div.Section1 { page: Section1; }
@@ -955,17 +970,32 @@ if (!doclingUrl) {
             width: 100%;
             border-collapse: collapse;
             margin: 12pt 0;
+            mso-table-layout-alt: auto;
           }
           table th, table td {
             border: 1pt solid #CBD5E1;
             padding: 7pt 10pt;
             text-align: left;
             font-size: 10pt;
+            word-break: break-word;
           }
           table th {
             background-color: #F1F5F9;
             font-weight: bold;
             color: #1E293B;
+          }
+          .table-file-badge {
+            display: inline-block;
+            background-color: #F1F5F9;
+            border: 1pt solid #CBD5E1;
+            padding: 3pt 6pt;
+            border-radius: 4pt;
+            font-size: 9pt;
+            color: #334155;
+            margin: 2pt 0;
+          }
+          .table-file-btn {
+            display: none !important;
           }
         </style>
       </head>
@@ -1010,8 +1040,25 @@ if (!doclingUrl) {
 
     return new Promise<{ buffer: Buffer; contentType: string; filename: string }>((resolve, reject) => {
       try {
+        const isHorizontal = (note as any).isVertical === false;
+        let pageWidth = isHorizontal ? 841.89 : 595.28;
+        let pageHeight = isHorizontal ? 595.28 : 841.89;
+
+        // Auto-detect wide tables to expand page width if necessary
+        const firstRowMatch = (note.description || "").match(/<tr[^>]*>([\s\S]*?)<\/tr>/i);
+        if (firstRowMatch) {
+          const cells = firstRowMatch[1].match(/<t[dh][^>]*>/gi);
+          const colCount = cells ? cells.length : 0;
+          if (colCount > 5) {
+            const tableNeededWidth = colCount * 115 + 80;
+            if (tableNeededWidth > pageWidth) {
+              pageWidth = tableNeededWidth;
+            }
+          }
+        }
+
         const doc = new (PDFDocument as any)({
-          size: "A4",
+          size: [pageWidth, pageHeight],
           margin: 40,
         });
 
@@ -1026,8 +1073,6 @@ if (!doclingUrl) {
         });
         doc.on("error", (err: any) => reject(err));
 
-        const pageWidth = 595.28;
-        const pageHeight = 841.89;
         const margin = 40;
         const contentWidth = pageWidth - margin * 2;
 

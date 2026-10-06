@@ -27,6 +27,73 @@ export const IN_LOGO_SRC =
   inLogoBase64 ||
   'https://worksphere.inventech-developer.in/assets/inventech-logo-Cp1E027l.jpg';
 
+const TABLE_COLORS_MAP: Record<string, string> = {
+  '--tbl-black': '#000000',
+  '--tbl-dark-slate': '#1e293b',
+  '--tbl-slate-gray': '#475569',
+  '--tbl-deep-blue': '#1d4ed8',
+  '--tbl-electric-blue': '#2563eb',
+  '--tbl-teal': '#0284c7',
+  '--tbl-dark-green': '#15803d',
+  '--tbl-bold-green': '#16a34a',
+  '--tbl-bold-amber': '#d97706',
+  '--tbl-bold-orange': '#ea580c',
+  '--tbl-crimson-red': '#dc2626',
+  '--tbl-deep-red': '#b91c1c',
+  '--tbl-bold-pink': '#e11d48',
+  '--tbl-vibrant-purple': '#9333ea',
+  '--tbl-deep-purple': '#6b21a8',
+  '--tbl-white': '#FFFFFF',
+  '--tbl-gray': '#F1F5F9',
+  '--tbl-blue': '#DBEAFE',
+  '--tbl-cyan': '#A5F3FC',
+  '--tbl-green': '#DCFCE7',
+  '--tbl-lime': '#D9F99D',
+  '--tbl-yellow': '#FEF9C3',
+  '--tbl-orange': '#FED7AA',
+  '--tbl-light-red': '#FEE2E2',
+  '--tbl-purple': '#F3E8FF',
+};
+
+export const inlineTableEmailColors = (html: string): string => {
+  if (!html) return '';
+  let result = html;
+
+  // 1. Replace var(--tbl-*) in styles with exact hex values
+  result = result.replace(/var\((--tbl-[a-z0-9-]+)\)/gi, (match, varName) => {
+    return TABLE_COLORS_MAP[varName.toLowerCase()] || match;
+  });
+
+  // 2. Inline background colors and bgcolor for bg-tbl-* class names
+  for (const [varName, hex] of Object.entries(TABLE_COLORS_MAP)) {
+    const cls = 'bg-' + varName.replace('--', '');
+    const classPattern = new RegExp(`(<(td|th|tr)[^>]*?class="[^"]*?\\b${cls}\\b[^"]*"[^>]*?)>`, 'gi');
+    result = result.replace(classPattern, (match, openTag) => {
+      let updatedTag = openTag;
+      if (!updatedTag.includes('bgcolor=')) {
+        updatedTag += ` bgcolor="${hex}"`;
+      }
+      if (updatedTag.includes('style="')) {
+        return updatedTag.replace('style="', `style="background-color: ${hex} !important; `) + '>';
+      } else {
+        return `${updatedTag} style="background-color: ${hex} !important;">`;
+      }
+    });
+  }
+
+  // 3. For any cell or row with explicit hex background-color, add bgcolor attribute for Outlook desktop support
+  result = result.replace(/<(td|th|tr)([^>]*?style="[^"]*?background-color:\s*(#[0-9a-fA-F]{3,8})[^"]*"[^>]*?)>/gi, (match, tag, rest) => {
+    if (match.includes('bgcolor=')) return match;
+    const hexMatch = match.match(/background-color:\s*(#[0-9a-fA-F]{3,8})/i);
+    if (hexMatch && hexMatch[1]) {
+      return `<${tag}${rest} bgcolor="${hexMatch[1]}">`;
+    }
+    return match;
+  });
+
+  return result;
+};
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Note share email — Wide, edge-to-edge corporate template with Inventech & WorkSphere header
 // ─────────────────────────────────────────────────────────────────────────────
@@ -98,6 +165,8 @@ export const getNoteEmailTemplate = (
   </td>
 </tr>` : '';
 
+  const formattedNoteContent = inlineTableEmailColors(noteContent || '');
+
   const contentBlock = showDescription ? `
 <!-- NOTE CONTENT (EXPANDED WIDTH) -->
 <tr>
@@ -106,7 +175,7 @@ export const getNoteEmailTemplate = (
       <tr>
         <td style="padding:28px 32px;font-family:Arial,sans-serif;font-size:14.5px;color:#1e293b;line-height:1.8;">
           <div class="note-content">
-            ${noteContent || '<p style="color:#94a3b8;font-style:italic;font-family:Arial,sans-serif;font-size:14.5px;">No content provided.</p>'}
+            ${formattedNoteContent || '<p style="color:#94a3b8;font-style:italic;font-family:Arial,sans-serif;font-size:14.5px;">No content provided.</p>'}
           </div>
         </td>
       </tr>
@@ -134,6 +203,59 @@ export const getNoteEmailTemplate = (
 </style>
 <![endif]-->
 <style>
+  :root {
+    --tbl-black: #000000;
+    --tbl-dark-slate: #1e293b;
+    --tbl-slate-gray: #475569;
+    --tbl-deep-blue: #1d4ed8;
+    --tbl-electric-blue: #2563eb;
+    --tbl-teal: #0284c7;
+    --tbl-dark-green: #15803d;
+    --tbl-bold-green: #16a34a;
+    --tbl-bold-amber: #d97706;
+    --tbl-bold-orange: #ea580c;
+    --tbl-crimson-red: #dc2626;
+    --tbl-deep-red: #b91c1c;
+    --tbl-bold-pink: #e11d48;
+    --tbl-vibrant-purple: #9333ea;
+    --tbl-deep-purple: #6b21a8;
+    --tbl-white: #FFFFFF;
+    --tbl-gray: #F1F5F9;
+    --tbl-blue: #DBEAFE;
+    --tbl-cyan: #A5F3FC;
+    --tbl-green: #DCFCE7;
+    --tbl-lime: #D9F99D;
+    --tbl-yellow: #FEF9C3;
+    --tbl-orange: #FED7AA;
+    --tbl-light-red: #FEE2E2;
+    --tbl-purple: #F3E8FF;
+  }
+  .bg-tbl-black { background-color: #000000 !important; }
+  .bg-tbl-dark-slate { background-color: #1e293b !important; }
+  .bg-tbl-slate-gray { background-color: #475569 !important; }
+  .bg-tbl-deep-blue { background-color: #1d4ed8 !important; }
+  .bg-tbl-electric-blue { background-color: #2563eb !important; }
+  .bg-tbl-teal { background-color: #0284c7 !important; }
+  .bg-tbl-dark-green { background-color: #15803d !important; }
+  .bg-tbl-bold-green { background-color: #16a34a !important; }
+  .bg-tbl-bold-amber { background-color: #d97706 !important; }
+  .bg-tbl-bold-orange { background-color: #ea580c !important; }
+  .bg-tbl-crimson-red { background-color: #dc2626 !important; }
+  .bg-tbl-deep-red { background-color: #b91c1c !important; }
+  .bg-tbl-bold-pink { background-color: #e11d48 !important; }
+  .bg-tbl-vibrant-purple { background-color: #9333ea !important; }
+  .bg-tbl-deep-purple { background-color: #6b21a8 !important; }
+  .bg-tbl-white { background-color: #FFFFFF !important; }
+  .bg-tbl-gray { background-color: #F1F5F9 !important; }
+  .bg-tbl-blue { background-color: #DBEAFE !important; }
+  .bg-tbl-cyan { background-color: #A5F3FC !important; }
+  .bg-tbl-green { background-color: #DCFCE7 !important; }
+  .bg-tbl-lime { background-color: #D9F99D !important; }
+  .bg-tbl-yellow { background-color: #FEF9C3 !important; }
+  .bg-tbl-orange { background-color: #FED7AA !important; }
+  .bg-tbl-light-red { background-color: #FEE2E2 !important; }
+  .bg-tbl-purple { background-color: #F3E8FF !important; }
+
   html, body { margin:0 !important; padding:0 !important; width:100% !important; background-color:#ffffff; -webkit-text-size-adjust:100%; -ms-text-size-adjust:100%; }
   table { border-collapse:collapse; mso-table-lspace:0pt; mso-table-rspace:0pt; }
   p { margin:0; padding:0; }
