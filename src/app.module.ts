@@ -10,6 +10,7 @@ import { AuthModule } from './auth/auth.module';
 import { UsersModule } from './users/users.module';
 import { EmployeeTimeSheetModule } from './employeeTimeSheet/employeeTimeSheet.module';
 import { MasterModule } from './master/master.module';
+import { AppraisalModule } from './appraisal/appraisal.module';
 import { ManagerMappingModule } from './managerMapping/managerMapping.module';
 import { ScheduleModule } from '@nestjs/schedule';
 import { TypeOrmModule } from '@nestjs/typeorm';
@@ -60,6 +61,7 @@ function getEnvFiles(): string[] {
     AuthModule,
     EmployeeTimeSheetModule,
     MasterModule,
+    AppraisalModule,
     ManagerMappingModule,
     ScheduleModule.forRoot(),
     TypeOrmModule.forFeature([
