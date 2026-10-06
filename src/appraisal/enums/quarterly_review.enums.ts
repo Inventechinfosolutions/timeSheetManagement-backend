@@ -12,9 +12,13 @@ export enum ReviewAssignedBy {
 }
 
 export enum QuarterlyReviewStatus {
+  NOT_STARTED = 'NOT_STARTED',
+  DRAFT = 'DRAFT',
   PENDING = 'PENDING',
   IN_PROGRESS = 'IN_PROGRESS',
   SUBMITTED = 'SUBMITTED',
+  UNDER_REVIEW = 'UNDER_REVIEW',
+  REVIEWED = 'REVIEWED',
   COMPLETED = 'COMPLETED',
   REJECTED = 'REJECTED',
 }
@@ -54,3 +58,19 @@ export enum AdditionalRemarksEnum {
   SATISFACTORY = 'SATISFACTORY',
   UNSATISFACTORY = 'UNSATISFACTORY',
 }
+
+export enum RatingScaleEnum {
+  UNSATISFACTORY = 1,
+  NEEDS_IMPROVEMENT = 2,
+  MEETS_EXPECTATIONS = 3,
+  EXCEEDS_EXPECTATIONS = 4,
+  OUTSTANDING = 5,
+}
+
+export const RATING_DESCRIPTIONS: Record<number, string> = {
+  1: 'Unsatisfactory',
+  2: 'Needs Improvement',
+  3: 'Meets Expectations',
+  4: 'Exceeds Expectations',
+  5: 'Outstanding',
+};

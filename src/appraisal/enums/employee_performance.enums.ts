@@ -1,7 +1,9 @@
 export enum EmployeePerformanceStatus {
+  NOT_STARTED = 'NOT_STARTED',
   DRAFT = 'DRAFT',
   SUBMITTED = 'SUBMITTED',
   UNDER_REVIEW = 'UNDER_REVIEW',
+  REVIEWED = 'REVIEWED',
   APPROVED = 'APPROVED',
   REJECTED = 'REJECTED',
 }

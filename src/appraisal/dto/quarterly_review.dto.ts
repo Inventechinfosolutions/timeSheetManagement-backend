@@ -5,6 +5,7 @@ import {
   IsDateString,
   IsOptional,
   IsInt,
+  IsNumber,
   Min,
   Max,
 } from 'class-validator';
@@ -14,9 +15,6 @@ import {
   ReviewEmployeeType,
   ReviewAssignedBy,
   QuarterlyReviewStatus,
-  PerformanceStrengthsEnum,
-  AreasOfImprovementEnum,
-  AdditionalRemarksEnum,
   QuaterlyEnum,
 } from '../enums/quarterly_review.enums';
 
@@ -29,14 +27,14 @@ export class CreateQuarterlyReviewDto {
   @IsString()
   employeeId: string;
 
-  @ApiProperty({
+  @ApiPropertyOptional({
     enum: ReviewEmployeeType,
     example: ReviewEmployeeType.EMPLOYEE,
     description: 'Type of employee being reviewed (EMPLOYEE, INTERN, MANAGER)',
   })
-  @IsNotEmpty()
+  @IsOptional()
   @IsEnum(ReviewEmployeeType)
-  employeeType: ReviewEmployeeType;
+  employeeType?: ReviewEmployeeType;
 
   @ApiProperty({
     example: '2025-2026',
@@ -55,147 +53,218 @@ export class CreateQuarterlyReviewDto {
   @IsEnum(QuaterlyEnum)
   quarter: QuaterlyEnum;
 
-  @ApiProperty({
+  @ApiPropertyOptional({
     example: '2025-04-01',
     description: 'Date when the review was assigned (YYYY-MM-DD)',
   })
-  @IsNotEmpty()
+  @IsOptional()
   @IsDateString()
-  assignedDate: string;
-
-  @ApiProperty({
-    example: '2025-04-15',
-    description: 'Deadline date to complete the review (YYYY-MM-DD)',
-  })
-  @IsNotEmpty()
-  @IsDateString()
-  deadlineDate: string;
+  assignedDate?: string;
 
   @ApiPropertyOptional({
-    example: 'Quarterly performance evaluation for Q1',
-    description: 'Optional description or notes for the review',
+    example: '2025-04-30',
+    description: 'Deadline/Due date to complete the review (YYYY-MM-DD)',
+  })
+  @IsOptional()
+  @IsDateString()
+  deadlineDate?: string;
+
+  @ApiPropertyOptional({
+    example: 'Quarterly review cycle for Q1 2025-2026',
+    description: 'Optional description or notes',
   })
   @IsOptional()
   @IsString()
   description?: string;
 
-  @ApiProperty({
+  @ApiPropertyOptional({
     enum: ReviewAssignedBy,
     example: ReviewAssignedBy.MANAGER,
-    description: 'Role of reviewer who assigned (MANAGER, EMPLOYEE, INTERN, ADMIN)',
   })
-  @IsNotEmpty()
+  @IsOptional()
   @IsEnum(ReviewAssignedBy)
-  assignedBy: ReviewAssignedBy;
+  assignedBy?: ReviewAssignedBy;
 
-  @ApiProperty({
+  @ApiPropertyOptional({
     example: 'MGR-005',
-    description: 'ID of the reviewer/manager assigning the review',
+    description: 'Manager ID assigning the review',
   })
-  @IsNotEmpty()
+  @IsOptional()
   @IsString()
-  assignerId: string;
+  assignerId?: string;
 
   @ApiPropertyOptional({
     enum: QuarterlyReviewStatus,
-    example: QuarterlyReviewStatus.PENDING,
-    description: 'Status of the review',
-    default: QuarterlyReviewStatus.PENDING,
+    default: QuarterlyReviewStatus.NOT_STARTED,
   })
   @IsOptional()
   @IsEnum(QuarterlyReviewStatus)
   status?: QuarterlyReviewStatus;
-
-  // Evaluation Metrics (INT, Nullable, 1-10 scale)
-  @ApiPropertyOptional({ example: 8, description: 'Productivity score (1-10)' })
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  @Max(10)
-  productivity?: number;
-
-  @ApiPropertyOptional({ example: 9, description: 'Ownership & Responsibility score (1-10)' })
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  @Max(10)
-  ownershipResponsibility?: number;
-
-  @ApiPropertyOptional({ example: 8, description: 'Team Collaboration score (1-10)' })
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  @Max(10)
-  teamCollaboration?: number;
-
-  @ApiPropertyOptional({ example: 9, description: 'Quality of Work score (1-10)' })
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  @Max(10)
-  qualityOfWork?: number;
-
-  @ApiPropertyOptional({ example: 8, description: 'Communication score (1-10)' })
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  @Max(10)
-  communication?: number;
-
-  @ApiPropertyOptional({ example: 7, description: 'Innovation & Problem Solving score (1-10)' })
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  @Max(10)
-  innovationProblemSolving?: number;
-
-  @ApiPropertyOptional({
-    example: 85,
-    description: 'Overall Performance Index score (e.g. 0-100, or auto-calculated)',
-  })
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(0)
-  @Max(100)
-  performanceIndex?: number;
-
-  // Qualitative Feedback (Enums, Nullable)
-  @ApiPropertyOptional({
-    enum: PerformanceStrengthsEnum,
-    example: PerformanceStrengthsEnum.TECHNICAL_EXCELLENCE,
-    description: 'Performance strength category',
-  })
-  @IsOptional()
-  @IsEnum(PerformanceStrengthsEnum)
-  performanceStrengths?: PerformanceStrengthsEnum;
-
-  @ApiPropertyOptional({
-    enum: AreasOfImprovementEnum,
-    example: AreasOfImprovementEnum.TIME_MANAGEMENT,
-    description: 'Area of improvement category',
-  })
-  @IsOptional()
-  @IsEnum(AreasOfImprovementEnum)
-  areasOfImprovement?: AreasOfImprovementEnum;
-
-  @ApiPropertyOptional({
-    enum: AdditionalRemarksEnum,
-    example: AdditionalRemarksEnum.EXCEEDS_EXPECTATIONS,
-    description: 'Additional qualitative remarks rating',
-  })
-  @IsOptional()
-  @IsEnum(AdditionalRemarksEnum)
-  additionalRemarks?: AdditionalRemarksEnum;
 }
 
-export class UpdateQuarterlyReviewDto extends PartialType(CreateQuarterlyReviewDto) { }
+export class ManagerEvaluationDto {
+  @ApiProperty({
+    example: 'MGR-005',
+    description: 'Manager ID submitting the evaluation',
+  })
+  @IsNotEmpty()
+  @IsString()
+  managerId: string;
+
+  // Evaluation Parameters (1-5 Scale)
+  @ApiProperty({ example: 4, description: 'Productivity rating (1-5)' })
+  @IsNotEmpty()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(1)
+  @Max(5)
+  productivity: number;
+
+  @ApiProperty({ example: 4, description: 'Quality of Work rating (1-5)' })
+  @IsNotEmpty()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(1)
+  @Max(5)
+  qualityOfWork: number;
+
+  @ApiProperty({ example: 5, description: 'Ownership & Responsibility rating (1-5)' })
+  @IsNotEmpty()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(1)
+  @Max(5)
+  ownership: number;
+
+  @ApiProperty({ example: 4, description: 'Communication rating (1-5)' })
+  @IsNotEmpty()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(1)
+  @Max(5)
+  communication: number;
+
+  @ApiProperty({ example: 5, description: 'Team Collaboration rating (1-5)' })
+  @IsNotEmpty()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(1)
+  @Max(5)
+  teamCollaboration: number;
+
+  @ApiProperty({ example: 4, description: 'Innovation & Problem Solving rating (1-5)' })
+  @IsNotEmpty()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(1)
+  @Max(5)
+  innovation: number;
+
+  // FR-05 Text Area Remarks
+  @ApiProperty({
+    example: 'Consistently delivers clean modular code and demonstrates high ownership.',
+    description: 'Performance Strengths (Text Area)',
+  })
+  @IsNotEmpty()
+  @IsString()
+  performanceStrengths: string;
+
+  @ApiProperty({
+    example: 'Could take more initiative in cross-department design syncs.',
+    description: 'Areas of Improvement (Text Area)',
+  })
+  @IsNotEmpty()
+  @IsString()
+  areasOfImprovement: string;
+
+  @ApiPropertyOptional({
+    example: 'Strong performer throughout the quarter. Recommended for leadership training.',
+    description: 'Additional Remarks (Text Area)',
+  })
+  @IsOptional()
+  @IsString()
+  additionalRemarks?: string;
+
+  // Optional Override
+  @ApiPropertyOptional({ example: 5, description: 'Manager override rating (1-5)' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(5)
+  overrideFinalScore?: number;
+
+  @ApiPropertyOptional({
+    example: 'Overridden due to outstanding execution on critical production outage.',
+    description: 'Justification for score override',
+  })
+  @IsOptional()
+  @IsString()
+  overrideJustification?: string;
+}
+
+export class UpdateQuarterlyReviewDto extends PartialType(CreateQuarterlyReviewDto) {
+  @ApiPropertyOptional({ example: 4, description: 'Productivity rating (1-5)' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  productivity?: number;
+
+  @ApiPropertyOptional({ example: 4, description: 'Quality of Work rating (1-5)' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  qualityOfWork?: number;
+
+  @ApiPropertyOptional({ example: 5, description: 'Ownership rating (1-5)' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  ownershipResponsibility?: number;
+
+  @ApiPropertyOptional({ example: 4, description: 'Communication rating (1-5)' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  communication?: number;
+
+  @ApiPropertyOptional({ example: 5, description: 'Team Collaboration rating (1-5)' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  teamCollaboration?: number;
+
+  @ApiPropertyOptional({ example: 4, description: 'Innovation rating (1-5)' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  innovationProblemSolving?: number;
+
+  @ApiPropertyOptional({ description: 'Performance strengths' })
+  @IsOptional()
+  @IsString()
+  performanceStrengths?: string;
+
+  @ApiPropertyOptional({ description: 'Areas of improvement' })
+  @IsOptional()
+  @IsString()
+  areasOfImprovement?: string;
+
+  @ApiPropertyOptional({ description: 'Additional remarks' })
+  @IsOptional()
+  @IsString()
+  additionalRemarks?: string;
+
+  @ApiPropertyOptional({ description: 'Override score' })
+  @IsOptional()
+  @IsInt()
+  overrideFinalScore?: number;
+
+  @ApiPropertyOptional({ description: 'Override justification' })
+  @IsOptional()
+  @IsString()
+  overrideJustification?: string;
+}
 
 export class QueryQuarterlyReviewDto {
   @ApiPropertyOptional({ example: 'EMP-10021', description: 'Filter by employee ID' })
@@ -213,7 +282,7 @@ export class QueryQuarterlyReviewDto {
   @IsString()
   department?: string;
 
-  @ApiPropertyOptional({ example: 'MGR-005', description: 'Filter by assigner ID' })
+  @ApiPropertyOptional({ example: 'MGR-005', description: 'Filter by assigner/manager ID' })
   @IsOptional()
   @IsString()
   assignerId?: string;
@@ -245,7 +314,7 @@ export class QueryQuarterlyReviewDto {
 
   @ApiPropertyOptional({
     example: 'EMP-10021',
-    description: 'Search keyword across employeeId, employee name, department, financialYear, quarter, status, and description',
+    description: 'Search keyword',
   })
   @IsOptional()
   @IsString()
@@ -268,12 +337,35 @@ export class QueryQuarterlyReviewDto {
 
 export class SearchQuarterlyReviewDto extends QueryQuarterlyReviewDto { }
 
-// Aliases matching file naming convention
-export const CreateQuaterlyReviewDto = CreateQuarterlyReviewDto;
-export type CreateQuaterlyReviewDto = CreateQuarterlyReviewDto;
-export const UpdateQuaterlyReviewDto = UpdateQuarterlyReviewDto;
-export type UpdateQuaterlyReviewDto = UpdateQuarterlyReviewDto;
-export const QueryQuaterlyReviewDto = QueryQuarterlyReviewDto;
-export type QueryQuaterlyReviewDto = QueryQuarterlyReviewDto;
-export const SearchQuaterlyReviewDto = SearchQuarterlyReviewDto;
-export type SearchQuaterlyReviewDto = SearchQuarterlyReviewDto;
+export class ExportQuarterlyReviewDto {
+  @ApiPropertyOptional({ enum: QuaterlyEnum })
+  @IsOptional()
+  @IsEnum(QuaterlyEnum)
+  quarter?: QuaterlyEnum;
+
+  @ApiPropertyOptional({ example: '2025-2026' })
+  @IsOptional()
+  @IsString()
+  financialYear?: string;
+
+  @ApiPropertyOptional({ example: 'IT' })
+  @IsOptional()
+  @IsString()
+  department?: string;
+
+  @ApiPropertyOptional({ example: 'MGR-005' })
+  @IsOptional()
+  @IsString()
+  managerId?: string;
+
+  @ApiPropertyOptional({ example: 4 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  rating?: number;
+
+  @ApiPropertyOptional({ enum: QuarterlyReviewStatus })
+  @IsOptional()
+  @IsEnum(QuarterlyReviewStatus)
+  status?: QuarterlyReviewStatus;
+}
