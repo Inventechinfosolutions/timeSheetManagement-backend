@@ -122,6 +122,28 @@ export class LeaveRequestsController {
     }
   }
 
+  @Post(':employeeId/leave-requests/batch-notify')
+  notifyBatch(
+    @Param('employeeId') employeeId: string,
+    @Body() body: { requestIds: number[] },
+  ) {
+    try {
+      this.logger.log(
+        `Batch notification requested for employee: ${employeeId}, count: ${body.requestIds?.length}`,
+      );
+      return this.leaveRequestsService.notifyBatchSubmission(
+        employeeId,
+        body.requestIds,
+      );
+    } catch (error) {
+      this.logger.error(
+        `Error sending batch notification for ${employeeId}: ${error.message}`,
+        error.stack,
+      );
+      throw error;
+    }
+  }
+
   @Post()
   createRoot(@Body() body: LeaveRequestDto) {
     try {
@@ -409,6 +431,66 @@ export class LeaveRequestsController {
       });
     } catch (error) {
       this.logger.error(`Error in bulk reject: ${error.message}`, error.stack);
+      throw error;
+    }
+  }
+
+  @Post('bulk/cancellation')
+  @UseGuards(JwtAuthGuard, ReceptionistReadOnlyGuard)
+  async bulkCancellation(
+    @Body() body: {
+      ids: number[];
+      action: 'approve' | 'reject';
+    },
+    @Req() req: any,
+  ) {
+    try {
+      const { ids, action } = body;
+      const targetStatus = action === 'approve'
+        ? LeaveRequestStatus.CANCELLATION_APPROVED
+        : LeaveRequestStatus.CANCELLATION_REJECTED;
+      this.logger.log(`Bulk ${action} cancellation for ${ids?.length || 0} requests`);
+      const user = req.user;
+      const reviewerName = user?.aliasLoginName || user?.fullName || 'Admin';
+      const reviewerEmail = user?.loginId || user?.email;
+      return await this.leaveRequestsService.bulkUpdateStatus({
+        status: targetStatus,
+        ids,
+        reviewerName,
+        reviewerEmail,
+      });
+    } catch (error) {
+      this.logger.error(`Error in bulk cancellation: ${error.message}`, error.stack);
+      throw error;
+    }
+  }
+
+  @Post('bulk/modification')
+  @UseGuards(JwtAuthGuard, ReceptionistReadOnlyGuard)
+  async bulkModification(
+    @Body() body: {
+      ids: number[];
+      action: 'approve' | 'reject';
+    },
+    @Req() req: any,
+  ) {
+    try {
+      const { ids, action } = body;
+      const targetStatus = action === 'approve'
+        ? LeaveRequestStatus.MODIFICATION_APPROVED
+        : LeaveRequestStatus.MODIFICATION_REJECTED;
+      this.logger.log(`Bulk ${action} modification for ${ids?.length || 0} requests`);
+      const user = req.user;
+      const reviewerName = user?.aliasLoginName || user?.fullName || 'Admin';
+      const reviewerEmail = user?.loginId || user?.email;
+      return await this.leaveRequestsService.bulkUpdateStatus({
+        status: targetStatus,
+        ids,
+        reviewerName,
+        reviewerEmail,
+      });
+    } catch (error) {
+      this.logger.error(`Error in bulk modification: ${error.message}`, error.stack);
       throw error;
     }
   }

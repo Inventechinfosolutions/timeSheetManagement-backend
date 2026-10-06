@@ -51,6 +51,8 @@ import {
   getCancellationRejectionConfirmationTemplate,
   getApprovalConfirmationTemplate,
   getCancellationApprovalConfirmationTemplate,
+  getBatchRequestNotificationTemplate,
+  getBatchEmployeeReceiptTemplate,
 } from '../../common/mail/templates';
 import { ManagerMapping } from '../../managerMapping/entities/managerMapping.entity';
 import { User } from '../../users/entities/user.entity';
@@ -613,16 +615,22 @@ export class LeaveRequestsService {
         );
       }
 
-      await this.notifyManagerOfRequest(savedRequest).catch((e) =>
-        this.logger.error(
-          `[CREATE] notifyManagerOfRequest failed: ${e.message}`,
-        ),
-      );
-      await this.notifyEmployeeOfSubmission(savedRequest).catch((e) =>
-        this.logger.error(
-          `[CREATE] notifyEmployeeOfSubmission failed: ${e.message}`,
-        ),
-      );
+      if (!data.suppressEmail) {
+        await this.notifyManagerOfRequest(savedRequest).catch((e) =>
+          this.logger.error(
+            `[CREATE] notifyManagerOfRequest failed: ${e.message}`,
+          ),
+        );
+        await this.notifyEmployeeOfSubmission(savedRequest).catch((e) =>
+          this.logger.error(
+            `[CREATE] notifyEmployeeOfSubmission failed: ${e.message}`,
+          ),
+        );
+      } else {
+        this.logger.log(
+          `[CREATE] Suppressed individual email notification for request ${savedRequest.id} (part of batch)`,
+        );
+      }
 
       return savedRequest;
     } catch (error) {
@@ -4262,6 +4270,186 @@ export class LeaveRequestsService {
       this.logger.error(
         `[NOTIFY] notifyEmployeeOfSubmission failed: ${error.message}`,
       );
+    }
+  }
+
+  async notifyBatchSubmission(employeeId: string, requestIds: number[]) {
+    if (!requestIds || requestIds.length === 0) return { success: false, message: 'No request IDs provided' };
+    this.logger.log(
+      `[NOTIFY_BATCH] Processing single batch notification for employee ${employeeId}, IDs: ${requestIds.join(', ')}`,
+    );
+    try {
+      const requests = await this.leaveRequestRepository.find({
+        where: { id: In(requestIds) },
+        order: { fromDate: 'ASC' },
+      });
+      if (!requests || requests.length === 0) return { success: false, message: 'Requests not found' };
+
+      const firstReq = requests[0];
+      const employee = await this.employeeDetailsRepository.findOne({
+        where: { employeeId },
+      });
+      const requesterName = employee?.fullName || employeeId;
+
+      // Calculate total duration
+      const totalDuration = requests.reduce(
+        (acc, curr) => acc + (Number(curr.duration) || 0),
+        0,
+      );
+
+      // Build date ranges list
+      const dateRanges = requests.map((req) => ({
+        fromDate: dayjs(req.fromDate).format('DD MMM YYYY'),
+        toDate: dayjs(req.toDate).format('DD MMM YYYY'),
+        duration: Number(req.duration) || 0,
+        requestType: req.requestType,
+        firstHalf: req.firstHalf,
+        secondHalf: req.secondHalf,
+      }));
+
+      // Gather recipients (Manager, HR, Admin, CC)
+      const adminEmail = (
+        process.env.ADMIN_EMAIL || process.env.SMTP_USERNAME
+      )?.trim();
+      const hrEmail = this.getHrEmail();
+      const parsedCc = this._parseCcEmails(firstReq.ccEmails);
+
+      let managerEmail = '';
+      let managerName = 'Manager';
+      let managerLoginId = '';
+
+      const mapping = await this.managerMappingRepository.findOne({
+        where: { employeeId, status: ManagerMappingStatus.ACTIVE },
+      });
+      if (mapping) {
+        const manager = await this.userRepository.findOne({
+          where: { aliasLoginName: mapping.managerName },
+        });
+        if (manager) {
+          const managerDetails =
+            (await this.employeeDetailsRepository.findOne({
+              where: { email: manager.loginId },
+            })) ||
+            (await this.employeeDetailsRepository.findOne({
+              where: { fullName: mapping.managerName },
+            }));
+          managerEmail = managerDetails?.email || manager.loginId;
+          managerName = mapping.managerName;
+          managerLoginId = manager.loginId;
+        }
+      }
+
+      const targets: { email: string; name: string; isManager: boolean }[] = [];
+      if (adminEmail)
+        targets.push({ email: adminEmail, name: 'Admin', isManager: false });
+      if (managerEmail)
+        targets.push({
+          email: managerEmail,
+          name: managerName,
+          isManager: true,
+        });
+      if (hrEmail)
+        targets.push({ email: hrEmail, name: 'HR', isManager: false });
+      parsedCc.forEach((cc) =>
+        targets.push({ email: cc, name: '', isManager: false }),
+      );
+
+      const uniqueTargets: {
+        email: string;
+        name: string;
+        isManager: boolean;
+      }[] = [];
+      const seen = new Set();
+      for (const t of targets) {
+        if (
+          t.email &&
+          t.email.includes('@') &&
+          !seen.has(t.email.toLowerCase())
+        ) {
+          seen.add(t.email.toLowerCase());
+          uniqueTargets.push(t);
+        }
+      }
+
+      // 1. Send Single Manager/HR Notification Email
+      for (const target of uniqueTargets) {
+        const html = getBatchRequestNotificationTemplate({
+          employeeName: requesterName,
+          employeeId,
+          requestType: firstReq.requestType,
+          title: firstReq.title,
+          dateRanges,
+          totalDuration,
+          status: firstReq.status,
+          description: firstReq.description,
+          recipientName: target.name,
+          firstHalf: firstReq.firstHalf,
+          secondHalf: firstReq.secondHalf,
+        });
+
+        await this.emailService
+          .sendEmail(
+            target.email,
+            `New Request: ${firstReq.requestType} - ${requesterName}`,
+            `New request submitted by ${requesterName}`,
+            html,
+          )
+          .catch((e) =>
+            this.logger.error(
+              `[NOTIFY_BATCH] Failed to notify ${target.email}: ${e.message}`,
+            ),
+          );
+
+        if (target.isManager && managerLoginId) {
+          await this.notificationsService
+            .createNotification({
+              employeeId: managerLoginId,
+              title: `New ${firstReq.requestType} Request`,
+              message: `${requesterName} has submitted a new ${firstReq.requestType} titled "${firstReq.title}".`,
+              type: 'alert',
+            })
+            .catch(() => {});
+        }
+      }
+
+      // 2. Send Single Employee Receipt Email
+      if (employee && employee.email) {
+        const empHtml = getBatchEmployeeReceiptTemplate({
+          employeeName: requesterName,
+          requestType: firstReq.requestType,
+          title: firstReq.title,
+          dateRanges,
+          totalDuration,
+          status: firstReq.status,
+          description: firstReq.description,
+          firstHalf: firstReq.firstHalf,
+          secondHalf: firstReq.secondHalf,
+        });
+
+        await this.emailService
+          .sendEmail(
+            employee.email,
+            `Submission Received: ${firstReq.requestType} - ${firstReq.title}`,
+            `Your ${firstReq.requestType} has been submitted.`,
+            empHtml,
+          )
+          .catch((e) =>
+            this.logger.error(
+              `[NOTIFY_BATCH] Failed to send receipt to ${employee.email}: ${e.message}`,
+            ),
+          );
+      }
+
+      this.logger.log(
+        `[NOTIFY_BATCH] Successfully sent single combined email to Manager/HR (${uniqueTargets.length} recipients) and Employee (${employee?.email})`,
+      );
+      return { success: true, count: requests.length };
+    } catch (error) {
+      this.logger.error(
+        `[NOTIFY_BATCH] Failed: ${error.message}`,
+        error.stack,
+      );
+      return { success: false, error: error.message };
     }
   }
 
