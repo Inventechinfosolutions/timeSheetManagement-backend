@@ -70,5 +70,8 @@ export class Note extends BaseEntity {
   @Column({ type: 'int', default: 0 })
   orderIndex: number;
 
+  @Column({ type: 'int', default: 0 })
+  rotation: number;
+
   attachments?: DocumentDetailsDto[];
 }

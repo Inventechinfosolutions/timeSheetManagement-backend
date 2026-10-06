@@ -80,10 +80,7 @@ export class NotesService {
             : ((createDto as any).isAutoSave !== undefined
               ? (createDto as any).isAutoSave
               : true),
-        isVertical:
-          createDto.isVertical !== undefined
-            ? createDto.isVertical
-            : true,
+        rotation: createDto.rotation !== undefined ? Number(createDto.rotation) : 0,
         userId: userInfo.userId,
         employeeId: userInfo.employeeId,
         createdBy: userInfo.createdBy,
@@ -305,6 +302,7 @@ export class NotesService {
       else if (updateDto.isAutoSave !== undefined) note.autoSave = updateDto.isAutoSave;
       if (updateDto.isVertical !== undefined) note.isVertical = updateDto.isVertical;
       if (updateDto.orderIndex !== undefined) note.orderIndex = updateDto.orderIndex;
+      if (updateDto.rotation !== undefined) note.rotation = Number(updateDto.rotation);
 
       note.updatedBy = createdBy;
 
@@ -436,6 +434,7 @@ export class NotesService {
         color: createSubNoteDto.color || parentNote.color || '#4318FF',
         orderIndex:
           createSubNoteDto.orderIndex !== undefined ? createSubNoteDto.orderIndex : count,
+        rotation: createSubNoteDto.rotation !== undefined ? Number(createSubNoteDto.rotation) : 0,
         userId: userInfo.userId,
         employeeId: userInfo.employeeId,
         createdBy: userInfo.createdBy,
@@ -615,7 +614,7 @@ export class NotesService {
   async extractFileContent(
     file: Express.Multer.File,
     options?: { useOcr?: boolean; bodyOnly?: boolean },
-  ): Promise<{ filename: string; html: string; markdown: string; json: any; text: string }> {
+  ): Promise<{ filename: string; html: string; markdown: string; json: any; text: string; rotation?: number; pages?: any[] }> {
     if (!file) {
       throw new BadRequestException('File is required for extraction');
     }
@@ -727,16 +726,40 @@ if (!doclingUrl) {
         },
         maxBodyLength: Infinity,
         maxContentLength: Infinity,
-        timeout: 120000,
+        timeout: 180000,
       });
 
       const html = response.data?.html || '';
+      const extractPages = Array.isArray(response.data?.pages) ? response.data.pages : [];
+      let detectedRotation = 0;
+      const pages = response.data?.json?.pages || {};
+      for (const pageKey of Object.keys(pages)) {
+        const pSize = pages[pageKey]?.size;
+        if (pSize && pSize.width > pSize.height) {
+          detectedRotation = 90;
+          break;
+        }
+      }
+      if (!detectedRotation && response.data?.json?.tables) {
+        for (const t of response.data.json.tables) {
+          if (t.orientation === 'rot_90') {
+            detectedRotation = 90;
+            break;
+          } else if (t.orientation === 'rot_270') {
+            detectedRotation = 270;
+            break;
+          }
+        }
+      }
+
       return {
         filename: response.data?.filename || filename,
         html,
         text: html,
         markdown: response.data?.markdown || '',
         json: response.data?.json || null,
+        pages: extractPages,
+        rotation: detectedRotation,
       };
     } catch (err: any) {
       this.logger.error(`Failed to connect to Docling service at ${doclingUrl}: ${err.message}`);
@@ -797,7 +820,8 @@ if (!doclingUrl) {
         html.push(`<h2 class="section-title">${item.text || item.orig || ''}</h2>`);
       } else if (item.label === 'table') {
         const rows = item.data?.grid || item.data?.rows || [];
-        html.push('<div class="table-container"><table>');
+        const oClass = item.orientation ? ` docling-${item.orientation}` : '';
+        html.push(`<div class=\"table-container${oClass}\"><table>`);
         rows.forEach((row: any[], rIdx: number) => {
           html.push('<tr>');
           row.forEach((cell: any) => {
@@ -810,7 +834,10 @@ if (!doclingUrl) {
         html.push('</table></div>');
       } else {
         const text = (item.text || item.orig || '').trim();
-        if (text) html.push(`<p>${text}</p>`);
+        if (text) {
+          const oClass = item.orientation ? ` class=\"docling-${item.orientation}\"` : '';
+          html.push(`<p${oClass}>${text}</p>`);
+        }
       }
     }
 
