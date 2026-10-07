@@ -258,6 +258,13 @@ export class RespondEditPermissionDto {
   editAllowedUntil?: string;
 }
 
+export class AckEditPopupDto {
+  @ApiProperty({ example: 'EMP-10021' })
+  @IsNotEmpty()
+  @IsString()
+  employeeId: string;
+}
+
 export class QueryEmployeePerformanceDto {
   @ApiPropertyOptional({ example: 'EMP-10021', description: 'Filter by employee ID' })
   @IsOptional()

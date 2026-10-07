@@ -11,6 +11,8 @@ import {
   Logger,
   HttpStatus,
   HttpCode,
+  UseGuards,
+  Req,
 } from '@nestjs/common';
 import {
   ApiTags,
@@ -33,7 +35,10 @@ import {
   ManagerEvaluationDto,
   ExportQuarterlyReviewDto,
 } from '../dto/quarterly_review.dto';
+import { RevealRatingDto } from '../dto/reveal_rating.dto';
 import { QuarterlyReview } from '../entities/quarterly_review.entities';
+import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
+import { User } from '../../users/entities/user.entity';
 
 @ApiTags('Quarterly Review')
 @Controller(['quarterly-review', 'quaterly-review', 'master-quaterly-review'])
@@ -82,6 +87,21 @@ export class QuarterlyReviewController {
     @Query('employeeId') employeeId: string,
   ) {
     return await this.reviewService.getEmployeeView(id, employeeId);
+  }
+
+  @Post(':id/reveal-rating')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Reveal final rating after login password check',
+    description: 'Checks the logged-in user password and returns the final rating for that review.',
+  })
+  async revealRating(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: RevealRatingDto,
+    @Req() req: { user: User },
+  ) {
+    return await this.reviewService.revealRating(id, dto.password, req.user);
   }
 
   /**

@@ -78,6 +78,9 @@ export class EmployeePerformance extends BaseEntity {
   @Column({ type: 'datetime', nullable: true })
   editAllowedUntil: Date | null;
 
+  @Column({ type: 'varchar', name: 'editPopupSeenStatus', length: 50, nullable: true })
+  editPopupSeenStatus: EmployeePerformanceStatus | null;
+
   // --- FRS Stepper 1 & Section A: Key Deliverables ---
   @Column({ type: 'text', nullable: true })
   majorProjects: string;

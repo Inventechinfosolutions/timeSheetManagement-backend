@@ -1,12 +1,4 @@
-export enum EmployeePerformanceStatus {
-  NOT_STARTED = 'NOT_STARTED',
-  DRAFT = 'DRAFT',
-  SUBMITTED = 'SUBMITTED',
-  UNDER_REVIEW = 'UNDER_REVIEW',
-  REVIEWED = 'REVIEWED',
-  APPROVED = 'APPROVED',
-  REJECTED = 'REJECTED',
-}
+export { QuarterlyReviewStatus as EmployeePerformanceStatus } from './quarterly_review.enums';
 
 export enum LearningGoalsEnum {
   UPSKILL_TECHNICAL = 'UPSKILL_TECHNICAL',

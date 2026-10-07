@@ -24,6 +24,16 @@ import {
 import { EmployeePerformanceStatus } from '../enums/employee_performance.enums';
 import { QuarterlyReviewStatus } from '../enums/quarterly_review.enums';
 import { EditRequestStatus } from '../enums/edit_request.enums';
+import { AppraisalNoticeService } from './appraisal_notice.service';
+import { AnnualAppraisalService } from './annual_appraisal.service';
+import {
+  APPRAISAL_EDIT_WINDOW_HOURS,
+  EDIT_NOTICE_STATUSES,
+  EDIT_REQUEST_DEFAULT_REASON,
+  LOCKED_PERFORMANCE_STATUSES,
+  SUBMITTABLE_PERFORMANCE_STATUSES,
+  appraisalWindowMs,
+} from '../constants/appraisal.constants';
 
 export interface EnrichedEmployeePerformance extends EmployeePerformance {
   averageCollaborationScore?: number | null;
@@ -32,6 +42,7 @@ export interface EnrichedEmployeePerformance extends EmployeePerformance {
   designation?: string | null;
   canRequestEdit?: boolean;
   isEditWindowActive?: boolean;
+  showEditPopup?: boolean;
 }
 
 @Injectable()
@@ -47,6 +58,8 @@ export class EmployeePerformanceService {
     private readonly employeeDetailsRepository: Repository<EmployeeDetails>,
     @InjectRepository(ManagerMapping)
     private readonly managerMappingRepository: Repository<ManagerMapping>,
+    private readonly noticeService: AppraisalNoticeService,
+    private readonly annualService: AnnualAppraisalService,
   ) {}
 
   /**
@@ -67,38 +80,28 @@ export class EmployeePerformanceService {
         },
       });
 
+      let nextStatus = EmployeePerformanceStatus.DRAFT;
       if (record) {
-        // Check if edit permission window has expired
-        if (
-          record.editRequestStatus === EditRequestStatus.APPROVED &&
-          record.editAllowedUntil &&
-          new Date().getTime() > new Date(record.editAllowedUntil).getTime()
-        ) {
-          record.status = EmployeePerformanceStatus.SUBMITTED;
-          record.editRequestStatus = EditRequestStatus.NONE;
-          await this.performanceRepository.save(record);
-          throw new BadRequestException(
-            `The edit window granted by your manager expired on ${new Date(record.editAllowedUntil).toLocaleString()}. Editing is locked.`,
-          );
-        }
+        record = await this.lockIfGrantExpired(record);
 
-        if (
-          record.status === EmployeePerformanceStatus.SUBMITTED ||
-          record.status === EmployeePerformanceStatus.REVIEWED
-        ) {
+        if (LOCKED_PERFORMANCE_STATUSES.includes(record.status)) {
           throw new BadRequestException(
-            'This quarterly submission is already submitted and locked. You must request edit permission.',
+            'This quarterly submission is locked. You must request edit permission.',
           );
         }
+        nextStatus =
+          record.status === EmployeePerformanceStatus.EDIT_GRANTED
+            ? EmployeePerformanceStatus.EDIT_GRANTED
+            : EmployeePerformanceStatus.DRAFT;
         Object.assign(record, dto, {
-          status: EmployeePerformanceStatus.DRAFT,
+          status: nextStatus,
           lastModifiedDate: new Date(),
           lastModifiedBy: dto.employeeId,
         });
       } else {
         record = this.performanceRepository.create({
           ...dto,
-          status: EmployeePerformanceStatus.DRAFT,
+          status: nextStatus,
           lastModifiedDate: new Date(),
           lastModifiedBy: dto.employeeId,
         });
@@ -114,10 +117,15 @@ export class EmployeePerformanceService {
           financialYear: dto.financialYear,
         },
       });
-      if (review && review.status === QuarterlyReviewStatus.NOT_STARTED) {
-        review.status = QuarterlyReviewStatus.DRAFT;
+      const protectedReviewStatuses = [
+        QuarterlyReviewStatus.REVIEWED,
+        QuarterlyReviewStatus.COMPLETED,
+      ];
+      if (review && !protectedReviewStatuses.includes(review.status)) {
+        review.status = nextStatus;
         review.performanceId = saved.id;
         await this.reviewRepository.save(review);
+        await this.annualService.syncEmployeeAnnualRating(dto.employeeId, dto.financialYear);
       }
 
       const enriched = await this.enrichPerformancesWithEmployeeDetails([saved]);
@@ -142,7 +150,7 @@ export class EmployeePerformanceService {
         `Submitting review for: ${dto.employeeId}, Quarter: ${dto.quarter}, FY: ${dto.financialYear}`,
       );
 
-      const record = await this.performanceRepository.findOne({
+      let record = await this.performanceRepository.findOne({
         where: {
           employeeId: dto.employeeId,
           quarter: dto.quarter,
@@ -156,11 +164,18 @@ export class EmployeePerformanceService {
         );
       }
 
+      record = await this.lockIfGrantExpired(record);
+
       if (record.status === EmployeePerformanceStatus.SUBMITTED) {
         throw new BadRequestException('This quarterly submission is already submitted.');
       }
       if (record.status === EmployeePerformanceStatus.REVIEWED) {
         throw new BadRequestException('This review has already been evaluated by your manager.');
+      }
+      if (!SUBMITTABLE_PERFORMANCE_STATUSES.includes(record.status)) {
+        throw new BadRequestException(
+          'This quarterly submission is locked. You must request edit permission.',
+        );
       }
 
       // Validate Section requirements
@@ -190,6 +205,9 @@ export class EmployeePerformanceService {
       record.submittedAt = new Date();
       record.lastModifiedDate = new Date();
       record.lastModifiedBy = dto.employeeId;
+      record.editRequestStatus = EditRequestStatus.NONE;
+      record.editAllowedUntil = null;
+      record.editPopupSeenStatus = null;
 
       const saved = await this.performanceRepository.save(record);
 
@@ -232,6 +250,20 @@ export class EmployeePerformanceService {
         await this.reviewRepository.save(review);
       }
 
+      await this.annualService.syncEmployeeAnnualRating(dto.employeeId, dto.financialYear);
+
+      const employee = await this.employeeDetailsRepository.findOne({
+        where: { employeeId: dto.employeeId },
+      });
+      const notice = {
+        employeeId: dto.employeeId,
+        employeeName: employee?.fullName || dto.employeeId,
+        quarter: dto.quarter,
+        financialYear: dto.financialYear,
+      };
+      await this.noticeService.notifyEmployeeOfSubmission(notice);
+      await this.noticeService.notifyManagerOfSubmission(notice);
+
       const enriched = await this.enrichPerformancesWithEmployeeDetails([saved]);
       return enriched[0];
     } catch (error) {
@@ -266,9 +298,8 @@ export class EmployeePerformanceService {
       const submittedAt = record.submittedAt || record.createdAt;
       const now = new Date();
       const diffMs = now.getTime() - new Date(submittedAt).getTime();
-      const oneDayMs = 24 * 60 * 60 * 1000;
 
-      if (diffMs > oneDayMs) {
+      if (diffMs > appraisalWindowMs(APPRAISAL_EDIT_WINDOW_HOURS)) {
         throw new BadRequestException(
           'Edit request window has expired. You can only request edit permission within 1 day (24 hours) of submission.',
         );
@@ -280,12 +311,21 @@ export class EmployeePerformanceService {
         );
       }
 
+      record.status = EmployeePerformanceStatus.EDIT_REQUESTED;
       record.editRequestStatus = EditRequestStatus.PENDING;
       record.editRequestedAt = new Date();
-      record.editRequestReason = dto.reason || 'Edit requested after submission';
+      record.editRequestReason = dto.reason || EDIT_REQUEST_DEFAULT_REASON;
+      record.editPopupSeenStatus = null;
 
       const saved = await this.performanceRepository.save(record);
+      await this.copyStatusToReview(saved.employeeId, saved.quarter, saved.financialYear, saved.status, saved.id);
       const enriched = await this.enrichPerformancesWithEmployeeDetails([saved]);
+      await this.noticeService.notifyManagerOfEditRequest({
+        employeeId: saved.employeeId,
+        employeeName: enriched[0].employeeName || saved.employeeId,
+        quarter: saved.quarter,
+        financialYear: saved.financialYear,
+      });
       return enriched[0];
     } catch (error) {
       this.logger.error(`Error requesting edit permission: ${error.message}`, error.stack);
@@ -318,29 +358,30 @@ export class EmployeePerformanceService {
       record.editRequestStatus = dto.approved ? EditRequestStatus.APPROVED : EditRequestStatus.REJECTED;
       record.editRespondedAt = new Date();
       record.editResponseNote = dto.responseNote || null;
+      record.editPopupSeenStatus = null;
 
-      // If approved, unlock the performance submission back to DRAFT and set allowed until deadline
       if (dto.approved) {
-        record.status = EmployeePerformanceStatus.DRAFT;
+        record.status = EmployeePerformanceStatus.EDIT_GRANTED;
         record.editAllowedUntil = dto.editAllowedUntil
           ? new Date(dto.editAllowedUntil)
-          : new Date(Date.now() + 24 * 60 * 60 * 1000); // Defaults to 24 hours if not specified
-
-        const review = await this.reviewRepository.findOne({
-          where: {
-            employeeId: record.employeeId,
-            quarter: record.quarter,
-            financialYear: record.financialYear,
-          },
-        });
-        if (review) {
-          review.status = QuarterlyReviewStatus.DRAFT;
-          await this.reviewRepository.save(review);
-        }
+          : new Date(Date.now() + appraisalWindowMs(APPRAISAL_EDIT_WINDOW_HOURS));
+      } else {
+        record.status = EmployeePerformanceStatus.SUBMITTED;
+        record.editAllowedUntil = null;
       }
 
       const saved = await this.performanceRepository.save(record);
+      await this.copyStatusToReview(saved.employeeId, saved.quarter, saved.financialYear, saved.status, saved.id);
       const enriched = await this.enrichPerformancesWithEmployeeDetails([saved]);
+      if (dto.approved) {
+        await this.noticeService.notifyEmployeeOfEditGrant({
+          employeeId: saved.employeeId,
+          employeeName: enriched[0].employeeName || saved.employeeId,
+          quarter: saved.quarter,
+          financialYear: saved.financialYear,
+          editAllowedUntil: saved.editAllowedUntil,
+        });
+      }
       return enriched[0];
     } catch (error) {
       this.logger.error(`Error responding to edit request: ${error.message}`, error.stack);
@@ -355,7 +396,11 @@ export class EmployeePerformanceService {
   /**
    * Get all submissions with active edit requests
    */
-  async getEditRequests(managerId?: string, employeeId?: string): Promise<EnrichedEmployeePerformance[]> {
+  async getEditRequests(
+    managerId?: string,
+    employeeId?: string,
+    q?: string,
+  ): Promise<EnrichedEmployeePerformance[]> {
     const qb = this.performanceRepository.createQueryBuilder('ep')
       .where('ep.editRequestStatus != :none', { none: EditRequestStatus.NONE });
 
@@ -372,6 +417,28 @@ export class EmployeePerformanceService {
         qb.andWhere('ep.employeeId IN (:...empIds)', { empIds });
       } else {
         return [];
+      }
+    }
+
+    if (q?.trim()) {
+      const keyword = `%${q.trim()}%`;
+      const matchedEmployees = await this.employeeDetailsRepository
+        .createQueryBuilder('emp')
+        .where('emp.fullName LIKE :keyword OR emp.employeeId LIKE :keyword', { keyword })
+        .select('emp.employeeId', 'employeeId')
+        .getRawMany();
+      const matchedIds = matchedEmployees.map((row) => row.employeeId).filter(Boolean);
+
+      if (matchedIds.length > 0) {
+        qb.andWhere(
+          '(ep.employeeId LIKE :keyword OR ep.employeeId IN (:...matchedIds) OR ep.editRequestReason LIKE :keyword OR ep.financialYear LIKE :keyword)',
+          { keyword, matchedIds },
+        );
+      } else {
+        qb.andWhere(
+          '(ep.employeeId LIKE :keyword OR ep.editRequestReason LIKE :keyword OR ep.financialYear LIKE :keyword)',
+          { keyword },
+        );
       }
     }
 
@@ -524,7 +591,7 @@ export class EmployeePerformanceService {
     id: number,
     updateDto: UpdateEmployeePerformanceDto,
   ): Promise<EnrichedEmployeePerformance> {
-    const record = await this.performanceRepository.findOne({
+    let record = await this.performanceRepository.findOne({
       where: { id },
     });
 
@@ -532,31 +599,17 @@ export class EmployeePerformanceService {
       throw new NotFoundException(`Employee performance record with ID ${id} not found`);
     }
 
-    // Expiry check if edit was previously approved
-    if (
-      record.editRequestStatus === EditRequestStatus.APPROVED &&
-      record.editAllowedUntil &&
-      new Date().getTime() > new Date(record.editAllowedUntil).getTime()
-    ) {
-      record.status = EmployeePerformanceStatus.SUBMITTED;
-      record.editRequestStatus = EditRequestStatus.NONE;
-      await this.performanceRepository.save(record);
-      throw new BadRequestException(
-        `The edit window granted by your manager expired on ${new Date(record.editAllowedUntil).toLocaleString()}. Editing is locked.`,
-      );
-    }
+    record = await this.lockIfGrantExpired(record);
 
-    // Lock check
-    if (
-      record.status === EmployeePerformanceStatus.SUBMITTED ||
-      record.status === EmployeePerformanceStatus.REVIEWED
-    ) {
+    if (LOCKED_PERFORMANCE_STATUSES.includes(record.status)) {
       throw new BadRequestException(
         'Submission is locked. You cannot edit a submitted or reviewed evaluation without manager approval.',
       );
     }
 
-    Object.assign(record, updateDto, {
+    const fields = { ...updateDto };
+    delete fields.status;
+    Object.assign(record, fields, {
       lastModifiedDate: new Date(),
     });
 
@@ -582,6 +635,71 @@ export class EmployeePerformanceService {
       success: true,
       message: `Employee performance record with ID ${id} deleted successfully`,
     };
+  }
+
+  async acknowledgeEditPopup(
+    id: number,
+    employeeId: string,
+  ): Promise<EnrichedEmployeePerformance> {
+    const record = await this.performanceRepository.findOne({
+      where: { id, employeeId },
+    });
+
+    if (!record) {
+      throw new NotFoundException('Performance submission not found.');
+    }
+
+    if (!EDIT_NOTICE_STATUSES.includes(record.status)) {
+      throw new BadRequestException('There is no edit notice to acknowledge.');
+    }
+
+    record.editPopupSeenStatus = record.status;
+    const saved = await this.performanceRepository.save(record);
+    const enriched = await this.enrichPerformancesWithEmployeeDetails([saved]);
+    return enriched[0];
+  }
+
+  private async copyStatusToReview(
+    employeeId: string,
+    quarter: EmployeePerformance['quarter'],
+    financialYear: string,
+    status: EmployeePerformanceStatus,
+    performanceId: number,
+  ): Promise<void> {
+    const review = await this.reviewRepository.findOne({
+      where: { employeeId, quarter, financialYear },
+    });
+    if (!review) {
+      return;
+    }
+    review.status = status;
+    review.performanceId = performanceId;
+    await this.reviewRepository.save(review);
+    await this.annualService.syncEmployeeAnnualRating(employeeId, financialYear);
+  }
+
+  private async lockIfGrantExpired(record: EmployeePerformance): Promise<EmployeePerformance> {
+    const allowedUntil = record.editAllowedUntil;
+    const grantOpen =
+      record.status === EmployeePerformanceStatus.EDIT_GRANTED ||
+      record.editRequestStatus === EditRequestStatus.APPROVED;
+    const expired =
+      !!allowedUntil && Date.now() > new Date(allowedUntil).getTime();
+
+    if (!grantOpen || !expired || !allowedUntil) {
+      return record;
+    }
+
+    const deadline = new Date(allowedUntil).toLocaleString();
+    record.status = EmployeePerformanceStatus.SUBMITTED;
+    record.editRequestStatus = EditRequestStatus.NONE;
+    record.editAllowedUntil = null;
+    record.editPopupSeenStatus = null;
+    await this.performanceRepository.save(record);
+    await this.copyStatusToReview(record.employeeId, record.quarter, record.financialYear, record.status, record.id);
+    throw new BadRequestException(
+      `The edit window granted by your manager expired on ${deadline}. Editing is locked.`,
+    );
   }
 
   /**
@@ -617,24 +735,25 @@ export class EmployeePerformanceService {
     }
 
     const now = new Date();
-    const oneDayMs = 24 * 60 * 60 * 1000;
+    const requestWindowMs = appraisalWindowMs(APPRAISAL_EDIT_WINDOW_HOURS);
 
     return records.map((r) => {
       const empInfo = employeeMap.get(r.employeeId);
 
-      // Check if employee is eligible to request edit within 1 day
       let canRequestEdit = false;
       if (r.status === EmployeePerformanceStatus.SUBMITTED && r.submittedAt) {
         const diffMs = now.getTime() - new Date(r.submittedAt).getTime();
-        canRequestEdit = diffMs <= oneDayMs;
+        canRequestEdit = diffMs <= requestWindowMs;
       }
 
-      // Check if granted edit window is currently active
       const isEditWindowActive = !!(
-        r.editRequestStatus === EditRequestStatus.APPROVED &&
+        r.status === EmployeePerformanceStatus.EDIT_GRANTED &&
         r.editAllowedUntil &&
         now.getTime() <= new Date(r.editAllowedUntil).getTime()
       );
+
+      const showEditPopup =
+        EDIT_NOTICE_STATUSES.includes(r.status) && r.editPopupSeenStatus !== r.status;
 
       return {
         ...r,
@@ -643,6 +762,7 @@ export class EmployeePerformanceService {
         designation: empInfo?.designation || null,
         canRequestEdit,
         isEditWindowActive,
+        showEditPopup,
       };
     });
   }

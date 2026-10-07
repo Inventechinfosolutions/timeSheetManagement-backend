@@ -77,17 +77,20 @@ export class ManagerMappingController {
     @Query('search') search?: string,
     @Query('status') status?: string,
     @Query('managerName') managerName?: string,
+    @Query('managerId') managerId?: string,
+    @Query('paginate') paginate?: string,
   ): Promise<Pagination<ManagerMappingDTO>> {
     try {
-      this.logger.log(`Fetching all manager mappings - Page: ${page}, Limit: ${limit}`);
+      const usePagination = paginate !== 'false';
+      this.logger.log(`Fetching all manager mappings - Page: ${page}, Limit: ${limit}, Paginate: ${usePagination}`);
       const pageNumber = page ? parseInt(page, 10) : 1;
       const limitNumber = limit ? parseInt(limit, 10) : 10;
 
       // Validate page and limit are positive numbers
-      if (isNaN(pageNumber) || pageNumber < 1) {
+      if (usePagination && (isNaN(pageNumber) || pageNumber < 1)) {
         throw new HttpException('Page must be a positive number', HttpStatus.BAD_REQUEST);
       }
-      if (isNaN(limitNumber) || limitNumber < 1) {
+      if (usePagination && (isNaN(limitNumber) || limitNumber < 1)) {
         throw new HttpException('Limit must be a positive number', HttpStatus.BAD_REQUEST);
       }
 
@@ -111,7 +114,15 @@ export class ManagerMappingController {
         }
       }
 
-      return await this.managerMappingService.findAll(options, validSortOrder, search, statusEnum, managerName);
+      const managerFilter = managerId?.trim() || managerName;
+      return await this.managerMappingService.findAll(
+        options,
+        validSortOrder,
+        search,
+        statusEnum,
+        managerFilter,
+        usePagination,
+      );
     } catch (error) {
       this.logger.error(`Error fetching manager mappings: ${error.message}`, error.stack);
       if (error instanceof HttpException) {

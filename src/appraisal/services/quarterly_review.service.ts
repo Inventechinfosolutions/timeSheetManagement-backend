@@ -25,8 +25,24 @@ import {
   RATING_DESCRIPTIONS,
   ReviewEmployeeType,
   ReviewAssignedBy,
+  RatingVisibilityStatus,
+  QuaterlyEnum,
 } from '../enums/quarterly_review.enums';
 import { EmployeePerformanceStatus } from '../enums/employee_performance.enums';
+import { EditRequestStatus } from '../enums/edit_request.enums';
+import { AnnualAppraisalService } from './annual_appraisal.service';
+import { AppraisalNoticeService } from './appraisal_notice.service';
+import {
+  duplicateAssignmentMessage,
+  EMPLOYEE_NOT_FOUND_MESSAGE,
+  PASSWORD_MISMATCH_MESSAGE,
+  QUARTER_WINDOW_UNAVAILABLE_MESSAGE,
+  RATING_NOT_READY_MESSAGE,
+  quarterNotAssignableMessage,
+} from '../constants/appraisal.constants';
+import { MasterFinancialYearService } from '../../master/service/master-financialyear.service';
+import { UsersService } from '../../users/service/user.service';
+import { User } from '../../users/entities/user.entity';
 
 export interface EnrichedQuarterlyReview extends QuarterlyReview {
   performanceDetails?: EmployeePerformance | null;
@@ -46,7 +62,70 @@ export class QuarterlyReviewService {
     private readonly employeeDetailsRepository: Repository<EmployeeDetails>,
     @InjectRepository(ManagerMapping)
     private readonly managerMappingRepository: Repository<ManagerMapping>,
+    private readonly annualService: AnnualAppraisalService,
+    private readonly noticeService: AppraisalNoticeService,
+    private readonly usersService: UsersService,
+    private readonly financialYearService: MasterFinancialYearService,
   ) {}
+
+  private toReviewQuarter(quarter: string): QuaterlyEnum {
+    switch (quarter) {
+      case QuaterlyEnum.Q1:
+        return QuaterlyEnum.Q1;
+      case QuaterlyEnum.Q2:
+        return QuaterlyEnum.Q2;
+      case QuaterlyEnum.Q3:
+        return QuaterlyEnum.Q3;
+      case QuaterlyEnum.Q4:
+        return QuaterlyEnum.Q4;
+      default:
+        throw new BadRequestException(QUARTER_WINDOW_UNAVAILABLE_MESSAGE);
+    }
+  }
+
+  private todayDate(): string {
+    const now = new Date();
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const day = String(now.getDate()).padStart(2, '0');
+    return `${now.getFullYear()}-${month}-${day}`;
+  }
+
+  /**
+   * Assignment is limited to the quarter that contains today and the quarter immediately before it.
+   * A later quarter is rejected before a row, notice, or mail is created.
+   */
+  private async assertAssignableQuarter(quarter: QuaterlyEnum, financialYear: string): Promise<void> {
+    const years = await this.financialYearService.findAll();
+    const slots = years
+      .flatMap((year) =>
+        year.quarters.map((item) => ({
+          financialYear: year.financialYear,
+          quarter: this.toReviewQuarter(item.quarter),
+          startDate: item.startDate,
+          endDate: item.endDate,
+        })),
+      )
+      .sort((left, right) => left.startDate.localeCompare(right.startDate));
+
+    const today = this.todayDate();
+    const currentIndex = slots.findIndex((slot) => slot.startDate <= today && today <= slot.endDate);
+    const allowed =
+      currentIndex < 0
+        ? []
+        : currentIndex > 0
+          ? [slots[currentIndex - 1], slots[currentIndex]]
+          : [slots[currentIndex]];
+
+    if (allowed.length === 0) {
+      throw new BadRequestException(QUARTER_WINDOW_UNAVAILABLE_MESSAGE);
+    }
+
+    const match = allowed.some((slot) => slot.financialYear === financialYear && slot.quarter === quarter);
+    if (!match) {
+      const labels = allowed.map((slot) => `${slot.quarter} ${slot.financialYear}`).join(' or ');
+      throw new BadRequestException(quarterNotAssignableMessage(labels));
+    }
+  }
 
   /**
    * FR-02: Create Quarterly Review cycle (Manager / Admin assigns)
@@ -58,25 +137,29 @@ export class QuarterlyReviewService {
         `Creating review for employee: ${createDto.employeeId}, Quarter: ${createDto.quarter}, FY: ${createDto.financialYear}`,
       );
 
-      // Check for duplicate submission/review for this quarter
-      const existing = await this.reviewRepository.findOne({
-        where: {
-          employeeId: createDto.employeeId,
-          quarter: createDto.quarter,
-          financialYear: createDto.financialYear,
-        },
-      });
-
-      if (existing) {
-        throw new BadRequestException(
-          `A quarterly review for employee ${createDto.employeeId} for quarter ${createDto.quarter} (${createDto.financialYear}) already exists.`,
-        );
-      }
-
-      // Auto-populate employee details
       const emp = await this.employeeDetailsRepository.findOne({
         where: { employeeId: createDto.employeeId },
       });
+      if (!emp) {
+        throw new BadRequestException(EMPLOYEE_NOT_FOUND_MESSAGE);
+      }
+
+      await this.assertAssignableQuarter(createDto.quarter, createDto.financialYear);
+
+      const employeeId = createDto.employeeId.trim();
+      const financialYear = createDto.financialYear.trim();
+      const existing = await this.reviewRepository
+        .createQueryBuilder('review')
+        .where('review.employeeId = :employeeId', { employeeId })
+        .andWhere('review.quarter = :quarter', { quarter: createDto.quarter })
+        .andWhere('TRIM(review.financialYear) = :financialYear', { financialYear })
+        .getOne();
+
+      if (existing) {
+        throw new BadRequestException(
+          duplicateAssignmentMessage(employeeId, createDto.quarter, financialYear),
+        );
+      }
 
       // Auto-populate reporting manager if not supplied
       const mapping = await this.managerMappingRepository.findOne({
@@ -87,8 +170,8 @@ export class QuarterlyReviewService {
       const managerName = mapping?.managerName || 'Reporting Manager';
 
       const review = this.reviewRepository.create({
-        employeeId: createDto.employeeId,
-        financialYear: createDto.financialYear,
+        employeeId,
+        financialYear,
         quarter: createDto.quarter,
         employeeType: createDto.employeeType || ReviewEmployeeType.EMPLOYEE,
         description: createDto.description || null,
@@ -104,13 +187,40 @@ export class QuarterlyReviewService {
       });
 
       const saved = await this.reviewRepository.save(review);
+      const performance = await this.ensureAssignedPerformance(
+        saved.employeeId,
+        saved.quarter,
+        saved.financialYear,
+      );
+      saved.performanceId = performance.id;
+      await this.reviewRepository.save(saved);
+      await this.annualService.syncEmployeeAnnualRating(saved.employeeId, saved.financialYear);
+      await this.noticeService.notifyEmployeeOfAssignment({
+        employeeId: saved.employeeId,
+        employeeName: saved.employeeName || saved.employeeId,
+        quarter: saved.quarter,
+        financialYear: saved.financialYear,
+        deadlineDate: saved.deadlineDate,
+      });
       const enrichedList = await this.enrichReviewsWithDetails([saved]);
       return enrichedList[0];
     } catch (error) {
-      this.logger.error(`Error creating quarterly review: ${error.message}`, error.stack);
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      const stack = error instanceof Error ? error.stack : undefined;
+      this.logger.error(`Error creating quarterly review: ${message}`, stack);
       if (error instanceof HttpException) throw error;
+      const driverError = error as { code?: string; errno?: number };
+      if (driverError.code === 'ER_DUP_ENTRY' || driverError.errno === 1062) {
+        throw new BadRequestException(
+          duplicateAssignmentMessage(
+            createDto.employeeId.trim(),
+            createDto.quarter,
+            createDto.financialYear.trim(),
+          ),
+        );
+      }
       throw new HttpException(
-        `Failed to create review: ${error.message}`,
+        `Failed to create review: ${message}`,
         HttpStatus.INTERNAL_SERVER_ERROR,
       );
     }
@@ -185,17 +295,34 @@ export class QuarterlyReviewService {
         },
       });
       if (perf) {
-        perf.status = EmployeePerformanceStatus.REVIEWED;
+        perf.status = saved.status;
         await this.performanceRepository.save(perf);
       }
+
+      // Auto-sync employee annual appraisal summary
+      try {
+        await this.annualService.syncEmployeeAnnualRating(saved.employeeId, saved.financialYear);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        this.logger.warn(`Could not auto-sync annual appraisal: ${message}`);
+      }
+
+      await this.noticeService.notifyEmployeeReviewCompleted({
+        employeeId: saved.employeeId,
+        employeeName: saved.employeeName || saved.employeeId,
+        quarter: saved.quarter,
+        financialYear: saved.financialYear,
+      });
 
       const enrichedList = await this.enrichReviewsWithDetails([saved]);
       return enrichedList[0];
     } catch (error) {
-      this.logger.error(`Error evaluating review: ${error.message}`, error.stack);
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      const stack = error instanceof Error ? error.stack : undefined;
+      this.logger.error(`Error evaluating review: ${message}`, stack);
       if (error instanceof HttpException) throw error;
       throw new HttpException(
-        `Failed to submit evaluation: ${error.message}`,
+        `Failed to submit evaluation: ${message}`,
         HttpStatus.INTERNAL_SERVER_ERROR,
       );
     }
@@ -206,17 +333,17 @@ export class QuarterlyReviewService {
    * Returns current quarter, submission status, due date, submitted date, and final rating (if reviewed).
    */
   async getEmployeeDashboard(employeeId: string): Promise<{
-    currentQuarter: string;
+    currentQuarter: QuaterlyEnum;
     reviews: Array<{
       id: number;
-      quarter: string;
+      quarter: QuaterlyEnum;
       financialYear: string;
-      submissionStatus: string;
+      managerName: string | null;
+      assignedDate: Date | null;
+      submissionStatus: QuarterlyReviewStatus;
       dueDate: Date | null;
       submittedDate: Date | null;
-      ratingStatus: string;
-      finalRating: number | null;
-      ratingDescription: string | null;
+      ratingStatus: RatingVisibilityStatus;
       reviewedDate: Date | null;
       isOverdue: boolean;
     }>;
@@ -242,20 +369,19 @@ export class QuarterlyReviewService {
         id: r.id,
         quarter: r.quarter,
         financialYear: r.financialYear,
+        managerName: r.managerName || r.assignerId,
+        assignedDate: r.assignedDate,
         submissionStatus: r.status,
         dueDate: r.deadlineDate,
         submittedDate: r.submittedDate,
-        ratingStatus: isReviewed ? 'Rated' : 'Pending Review',
-        // FR-08: Only reveal rating if reviewed
-        finalRating: isReviewed ? r.finalRating : null,
-        ratingDescription: isReviewed ? r.ratingDescription : null,
+        ratingStatus: isReviewed ? RatingVisibilityStatus.RATED : RatingVisibilityStatus.PENDING_REVIEW,
         reviewedDate: r.reviewedDate,
         isOverdue: !!isOverdue,
       };
     });
 
     return {
-      currentQuarter: reviews[0]?.quarter || 'Q1',
+      currentQuarter: reviews[0]?.quarter || QuaterlyEnum.Q1,
       reviews: formattedReviews,
     };
   }
@@ -347,8 +473,6 @@ export class QuarterlyReviewService {
       throw new NotFoundException(`Review with ID ${id} not found for this employee.`);
     }
 
-    const isReviewed = review.status === QuarterlyReviewStatus.REVIEWED;
-
     return {
       id: review.id,
       employeeId: review.employeeId,
@@ -362,20 +486,61 @@ export class QuarterlyReviewService {
       deadlineDate: review.deadlineDate,
       submittedDate: review.submittedDate,
       reviewedDate: review.reviewedDate,
-      finalRating: isReviewed ? review.finalRating : null,
-      ratingDescription: isReviewed ? review.ratingDescription : null,
-      // Hidden from employee:
-      performanceStrengths: undefined,
-      areasOfImprovement: undefined,
-      additionalRemarks: undefined,
-      productivity: undefined,
-      qualityOfWork: undefined,
-      ownershipResponsibility: undefined,
-      communication: undefined,
-      teamCollaboration: undefined,
-      innovationProblemSolving: undefined,
-      overrideJustification: undefined,
     };
+  }
+
+  async revealRating(id: number, password: string, user: User) {
+    const account = user?.loginId
+      ? await this.usersService.findByLoginId(user.loginId)
+      : null;
+
+    if (!account?.password) {
+      throw new BadRequestException(PASSWORD_MISMATCH_MESSAGE);
+    }
+
+    const passwordMatches = await this.usersService.comparePassword(password, account.password);
+    if (!passwordMatches) {
+      throw new BadRequestException(PASSWORD_MISMATCH_MESSAGE);
+    }
+
+    const employeeId = await this.resolveSessionEmployeeId(account.loginId);
+    const review = await this.reviewRepository.findOne({
+      where: { id, employeeId },
+    });
+
+    if (!review) {
+      throw new NotFoundException(`Review with ID ${id} not found for this employee.`);
+    }
+
+    if (review.status !== QuarterlyReviewStatus.REVIEWED || review.finalRating == null) {
+      throw new BadRequestException(RATING_NOT_READY_MESSAGE);
+    }
+
+    return {
+      quarter: review.quarter,
+      financialYear: review.financialYear,
+      finalRating: review.finalRating,
+      ratingDescription: review.ratingDescription,
+      reviewedDate: review.reviewedDate,
+    };
+  }
+
+  private async resolveSessionEmployeeId(loginId: string): Promise<string> {
+    const byEmployeeId = await this.employeeDetailsRepository.findOne({
+      where: { employeeId: loginId },
+    });
+    if (byEmployeeId) {
+      return byEmployeeId.employeeId;
+    }
+
+    const byEmail = await this.employeeDetailsRepository.findOne({
+      where: { email: loginId },
+    });
+    if (byEmail) {
+      return byEmail.employeeId;
+    }
+
+    return loginId;
   }
 
   /**
@@ -544,10 +709,12 @@ export class QuarterlyReviewService {
         limit: params?.limit,
       };
     } catch (error) {
-      this.logger.error(`Error in getByParams: ${error.message}`, error.stack);
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      const stack = error instanceof Error ? error.stack : undefined;
+      this.logger.error(`Error in getByParams: ${message}`, stack);
       if (error instanceof HttpException) throw error;
       throw new HttpException(
-        `Failed to fetch reviews: ${error.message}`,
+        `Failed to fetch reviews: ${message}`,
         HttpStatus.INTERNAL_SERVER_ERROR,
       );
     }
@@ -598,6 +765,9 @@ export class QuarterlyReviewService {
 
     Object.assign(review, updateDto);
     const updated = await this.reviewRepository.save(review);
+    if (updateDto.status) {
+      await this.copyStatusToPerformance(updated.employeeId, updated.quarter, updated.financialYear, updated.status);
+    }
     const enrichedList = await this.enrichReviewsWithDetails([updated]);
     return enrichedList[0];
   }
@@ -619,6 +789,44 @@ export class QuarterlyReviewService {
       success: true,
       message: `Quarterly review with ID ${id} deleted successfully`,
     };
+  }
+
+  private async copyStatusToPerformance(
+    employeeId: string,
+    quarter: QuaterlyEnum,
+    financialYear: string,
+    status: QuarterlyReviewStatus,
+  ): Promise<void> {
+    const performance = await this.performanceRepository.findOne({
+      where: { employeeId, quarter, financialYear },
+    });
+    if (performance) {
+      performance.status = status;
+      await this.performanceRepository.save(performance);
+    }
+    await this.annualService.syncEmployeeAnnualRating(employeeId, financialYear);
+  }
+
+  private async ensureAssignedPerformance(
+    employeeId: string,
+    quarter: QuaterlyEnum,
+    financialYear: string,
+  ): Promise<EmployeePerformance> {
+    const existing = await this.performanceRepository.findOne({
+      where: { employeeId, quarter, financialYear },
+    });
+    if (existing) {
+      return existing;
+    }
+    return await this.performanceRepository.save(
+      this.performanceRepository.create({
+        employeeId,
+        quarter,
+        financialYear,
+        status: EmployeePerformanceStatus.NOT_STARTED,
+        editRequestStatus: EditRequestStatus.NONE,
+      }),
+    );
   }
 
   /**
@@ -656,7 +864,7 @@ export class QuarterlyReviewService {
 
       return {
         ...r,
-        performanceDetails: perf,
+        performanceDetails: perf ? { ...perf, status: r.status } : null,
         isOverdue: !!isOverdue,
       };
     });

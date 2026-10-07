@@ -109,7 +109,7 @@ export class ManagerEvaluationDto {
   })
   @IsNotEmpty()
   @IsString()
-  managerId: string;
+  managerId!: string;
 
   // Evaluation Parameters (1-5 Scale)
   @ApiProperty({ example: 4, description: 'Productivity rating (1-5)' })
@@ -118,7 +118,7 @@ export class ManagerEvaluationDto {
   @IsNumber()
   @Min(1)
   @Max(5)
-  productivity: number;
+  productivity!: number;
 
   @ApiProperty({ example: 4, description: 'Quality of Work rating (1-5)' })
   @IsNotEmpty()
@@ -126,7 +126,7 @@ export class ManagerEvaluationDto {
   @IsNumber()
   @Min(1)
   @Max(5)
-  qualityOfWork: number;
+  qualityOfWork!: number;
 
   @ApiProperty({ example: 5, description: 'Ownership & Responsibility rating (1-5)' })
   @IsNotEmpty()
@@ -134,7 +134,7 @@ export class ManagerEvaluationDto {
   @IsNumber()
   @Min(1)
   @Max(5)
-  ownership: number;
+  ownership!: number;
 
   @ApiProperty({ example: 4, description: 'Communication rating (1-5)' })
   @IsNotEmpty()
@@ -142,7 +142,7 @@ export class ManagerEvaluationDto {
   @IsNumber()
   @Min(1)
   @Max(5)
-  communication: number;
+  communication!: number;
 
   @ApiProperty({ example: 5, description: 'Team Collaboration rating (1-5)' })
   @IsNotEmpty()
@@ -150,7 +150,7 @@ export class ManagerEvaluationDto {
   @IsNumber()
   @Min(1)
   @Max(5)
-  teamCollaboration: number;
+  teamCollaboration!: number;
 
   @ApiProperty({ example: 4, description: 'Innovation & Problem Solving rating (1-5)' })
   @IsNotEmpty()
@@ -158,7 +158,7 @@ export class ManagerEvaluationDto {
   @IsNumber()
   @Min(1)
   @Max(5)
-  innovation: number;
+  innovation!: number;
 
   // FR-05 Text Area Remarks
   @ApiProperty({
@@ -167,7 +167,7 @@ export class ManagerEvaluationDto {
   })
   @IsNotEmpty()
   @IsString()
-  performanceStrengths: string;
+  performanceStrengths!: string;
 
   @ApiProperty({
     example: 'Could take more initiative in cross-department design syncs.',
@@ -175,7 +175,7 @@ export class ManagerEvaluationDto {
   })
   @IsNotEmpty()
   @IsString()
-  areasOfImprovement: string;
+  areasOfImprovement!: string;
 
   @ApiPropertyOptional({
     example: 'Strong performer throughout the quarter. Recommended for leadership training.',
