@@ -78,8 +78,6 @@ export class NotesController {
     const file = files[0];
     const useOcr = body?.useOcr === 'true' || body?.useOcr === true;
     const bodyOnly = body?.bodyOnly !== 'false' && body?.bodyOnly !== false;
-    const requestedRotation =
-      body?.rotation !== undefined && body?.rotation !== '' ? Number(body.rotation) : undefined;
 
     const result = await this.notesService.extractFileContent(file, { useOcr, bodyOnly });
     return {
@@ -90,10 +88,6 @@ export class NotesController {
       json: result.json || null,
       extractedText: result.html || result.text || '',
       pages: (result as any).pages || [],
-      rotation:
-        requestedRotation !== undefined && !Number.isNaN(requestedRotation)
-          ? requestedRotation
-          : (result as any).rotation || 0,
     };
   }
 
@@ -215,7 +209,6 @@ export class NotesController {
       color: body.color,
       isPinned: body.isPinned === 'true' || body.isPinned === true,
       autoSave: body.autoSave === 'true' || body.autoSave === true || body.isAutoSave === 'true' || body.isAutoSave === true,
-      rotation: body.rotation !== undefined && body.rotation !== '' ? Number(body.rotation) : 0,
       subNotes,
       attachmentKeys: Array.isArray(attachmentKeys) ? attachmentKeys : undefined,
     };
@@ -331,7 +324,6 @@ export class NotesController {
       description: body.description,
       orderIndex: body.orderIndex !== undefined && body.orderIndex !== '' ? Number(body.orderIndex) : undefined,
       color: body.color,
-      rotation: body.rotation !== undefined && body.rotation !== '' ? Number(body.rotation) : 0,
       attachmentKeys: Array.isArray(attachmentKeys) ? attachmentKeys : undefined,
     };
 
