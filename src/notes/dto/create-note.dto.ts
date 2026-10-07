@@ -45,11 +45,6 @@ export class CreateNoteDto {
   @IsBoolean()
   autoSave?: boolean;
 
-  @ApiPropertyOptional({ description: 'Page rotation in degrees (0, 90, 180, 270)', default: 0 })
-  @IsOptional()
-  @IsNumber()
-  rotation?: number;
-
   @ApiPropertyOptional({ type: [CreateSubNoteDto], description: 'Sub-notes batch' })
   @IsOptional()
   @IsArray()

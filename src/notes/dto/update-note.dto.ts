@@ -58,11 +58,6 @@ export class UpdateNoteDto {
   @IsNumber()
   orderIndex?: number;
 
-  @ApiPropertyOptional({ description: 'Page rotation in degrees (0, 90, 180, 270)' })
-  @IsOptional()
-  @IsNumber()
-  rotation?: number;
-
   @ApiPropertyOptional({
     description: 'Access permission granted to recipient (CanView or CanEdit)',
     enum: NotePermission,
