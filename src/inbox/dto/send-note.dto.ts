@@ -75,5 +75,19 @@ export class SendNoteDto {
   @ApiPropertyOptional({ description: 'Alternative alias for hasDescription', default: true })
   @IsOptional()
   includeDescription?: boolean;
+
+  @ApiPropertyOptional({
+    description: 'Deliver into Worksphere Inbox (application). Defaults to true when omitted.',
+    default: true,
+  })
+  @IsOptional()
+  sendToInbox?: boolean;
+
+  @ApiPropertyOptional({
+    description: 'Also send an email notification. Defaults to true when omitted.',
+    default: true,
+  })
+  @IsOptional()
+  sendToEmail?: boolean;
 }
 

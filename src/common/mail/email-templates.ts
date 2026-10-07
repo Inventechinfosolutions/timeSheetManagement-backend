@@ -55,9 +55,18 @@ const TABLE_COLORS_MAP: Record<string, string> = {
   '--tbl-purple': '#F3E8FF',
 };
 
+/** Drop edit-only attach controls; keep file badges so View/email still show row files */
+export const stripAttachmentUiFromHtml = (html: string): string => {
+  if (!html) return '';
+  return html
+    .replace(/<button[^>]*class="[^"]*row-attach-(?:upload|add)-btn[^"]*"[^>]*>[\s\S]*?<\/button>/gi, '')
+    .replace(/<span[^>]*class="[^"]*row-attach-loading[^"]*"[^>]*>[\s\S]*?<\/span>/gi, '')
+    .replace(/<button[^>]*class="[^"]*table-file-btn remove[^"]*"[^>]*>[\s\S]*?<\/button>/gi, '');
+};
+
 export const inlineTableEmailColors = (html: string): string => {
   if (!html) return '';
-  let result = html;
+  let result = stripAttachmentUiFromHtml(html);
 
   // 1. Replace var(--tbl-*) in styles with exact hex values
   result = result.replace(/var\((--tbl-[a-z0-9-]+)\)/gi, (match, varName) => {

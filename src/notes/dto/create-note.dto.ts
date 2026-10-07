@@ -45,6 +45,14 @@ export class CreateNoteDto {
   @IsBoolean()
   autoSave?: boolean;
 
+  @ApiPropertyOptional({
+    description: 'true = Portrait (vertical page), false = Landscape (wide page)',
+    default: true,
+  })
+  @IsOptional()
+  @IsBoolean()
+  isVertical?: boolean;
+
   @ApiPropertyOptional({ type: [CreateSubNoteDto], description: 'Sub-notes batch' })
   @IsOptional()
   @IsArray()
