@@ -18,6 +18,10 @@ export class CreateSubNoteDto {
   color?: string;
 
   @IsOptional()
+  @IsNumber()
+  rotation?: number;
+
+  @IsOptional()
   @IsArray()
   attachmentKeys?: string[];
 }
