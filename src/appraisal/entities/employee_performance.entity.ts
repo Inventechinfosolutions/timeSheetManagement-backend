@@ -3,10 +3,6 @@ import { BaseEntity } from '../../common/core/models/base.entity';
 import { QuaterlyEnum } from '../enums/quarterly_review.enums';
 import {
   EmployeePerformanceStatus,
-  LearningGoalsEnum,
-  FeedbackOnWorkCultureEnum,
-  WorkLifeBalanceEnum,
-  SuggestionsForImprovementEnum,
   RateCompanyEnvironmentEnum,
 } from '../enums/employee_performance.enums';
 import { EditRequestStatus } from '../enums/edit_request.enums';
@@ -16,6 +12,20 @@ export interface PerformanceAttachment {
   fileUrl: string;
   fileSize: number;
   fileType: string;
+  objectKey: string;
+}
+
+export interface PerformanceProject {
+  title: string;
+  description: string;
+  challenge: string;
+  attachments?: Array<{
+    fileName: string;
+    fileUrl?: string;
+    fileSize?: number;
+    fileType?: string;
+    objectKey: string;
+  }>;
 }
 
 @Entity('employee_performance')
@@ -83,9 +93,6 @@ export class EmployeePerformance extends BaseEntity {
 
   // --- FRS Stepper 1 & Section A: Key Deliverables ---
   @Column({ type: 'text', nullable: true })
-  majorProjects: string;
-
-  @Column({ type: 'text', nullable: true })
   responsibilitiesHandled: string;
 
   @Column({ type: 'text', nullable: true })
@@ -98,9 +105,6 @@ export class EmployeePerformance extends BaseEntity {
   // --- FRS Stepper 3 & Section C: Challenges ---
   @Column({ type: 'text', nullable: true })
   challengesFaced: string;
-
-  @Column({ type: 'text', nullable: true })
-  riskMitigationSteps: string;
 
   // --- FRS Stepper 4 & Section D: Learning & Development ---
   @Column({ type: 'text', nullable: true })
@@ -117,18 +121,12 @@ export class EmployeePerformance extends BaseEntity {
   @Column({ type: 'simple-json', nullable: true })
   attachments: PerformanceAttachment[];
 
+  @Column({ type: 'simple-json', nullable: true })
+  projects: PerformanceProject[];
+
   // --- Legacy Compatibility Fields (Nullable) ---
   @Column({ type: 'text', nullable: true })
   overview: string;
-
-  @Column({ type: 'varchar', length: 255, nullable: true })
-  projectTitle: string;
-
-  @Column({ type: 'text', nullable: true })
-  projectDescription: string;
-
-  @Column({ type: 'text', nullable: true })
-  challenge: string;
 
   @Column({ type: 'int', nullable: true })
   crossDepartmentCollaboration: number;
@@ -148,33 +146,17 @@ export class EmployeePerformance extends BaseEntity {
   @Column({ type: 'int', nullable: true })
   adaptabilityInitiative: number;
 
-  @Column({
-    type: 'enum',
-    enum: LearningGoalsEnum,
-    nullable: true,
-  })
-  learningGoals: LearningGoalsEnum;
+  @Column({ type: 'text', nullable: true })
+  learningGoals: string;
 
-  @Column({
-    type: 'enum',
-    enum: FeedbackOnWorkCultureEnum,
-    nullable: true,
-  })
-  feedbackOnWorkCulture: FeedbackOnWorkCultureEnum;
+  @Column({ type: 'text', nullable: true })
+  feedbackOnWorkCulture: string;
 
-  @Column({
-    type: 'enum',
-    enum: WorkLifeBalanceEnum,
-    nullable: true,
-  })
-  workLifeBalance: WorkLifeBalanceEnum;
+  @Column({ type: 'text', nullable: true })
+  workLifeBalance: string;
 
-  @Column({
-    type: 'enum',
-    enum: SuggestionsForImprovementEnum,
-    nullable: true,
-  })
-  suggestionsForImprovement: SuggestionsForImprovementEnum;
+  @Column({ type: 'text', nullable: true })
+  suggestionsForImprovement: string;
 
   @Column({
     type: 'enum',

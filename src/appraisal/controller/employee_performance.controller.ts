@@ -10,7 +10,11 @@ import {
   ParseIntPipe,
   HttpStatus,
   HttpCode,
+  UseInterceptors,
+  UploadedFile,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { BufferedFile } from '../../common/s3-client/file.model';
 import {
   ApiTags,
   ApiOperation,
@@ -60,17 +64,22 @@ export class EmployeePerformanceController {
 
   /**
    * FR-04: Submit Review
-   * POST /api/employee-performance/submit
+   * PUT /api/employee-performance/:id/submit
+   * The row already exists, so submit is an update.
    */
-  @Post('submit')
+  @Put(':id/submit')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Submit Review (FR-04)',
     description: 'Validates mandatory fields, changes status to Submitted, and locks employee editing.',
   })
+  @ApiParam({ name: 'id', type: Number })
   @ApiBody({ type: SubmitReviewDto })
-  async submitReview(@Body() submitDto: SubmitReviewDto) {
-    return await this.performanceService.submitReview(submitDto);
+  async submitReview(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() submitDto: SubmitReviewDto,
+  ) {
+    return await this.performanceService.submitReview(id, submitDto);
   }
 
   /**
@@ -180,6 +189,33 @@ export class EmployeePerformanceController {
   @ApiBody({ type: CreateEmployeePerformanceDto })
   async create(@Body() createDto: CreateEmployeePerformanceDto) {
     return await this.performanceService.create(createDto);
+  }
+
+  /**
+   * POST: Upload one attachment to MinIO and store the object key
+   * POST /api/employee-performance/:id/attachments
+   */
+  @Post(':id/attachments')
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 10 * 1024 * 1024 } }))
+  @ApiOperation({ summary: 'Upload a performance attachment to object storage' })
+  async addAttachment(
+    @Param('id', ParseIntPipe) id: number,
+    @UploadedFile() file: BufferedFile,
+  ) {
+    return await this.performanceService.addAttachment(id, file);
+  }
+
+  /**
+   * DELETE: Remove one stored attachment
+   * DELETE /api/employee-performance/:id/attachments?objectKey=
+   */
+  @Delete(':id/attachments')
+  @ApiOperation({ summary: 'Remove a performance attachment from object storage' })
+  async removeAttachment(
+    @Param('id', ParseIntPipe) id: number,
+    @Query('objectKey') objectKey: string,
+  ) {
+    return await this.performanceService.removeAttachment(id, objectKey);
   }
 
   /**

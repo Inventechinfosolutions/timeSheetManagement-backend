@@ -138,22 +138,26 @@ export class AnnualAppraisalService {
       const completedRatings: number[] = [];
 
       for (const r of reviews) {
-        const rating = r.finalRating ?? (r.averageScore ? Math.round(Number(r.averageScore)) : null);
-        const isReviewed = r.status === QuarterlyReviewStatus.REVIEWED;
+        const rawRating = r.finalRating ?? (r.averageScore != null ? Math.round(Number(r.averageScore)) : null);
+        const rating = rawRating == null || Number.isNaN(Number(rawRating)) ? null : Number(rawRating);
+        const isReviewed =
+          r.status === QuarterlyReviewStatus.REVIEWED ||
+          r.status === QuarterlyReviewStatus.COMPLETED;
+        const quarter = String(r.quarter || '').toUpperCase();
 
-        if (r.quarter === QuaterlyEnum.Q1) {
+        if (quarter === QuaterlyEnum.Q1) {
           q1Rating = rating;
           q1Status = r.status;
           if (isReviewed && rating !== null) completedRatings.push(rating);
-        } else if (r.quarter === QuaterlyEnum.Q2) {
+        } else if (quarter === QuaterlyEnum.Q2) {
           q2Rating = rating;
           q2Status = r.status;
           if (isReviewed && rating !== null) completedRatings.push(rating);
-        } else if (r.quarter === QuaterlyEnum.Q3) {
+        } else if (quarter === QuaterlyEnum.Q3) {
           q3Rating = rating;
           q3Status = r.status;
           if (isReviewed && rating !== null) completedRatings.push(rating);
-        } else if (r.quarter === QuaterlyEnum.Q4) {
+        } else if (quarter === QuaterlyEnum.Q4) {
           q4Rating = rating;
           q4Status = r.status;
           if (isReviewed && rating !== null) completedRatings.push(rating);
@@ -192,26 +196,71 @@ export class AnnualAppraisalService {
         });
       }
 
-      // 5. Update data
-      record.q1Rating = q1Rating;
-      record.q1Status = q1Status;
-      record.q2Rating = q2Rating;
-      record.q2Status = q2Status;
-      record.q3Rating = q3Rating;
-      record.q3Status = q3Status;
-      record.q4Rating = q4Rating;
-      record.q4Status = q4Status;
-      record.annualAverageRating = annualAverageRating;
-      record.finalAnnualRating = finalAnnualRating;
-      record.annualRatingDescription = annualRatingDescription;
-      record.completedQuartersCount = completedRatings.length;
+      await this.annualRepo.query(
+        `INSERT INTO annual_appraisal_summary
+          (employeeId, employeeName, department, designation, managerId, managerName, financialYear,
+           q1Rating, q1Status, q2Rating, q2Status, q3Rating, q3Status, q4Rating, q4Status,
+           annualAverageRating, finalAnnualRating, annualRatingDescription, completedQuartersCount,
+           createdAt, updatedAt)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(6), NOW(6))
+         ON DUPLICATE KEY UPDATE
+           employeeName = VALUES(employeeName),
+           department = VALUES(department),
+           designation = VALUES(designation),
+           managerId = VALUES(managerId),
+           managerName = VALUES(managerName),
+           q1Rating = VALUES(q1Rating),
+           q1Status = VALUES(q1Status),
+           q2Rating = VALUES(q2Rating),
+           q2Status = VALUES(q2Status),
+           q3Rating = VALUES(q3Rating),
+           q3Status = VALUES(q3Status),
+           q4Rating = VALUES(q4Rating),
+           q4Status = VALUES(q4Status),
+           annualAverageRating = VALUES(annualAverageRating),
+           finalAnnualRating = VALUES(finalAnnualRating),
+           annualRatingDescription = VALUES(annualRatingDescription),
+           completedQuartersCount = VALUES(completedQuartersCount),
+           updatedAt = NOW(6)`,
+        [
+          employeeId,
+          emp?.fullName || reviews[0]?.employeeName || record.employeeName || null,
+          emp?.department || reviews[0]?.department || record.department || null,
+          emp?.designation || reviews[0]?.designation || record.designation || null,
+          mapping?.managerId || reviews[0]?.assignerId || record.managerId || null,
+          mapping?.managerName || reviews[0]?.managerName || record.managerName || null,
+          financialYear,
+          q1Rating,
+          q1Status,
+          q2Rating,
+          q2Status,
+          q3Rating,
+          q3Status,
+          q4Rating,
+          q4Status,
+          annualAverageRating,
+          finalAnnualRating,
+          annualRatingDescription,
+          completedRatings.length,
+        ],
+      );
 
-      return await this.annualRepo.save(record);
+      const saved = await this.annualRepo.findOne({ where: { employeeId, financialYear } });
+      if (!saved) {
+        throw new HttpException(
+          'The annual summary row was not written.',
+          HttpStatus.INTERNAL_SERVER_ERROR,
+        );
+      }
+      this.logger.log(`Annual summary saved for ${employeeId} ${financialYear} id=${saved.id}`);
+      return saved;
     } catch (error) {
-      this.logger.error(`Error syncing annual appraisal: ${error.message}`, error.stack);
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      const stack = error instanceof Error ? error.stack : undefined;
+      this.logger.error(`Error syncing annual appraisal: ${message}`, stack);
       if (error instanceof HttpException) throw error;
       throw new HttpException(
-        `Failed to sync annual appraisal: ${error.message}`,
+        `Failed to sync annual appraisal: ${message}`,
         HttpStatus.INTERNAL_SERVER_ERROR,
       );
     }

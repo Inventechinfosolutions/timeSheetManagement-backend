@@ -1,7 +1,7 @@
 import { EmployeePerformanceStatus } from '../enums/employee_performance.enums';
 import { QuaterlyEnum } from '../enums/quarterly_review.enums';
 
-export const APPRAISAL_EDIT_WINDOW_HOURS = 24;
+export const APPRAISAL_EDIT_WINDOW_HOURS = 48;
 export const EDIT_REQUEST_DEFAULT_REASON = 'Edit requested after submission';
 export const PASSWORD_MISMATCH_MESSAGE = 'Wrong password.';
 export const ANNUAL_SUMMARY_EMPTY_MESSAGE =
@@ -9,10 +9,11 @@ export const ANNUAL_SUMMARY_EMPTY_MESSAGE =
 export const RATING_NOT_READY_MESSAGE = 'This review does not have a final rating yet.';
 export const EMPLOYEE_NOT_FOUND_MESSAGE = 'That employee was not found.';
 export const QUARTER_WINDOW_UNAVAILABLE_MESSAGE =
-  'Current and previous quarters are not available, so this review cannot be assigned.';
+  'No quarter has started yet, so this review cannot be assigned.';
+export const DEADLINE_AFTER_ASSIGNED_MESSAGE = 'Deadline must be after the assigned date.';
 
-export const quarterNotAssignableMessage = (allowed: string): string =>
-  `A review can only be assigned for the current quarter or the previous quarter (${allowed}).`;
+export const quarterNotAssignableMessage = (quarterLabel: string): string =>
+  `${quarterLabel} has not started, so this review cannot be assigned yet.`;
 
 export const duplicateAssignmentMessage = (
   employeeId: string,
@@ -27,18 +28,36 @@ export const appraisalWindowMs = (hours: number): number =>
 
 export const LOCKED_PERFORMANCE_STATUSES: readonly EmployeePerformanceStatus[] = [
   EmployeePerformanceStatus.SUBMITTED,
+  EmployeePerformanceStatus.RE_SUBMITTED,
+  EmployeePerformanceStatus.REQUESTED_FOR_EDIT,
+  EmployeePerformanceStatus.COMPLETED,
+  EmployeePerformanceStatus.NOT_UPDATED,
   EmployeePerformanceStatus.REVIEWED,
   EmployeePerformanceStatus.EDIT_REQUESTED,
+  EmployeePerformanceStatus.PERFORMANCE_RECEIVED,
 ];
 
 export const EDIT_NOTICE_STATUSES: readonly EmployeePerformanceStatus[] = [
   EmployeePerformanceStatus.EDIT_REQUESTED,
   EmployeePerformanceStatus.EDIT_GRANTED,
+  EmployeePerformanceStatus.APPROVED_FOR_EDITING,
+  EmployeePerformanceStatus.ALLOWED_TO_EDIT,
 ];
 
 export const SUBMITTABLE_PERFORMANCE_STATUSES: readonly EmployeePerformanceStatus[] = [
+  EmployeePerformanceStatus.NOT_STARTED,
   EmployeePerformanceStatus.DRAFT,
+  EmployeePerformanceStatus.PENDING,
+  EmployeePerformanceStatus.IN_PROGRESS,
   EmployeePerformanceStatus.EDIT_GRANTED,
+  EmployeePerformanceStatus.APPROVED_FOR_EDITING,
+  EmployeePerformanceStatus.ALLOWED_TO_EDIT,
+];
+
+export const DRAFT_ON_SAVE_STATUSES: readonly EmployeePerformanceStatus[] = [
+  EmployeePerformanceStatus.NOT_STARTED,
+  EmployeePerformanceStatus.PENDING,
+  EmployeePerformanceStatus.IN_PROGRESS,
 ];
 
 export interface AppraisalNoticeContent {
@@ -100,11 +119,18 @@ export const formatAppraisalNoticeDateTime = (value: Date | string | null | unde
   });
 };
 
+export const buildDeadlineReminderNotice = (
+  context: AppraisalNoticeContext & { deadlineDate: Date | string | null },
+): AppraisalNoticeContent => ({
+  title: `Quarterly review still open (${context.quarter} ${context.financialYear})`,
+  message: `Your ${context.quarter} ${context.financialYear} review is still not submitted. Please submit it before ${formatAppraisalNoticeDate(context.deadlineDate)}.`,
+});
+
 export const buildAssignmentNotice = (
   context: AppraisalNoticeContext & { deadlineDate: Date | string | null },
 ): AppraisalNoticeContent => ({
   title: `Quarterly review assigned (${context.quarter} ${context.financialYear})`,
-  message: `A ${context.quarter} review for ${context.financialYear} has been assigned to you. Submit it before ${formatAppraisalNoticeDate(context.deadlineDate)}.`,
+  message: `A ${context.quarter} review for ${context.financialYear} has been assigned to you.\nPlease fill in all the details as stated and submit it before ${formatAppraisalNoticeDate(context.deadlineDate)}.`,
 });
 
 export const buildEmployeeSubmissionNotice = (

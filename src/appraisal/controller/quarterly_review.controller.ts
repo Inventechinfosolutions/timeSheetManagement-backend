@@ -13,6 +13,7 @@ import {
   HttpCode,
   UseGuards,
   Req,
+  Headers,
 } from '@nestjs/common';
 import {
   ApiTags,
@@ -35,10 +36,32 @@ import {
   ManagerEvaluationDto,
   ExportQuarterlyReviewDto,
 } from '../dto/quarterly_review.dto';
-import { RevealRatingDto } from '../dto/reveal_rating.dto';
+import { RevealedEvaluationDto } from '../dto/reveal_rating.dto';
 import { QuarterlyReview } from '../entities/quarterly_review.entities';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { User } from '../../users/entities/user.entity';
+
+@ApiTags('Quarterly Review')
+@Controller('quarterly-review&performance')
+export class QuarterlyReviewPerformanceController {
+  constructor(private readonly reviewService: QuarterlyReviewService) {}
+
+  /**
+   * Review list with the matching performance row.
+   * Used by the employee history, the manager table, and the edit load.
+   * GET /api/quarterly-review&performance
+   */
+  @Get()
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({ summary: 'Get quarterly reviews with the matching performance row' })
+  @ApiOkResponse({ description: 'Returns the review list with performance details. Manager evaluation fields are omitted for employees.' })
+  async getAll(@Query() query: QueryQuarterlyReviewDto, @Req() req: { user: User }) {
+    return await this.reviewService.findAll(
+      query,
+      this.reviewService.hidesManagerEvaluation(req.user),
+    );
+  }
+}
 
 @ApiTags('Quarterly Review')
 @Controller(['quarterly-review', 'quaterly-review', 'master-quaterly-review'])
@@ -89,19 +112,22 @@ export class QuarterlyReviewController {
     return await this.reviewService.getEmployeeView(id, employeeId);
   }
 
-  @Post(':id/reveal-rating')
+  @Get(':id/reveal-rating')
   @UseGuards(JwtAuthGuard)
-  @HttpCode(HttpStatus.OK)
   @ApiOperation({
-    summary: 'Reveal final rating after login password check',
-    description: 'Checks the logged-in user password and returns the final rating for that review.',
+    summary: 'Reveal the manager evaluation after the login password check',
+    description: 'Returns RevealedEvaluationDto only when employeeId matches the signed-in employee and this review, the password matches, and both rows are COMPLETED.',
   })
+  @ApiQuery({ name: 'employeeId', required: true })
+  @ApiOkResponse({ type: RevealedEvaluationDto })
   async revealRating(
     @Param('id', ParseIntPipe) id: number,
-    @Body() dto: RevealRatingDto,
+    @Query('employeeId') employeeId: string,
+    @Headers('x-appraisal-password') headerPassword: string | string[],
     @Req() req: { user: User },
   ) {
-    return await this.reviewService.revealRating(id, dto.password, req.user);
+    const password = Array.isArray(headerPassword) ? headerPassword[0] : headerPassword;
+    return await this.reviewService.revealRating(id, employeeId, password, req.user);
   }
 
   /**
@@ -155,6 +181,7 @@ export class QuarterlyReviewController {
   /**
    * GET ALL: Fetch all reviews
    * GET /api/quarterly-review
+   * The employee history list that includes the performance row is GET /api/quarterly-review&performance.
    */
   @Get()
   @ApiOperation({ summary: 'Get all quarterly reviews (getAll)' })
@@ -188,9 +215,10 @@ export class QuarterlyReviewController {
    * GET /api/quarterly-review/:id
    */
   @Get(':id')
+  @UseGuards(JwtAuthGuard)
   @ApiOperation({ summary: 'Get a quarterly review by ID' })
-  async getById(@Param('id', ParseIntPipe) id: number) {
-    return await this.reviewService.findOne(id);
+  async getById(@Param('id', ParseIntPipe) id: number, @Req() req: { user: User }) {
+    return await this.reviewService.findOne(id, this.reviewService.hidesManagerEvaluation(req.user));
   }
 
   /**

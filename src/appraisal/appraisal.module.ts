@@ -8,10 +8,11 @@ import { ManagerMapping } from '../managerMapping/entities/managerMapping.entity
 import { QuarterlyReviewService } from './services/quarterly_review.service';
 import { EmployeePerformanceService } from './services/employee_performance.service';
 import { AnnualAppraisalService } from './services/annual_appraisal.service';
-import { QuarterlyReviewController } from './controller/quarterly_review.controller';
+import { QuarterlyReviewController, QuarterlyReviewPerformanceController } from './controller/quarterly_review.controller';
 import { EmployeePerformanceController } from './controller/employee_performance.controller';
 import { AnnualAppraisalController } from './controller/annual_appraisal.controller';
 import { AppraisalNoticeService } from './services/appraisal_notice.service';
+import { AppraisalDeadlineCronService } from './services/appraisal_deadline.cron';
 import { Notification } from '../notifications/entities/notification.entity';
 import { MailModule } from '../common/mail/mail.module';
 import { UsersModule } from '../users/users.module';
@@ -33,6 +34,7 @@ import { MasterModule } from '../master/master.module';
   ],
   controllers: [
     QuarterlyReviewController,
+    QuarterlyReviewPerformanceController,
     EmployeePerformanceController,
     AnnualAppraisalController,
   ],
@@ -41,6 +43,7 @@ import { MasterModule } from '../master/master.module';
     EmployeePerformanceService,
     AnnualAppraisalService,
     AppraisalNoticeService,
+    AppraisalDeadlineCronService,
   ],
   exports: [
     QuarterlyReviewService,

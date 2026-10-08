@@ -10,6 +10,7 @@ import { QuaterlyEnum, AppraisalNoticeType } from '../enums/quarterly_review.enu
 import {
   AppraisalNoticeContent,
   buildAssignmentNotice,
+  buildDeadlineReminderNotice,
   buildEditGrantedNotice,
   buildEditRequestNotice,
   buildEmployeeSubmissionNotice,
@@ -37,6 +38,28 @@ export class AppraisalNoticeService {
     private readonly managerMappingRepository: Repository<ManagerMapping>,
     private readonly mailService: MailService,
   ) {}
+
+  async notifyDeadlineReminder(
+    input: AppraisalNoticeInput & { deadlineDate: Date | string | null },
+  ): Promise<void> {
+    const marker = `${input.quarter} ${input.financialYear}`;
+    const sent = await this.notificationRepository.find({
+      where: { employeeId: input.employeeId, type: AppraisalNoticeType.DEADLINE_REMINDER },
+    });
+    if (sent.some((row) => row.message.includes(marker))) {
+      return;
+    }
+    const employee = await this.employeeDetailsRepository.findOne({
+      where: { employeeId: input.employeeId },
+    });
+    await this.deliver(
+      input.employeeId,
+      employee?.email,
+      employee?.fullName || input.employeeName,
+      buildDeadlineReminderNotice(input),
+      AppraisalNoticeType.DEADLINE_REMINDER,
+    );
+  }
 
   async notifyEmployeeOfAssignment(
     input: AppraisalNoticeInput & { deadlineDate: Date | string | null },

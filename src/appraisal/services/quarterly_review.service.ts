@@ -34,6 +34,7 @@ import { AnnualAppraisalService } from './annual_appraisal.service';
 import { AppraisalNoticeService } from './appraisal_notice.service';
 import {
   duplicateAssignmentMessage,
+  DEADLINE_AFTER_ASSIGNED_MESSAGE,
   EMPLOYEE_NOT_FOUND_MESSAGE,
   PASSWORD_MISMATCH_MESSAGE,
   QUARTER_WINDOW_UNAVAILABLE_MESSAGE,
@@ -43,6 +44,8 @@ import {
 import { MasterFinancialYearService } from '../../master/service/master-financialyear.service';
 import { UsersService } from '../../users/service/user.service';
 import { User } from '../../users/entities/user.entity';
+import { UserType } from '../../users/enums/user-type.enum';
+import { RevealedEvaluationDto } from '../dto/reveal_rating.dto';
 
 export interface EnrichedQuarterlyReview extends QuarterlyReview {
   performanceDetails?: EmployeePerformance | null;
@@ -91,8 +94,8 @@ export class QuarterlyReviewService {
   }
 
   /**
-   * Assignment is limited to the quarter that contains today and the quarter immediately before it.
-   * A later quarter is rejected before a row, notice, or mail is created.
+   * The current quarter and every earlier quarter can be assigned.
+   * A quarter that has not started is rejected before a row, notice, or mail is created.
    */
   private async assertAssignableQuarter(quarter: QuaterlyEnum, financialYear: string): Promise<void> {
     const years = await this.financialYearService.findAll();
@@ -108,22 +111,14 @@ export class QuarterlyReviewService {
       .sort((left, right) => left.startDate.localeCompare(right.startDate));
 
     const today = this.todayDate();
-    const currentIndex = slots.findIndex((slot) => slot.startDate <= today && today <= slot.endDate);
-    const allowed =
-      currentIndex < 0
-        ? []
-        : currentIndex > 0
-          ? [slots[currentIndex - 1], slots[currentIndex]]
-          : [slots[currentIndex]];
-
-    if (allowed.length === 0) {
+    const started = slots.filter((slot) => slot.startDate <= today);
+    if (started.length === 0) {
       throw new BadRequestException(QUARTER_WINDOW_UNAVAILABLE_MESSAGE);
     }
 
-    const match = allowed.some((slot) => slot.financialYear === financialYear && slot.quarter === quarter);
+    const match = started.some((slot) => slot.financialYear === financialYear && slot.quarter === quarter);
     if (!match) {
-      const labels = allowed.map((slot) => `${slot.quarter} ${slot.financialYear}`).join(' or ');
-      throw new BadRequestException(quarterNotAssignableMessage(labels));
+      throw new BadRequestException(quarterNotAssignableMessage(`${quarter} ${financialYear}`));
     }
   }
 
@@ -169,6 +164,11 @@ export class QuarterlyReviewService {
       const assignerId = createDto.assignerId || mapping?.managerId || 'MANAGER';
       const managerName = mapping?.managerName || 'Reporting Manager';
 
+      this.assertDeadlineAfterAssigned(
+        createDto.assignedDate,
+        createDto.deadlineDate,
+      );
+
       const review = this.reviewRepository.create({
         employeeId,
         financialYear,
@@ -183,7 +183,7 @@ export class QuarterlyReviewService {
         managerName,
         assignedDate: createDto.assignedDate ? new Date(createDto.assignedDate) : new Date(),
         deadlineDate: createDto.deadlineDate ? new Date(createDto.deadlineDate) : null,
-        status: createDto.status || QuarterlyReviewStatus.NOT_STARTED,
+        status: QuarterlyReviewStatus.ASSIGNED,
       });
 
       const saved = await this.reviewRepository.save(review);
@@ -194,7 +194,6 @@ export class QuarterlyReviewService {
       );
       saved.performanceId = performance.id;
       await this.reviewRepository.save(saved);
-      await this.annualService.syncEmployeeAnnualRating(saved.employeeId, saved.financialYear);
       await this.noticeService.notifyEmployeeOfAssignment({
         employeeId: saved.employeeId,
         employeeName: saved.employeeName || saved.employeeId,
@@ -243,10 +242,6 @@ export class QuarterlyReviewService {
         throw new NotFoundException(`Quarterly review with ID ${id} not found.`);
       }
 
-      if (review.status === QuarterlyReviewStatus.REVIEWED) {
-        throw new BadRequestException('This review has already been evaluated and locked.');
-      }
-
       // Calculate Average Score (1 to 5 scale)
       const scores = [
         evalDto.productivity,
@@ -281,31 +276,12 @@ export class QuarterlyReviewService {
       review.areasOfImprovement = evalDto.areasOfImprovement;
       review.additionalRemarks = evalDto.additionalRemarks || null;
 
-      review.status = QuarterlyReviewStatus.REVIEWED;
+      review.status = QuarterlyReviewStatus.COMPLETED;
       review.reviewedDate = new Date();
 
       const saved = await this.reviewRepository.save(review);
-
-      // Keep EmployeePerformance in sync
-      const perf = await this.performanceRepository.findOne({
-        where: {
-          employeeId: review.employeeId,
-          quarter: review.quarter,
-          financialYear: review.financialYear,
-        },
-      });
-      if (perf) {
-        perf.status = saved.status;
-        await this.performanceRepository.save(perf);
-      }
-
-      // Auto-sync employee annual appraisal summary
-      try {
-        await this.annualService.syncEmployeeAnnualRating(saved.employeeId, saved.financialYear);
-      } catch (err) {
-        const message = err instanceof Error ? err.message : 'Unknown error';
-        this.logger.warn(`Could not auto-sync annual appraisal: ${message}`);
-      }
+      await this.markPerformanceCompleted(saved);
+      await this.annualService.syncEmployeeAnnualRating(saved.employeeId, saved.financialYear);
 
       await this.noticeService.notifyEmployeeReviewCompleted({
         employeeId: saved.employeeId,
@@ -360,10 +336,10 @@ export class QuarterlyReviewService {
       const deadline = r.deadlineDate ? new Date(r.deadlineDate) : null;
       const isOverdue =
         deadline &&
-        r.status !== QuarterlyReviewStatus.REVIEWED &&
+        !this.isEvaluationFinished(r.status) &&
         deadline.getTime() < today.getTime();
 
-      const isReviewed = r.status === QuarterlyReviewStatus.REVIEWED;
+      const isReviewed = this.isEvaluationFinished(r.status);
 
       return {
         id: r.id,
@@ -425,8 +401,8 @@ export class QuarterlyReviewService {
     // Deduplicate by ID
     const uniqueReviews = Array.from(new Map(reviews.map((r) => [r.id, r])).values());
 
-    const completed = uniqueReviews.filter((r) => r.status === QuarterlyReviewStatus.REVIEWED);
-    const pending = uniqueReviews.filter((r) => r.status !== QuarterlyReviewStatus.REVIEWED);
+    const completed = uniqueReviews.filter((r) => this.isEvaluationFinished(r.status));
+    const pending = uniqueReviews.filter((r) => !this.isEvaluationFinished(r.status));
 
     // Calculate rating distribution and average
     const ratedScores = completed
@@ -489,40 +465,81 @@ export class QuarterlyReviewService {
     };
   }
 
-  async revealRating(id: number, password: string, user: User) {
+  async revealRating(id: number, employeeId: string, password: string, user: User): Promise<RevealedEvaluationDto> {
+    const requestedEmployeeId = employeeId?.trim();
+    if (!requestedEmployeeId) {
+      throw new BadRequestException('Employee id is required.');
+    }
+
+    const typed = password?.trim();
     const account = user?.loginId
       ? await this.usersService.findByLoginId(user.loginId)
-      : null;
+      : user?.id
+        ? await this.usersService.findById(user.id)
+        : null;
 
-    if (!account?.password) {
+    if (!typed || !account?.loginId) {
       throw new BadRequestException(PASSWORD_MISMATCH_MESSAGE);
     }
 
-    const passwordMatches = await this.usersService.comparePassword(password, account.password);
-    if (!passwordMatches) {
+    const userMatches = await this.matchesStoredPassword(typed, account.password);
+    const employee = userMatches
+      ? null
+      : await this.employeeDetailsRepository.findOne({
+          where: [{ employeeId: account.loginId }, { email: account.loginId }],
+        });
+    const employeeMatches = userMatches
+      ? false
+      : await this.matchesStoredPassword(typed, employee?.password);
+    if (!userMatches && !employeeMatches) {
       throw new BadRequestException(PASSWORD_MISMATCH_MESSAGE);
     }
 
-    const employeeId = await this.resolveSessionEmployeeId(account.loginId);
+    const sessionEmployeeId = await this.resolveSessionEmployeeId(account.loginId);
+    if (sessionEmployeeId !== requestedEmployeeId) {
+      throw new NotFoundException(`Review with ID ${id} not found for this employee.`);
+    }
+
     const review = await this.reviewRepository.findOne({
-      where: { id, employeeId },
+      where: { id, employeeId: requestedEmployeeId },
     });
 
     if (!review) {
       throw new NotFoundException(`Review with ID ${id} not found for this employee.`);
     }
 
-    if (review.status !== QuarterlyReviewStatus.REVIEWED || review.finalRating == null) {
+    const performance = await this.performanceRepository.findOne({
+      where: {
+        employeeId: review.employeeId,
+        quarter: review.quarter,
+        financialYear: review.financialYear,
+      },
+    });
+    if (
+      review.status !== QuarterlyReviewStatus.COMPLETED ||
+      performance?.status !== EmployeePerformanceStatus.COMPLETED ||
+      review.finalRating == null
+    ) {
       throw new BadRequestException(RATING_NOT_READY_MESSAGE);
     }
 
-    return {
+    const revealed: RevealedEvaluationDto = {
       quarter: review.quarter,
       financialYear: review.financialYear,
       finalRating: review.finalRating,
-      ratingDescription: review.ratingDescription,
-      reviewedDate: review.reviewedDate,
+      ratingDescription: review.ratingDescription || '',
+      productivity: Number(review.productivity),
+      qualityOfWork: Number(review.qualityOfWork),
+      ownershipResponsibility: Number(review.ownershipResponsibility),
+      communication: Number(review.communication),
+      teamCollaboration: Number(review.teamCollaboration),
+      innovationProblemSolving: Number(review.innovationProblemSolving),
+      performanceStrengths: review.performanceStrengths || '',
+      areasOfImprovement: review.areasOfImprovement || '',
+      additionalRemarks: review.additionalRemarks || '',
+      passwordVerified: true,
     };
+    return revealed;
   }
 
   private async resolveSessionEmployeeId(loginId: string): Promise<string> {
@@ -612,26 +629,29 @@ export class QuarterlyReviewService {
       'Areas of Improvement': r.areasOfImprovement,
       'Additional Remarks': r.additionalRemarks,
       'Key Accomplishments': r.performanceDetails?.keyAccomplishments || '',
-      'Major Projects': r.performanceDetails?.majorProjects || '',
+      'Major Projects': (r.performanceDetails?.projects || []).map((project) => project.title).filter(Boolean).join(', '),
     }));
   }
 
   /**
    * Find All reviews
    */
-  async findAll(query?: QueryQuarterlyReviewDto): Promise<{
+  async findAll(
+    query?: QueryQuarterlyReviewDto,
+    hideEvaluation = false,
+  ): Promise<{
     data: EnrichedQuarterlyReview[];
     total: number;
     page?: number;
     limit?: number;
   }> {
-    return this.getByParams(query);
+    return this.getByParams(query, hideEvaluation);
   }
 
   /**
    * Get reviews by parameters
    */
-  async getByParams(params?: QueryQuarterlyReviewDto): Promise<{
+  async getByParams(params?: QueryQuarterlyReviewDto, hideEvaluation = false): Promise<{
     data: EnrichedQuarterlyReview[];
     total: number;
     page?: number;
@@ -701,9 +721,10 @@ export class QuarterlyReviewService {
 
       const reviews = await qb.getMany();
       const enriched = await this.enrichReviewsWithDetails(reviews);
+      const data = hideEvaluation ? enriched.map((row) => this.withoutEvaluation(row)) : enriched;
 
       return {
-        data: enriched,
+        data,
         total,
         page: params?.page,
         limit: params?.limit,
@@ -735,7 +756,7 @@ export class QuarterlyReviewService {
   /**
    * Find single review by ID
    */
-  async findOne(id: number): Promise<EnrichedQuarterlyReview> {
+  async findOne(id: number, hideEvaluation = false): Promise<EnrichedQuarterlyReview> {
     const review = await this.reviewRepository.findOne({
       where: { id },
     });
@@ -745,7 +766,37 @@ export class QuarterlyReviewService {
     }
 
     const enrichedList = await this.enrichReviewsWithDetails([review]);
-    return enrichedList[0];
+    const enriched = enrichedList[0];
+    return hideEvaluation ? this.withoutEvaluation(enriched) : enriched;
+  }
+
+  hidesManagerEvaluation(user?: User): boolean {
+    return user?.userType === UserType.EMPLOYEE;
+  }
+
+  private withoutEvaluation<T extends EnrichedQuarterlyReview>(review: T): T {
+    const copy = { ...review };
+    const hidden = [
+      'productivity',
+      'qualityOfWork',
+      'ownershipResponsibility',
+      'communication',
+      'teamCollaboration',
+      'innovationProblemSolving',
+      'averageScore',
+      'finalRating',
+      'ratingDescription',
+      'overrideFinalScore',
+      'overrideJustification',
+      'performanceIndex',
+      'performanceStrengths',
+      'areasOfImprovement',
+      'additionalRemarks',
+    ] as const;
+    hidden.forEach((key) => {
+      delete copy[key];
+    });
+    return copy;
   }
 
   /**
@@ -763,11 +814,74 @@ export class QuarterlyReviewService {
       throw new NotFoundException(`Quarterly review with ID ${id} not found`);
     }
 
-    Object.assign(review, updateDto);
-    const updated = await this.reviewRepository.save(review);
-    if (updateDto.status) {
-      await this.copyStatusToPerformance(updated.employeeId, updated.quarter, updated.financialYear, updated.status);
+    const hasEvaluationScores =
+      updateDto.productivity != null &&
+      updateDto.qualityOfWork != null &&
+      updateDto.ownershipResponsibility != null &&
+      updateDto.communication != null &&
+      updateDto.teamCollaboration != null &&
+      updateDto.innovationProblemSolving != null;
+
+    const definedUpdate = Object.fromEntries(
+      Object.entries(updateDto).filter(([, value]) => value !== undefined),
+    );
+    delete definedUpdate.status;
+    delete definedUpdate.assignedDate;
+    delete definedUpdate.quarter;
+    delete definedUpdate.financialYear;
+    delete definedUpdate.employeeId;
+    const assignmentFields =
+      definedUpdate.deadlineDate !== undefined || definedUpdate.description !== undefined;
+    if (this.isEvaluationFinished(review.status) && assignmentFields && !hasEvaluationScores) {
+      throw new BadRequestException('Deadline and description are locked after the review is completed.');
     }
+    if (this.isEvaluationFinished(review.status) && hasEvaluationScores) {
+      delete definedUpdate.deadlineDate;
+      delete definedUpdate.description;
+    }
+    if (definedUpdate.deadlineDate) {
+      const assigned =
+        definedUpdate.assignedDate ||
+        (review.assignedDate ? review.assignedDate.toISOString().slice(0, 10) : undefined);
+      this.assertDeadlineAfterAssigned(
+        typeof assigned === 'string' ? assigned : undefined,
+        String(definedUpdate.deadlineDate),
+      );
+    }
+    Object.assign(review, definedUpdate);
+
+    if (hasEvaluationScores) {
+      const scores = [
+        Number(review.productivity),
+        Number(review.qualityOfWork),
+        Number(review.ownershipResponsibility),
+        Number(review.communication),
+        Number(review.teamCollaboration),
+        Number(review.innovationProblemSolving),
+      ];
+      const scoreTotal = scores.reduce((total, score) => total + score, 0);
+      const averageScore = Number((scoreTotal / scores.length).toFixed(2));
+      const finalRating = Math.round(averageScore);
+      review.averageScore = averageScore;
+      review.finalRating = finalRating;
+      review.ratingDescription = RATING_DESCRIPTIONS[finalRating] || 'Meets Expectations';
+      review.status = QuarterlyReviewStatus.COMPLETED;
+      review.reviewedDate = new Date();
+    }
+
+    const updated = await this.reviewRepository.save(review);
+
+    if (hasEvaluationScores) {
+      await this.markPerformanceCompleted(updated);
+      await this.annualService.syncEmployeeAnnualRating(updated.employeeId, updated.financialYear);
+      await this.noticeService.notifyEmployeeReviewCompleted({
+        employeeId: updated.employeeId,
+        employeeName: updated.employeeName || updated.employeeId,
+        quarter: updated.quarter,
+        financialYear: updated.financialYear,
+      });
+    }
+
     const enrichedList = await this.enrichReviewsWithDetails([updated]);
     return enrichedList[0];
   }
@@ -791,20 +905,44 @@ export class QuarterlyReviewService {
     };
   }
 
-  private async copyStatusToPerformance(
-    employeeId: string,
-    quarter: QuaterlyEnum,
-    financialYear: string,
-    status: QuarterlyReviewStatus,
-  ): Promise<void> {
-    const performance = await this.performanceRepository.findOne({
-      where: { employeeId, quarter, financialYear },
-    });
-    if (performance) {
-      performance.status = status;
-      await this.performanceRepository.save(performance);
+  private assertDeadlineAfterAssigned(assignedDate?: string | null, deadlineDate?: string | null): void {
+    if (!deadlineDate) return;
+    const deadline = deadlineDate.slice(0, 10);
+    const assigned = assignedDate
+      ? assignedDate.slice(0, 10)
+      : new Date().toISOString().slice(0, 10);
+    if (deadline <= assigned) {
+      throw new BadRequestException(DEADLINE_AFTER_ASSIGNED_MESSAGE);
     }
-    await this.annualService.syncEmployeeAnnualRating(employeeId, financialYear);
+  }
+
+  private async matchesStoredPassword(typed: string, stored?: string | null): Promise<boolean> {
+    if (!stored) {
+      return false;
+    }
+    if (stored.startsWith('$2')) {
+      return this.usersService.comparePassword(typed, stored);
+    }
+    return stored === typed;
+  }
+
+  private isEvaluationFinished(status: QuarterlyReviewStatus): boolean {
+    return status === QuarterlyReviewStatus.COMPLETED || status === QuarterlyReviewStatus.REVIEWED;
+  }
+
+  private async markPerformanceCompleted(review: QuarterlyReview): Promise<void> {
+    const performance = await this.performanceRepository.findOne({
+      where: {
+        employeeId: review.employeeId,
+        quarter: review.quarter,
+        financialYear: review.financialYear,
+      },
+    });
+    if (!performance || performance.status === EmployeePerformanceStatus.COMPLETED) {
+      return;
+    }
+    performance.status = EmployeePerformanceStatus.COMPLETED;
+    await this.performanceRepository.save(performance);
   }
 
   private async ensureAssignedPerformance(
@@ -859,12 +997,12 @@ export class QuarterlyReviewService {
       const deadline = r.deadlineDate ? new Date(r.deadlineDate) : null;
       const isOverdue =
         deadline &&
-        r.status !== QuarterlyReviewStatus.REVIEWED &&
+        !this.isEvaluationFinished(r.status) &&
         deadline.getTime() < today.getTime();
 
       return {
         ...r,
-        performanceDetails: perf ? { ...perf, status: r.status } : null,
+        performanceDetails: perf,
         isOverdue: !!isOverdue,
       };
     });

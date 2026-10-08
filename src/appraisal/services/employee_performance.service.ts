@@ -25,11 +25,15 @@ import { EmployeePerformanceStatus } from '../enums/employee_performance.enums';
 import { QuarterlyReviewStatus } from '../enums/quarterly_review.enums';
 import { EditRequestStatus } from '../enums/edit_request.enums';
 import { AppraisalNoticeService } from './appraisal_notice.service';
-import { AnnualAppraisalService } from './annual_appraisal.service';
+import { DocumentUploaderService } from '../../common/document-uploader/services/document-uploader.service';
+import { DocumentMetaInfo, EntityType, ReferenceType } from '../../common/document-uploader/models/documentmetainfo.model';
+import { BufferedFile } from '../../common/s3-client/file.model';
+import { PerformanceAttachment } from '../entities/employee_performance.entity';
 import {
   APPRAISAL_EDIT_WINDOW_HOURS,
   EDIT_NOTICE_STATUSES,
   EDIT_REQUEST_DEFAULT_REASON,
+  DRAFT_ON_SAVE_STATUSES,
   LOCKED_PERFORMANCE_STATUSES,
   SUBMITTABLE_PERFORMANCE_STATUSES,
   appraisalWindowMs,
@@ -59,7 +63,7 @@ export class EmployeePerformanceService {
     @InjectRepository(ManagerMapping)
     private readonly managerMappingRepository: Repository<ManagerMapping>,
     private readonly noticeService: AppraisalNoticeService,
-    private readonly annualService: AnnualAppraisalService,
+    private readonly documentUploaderService: DocumentUploaderService,
   ) {}
 
   /**
@@ -67,9 +71,16 @@ export class EmployeePerformanceService {
    * An employee can save incomplete submission and resume later.
    */
   async saveDraft(dto: CreateEmployeePerformanceDto): Promise<EnrichedEmployeePerformance> {
+    return this.writePerformance(dto, true);
+  }
+
+  private async writePerformance(
+    dto: CreateEmployeePerformanceDto,
+    asDraft: boolean,
+  ): Promise<EnrichedEmployeePerformance> {
     try {
       this.logger.log(
-        `Saving draft performance for: ${dto.employeeId}, Quarter: ${dto.quarter}, FY: ${dto.financialYear}`,
+        `Saving performance for: ${dto.employeeId}, Quarter: ${dto.quarter}, FY: ${dto.financialYear}, draft: ${asDraft}`,
       );
 
       let record = await this.performanceRepository.findOne({
@@ -80,7 +91,9 @@ export class EmployeePerformanceService {
         },
       });
 
-      let nextStatus = EmployeePerformanceStatus.DRAFT;
+      let nextStatus = asDraft
+        ? EmployeePerformanceStatus.DRAFT
+        : EmployeePerformanceStatus.NOT_STARTED;
       if (record) {
         record = await this.lockIfGrantExpired(record);
 
@@ -89,11 +102,23 @@ export class EmployeePerformanceService {
             'This quarterly submission is locked. You must request edit permission.',
           );
         }
-        nextStatus =
-          record.status === EmployeePerformanceStatus.EDIT_GRANTED
-            ? EmployeePerformanceStatus.EDIT_GRANTED
-            : EmployeePerformanceStatus.DRAFT;
-        Object.assign(record, dto, {
+        const keepStatus =
+          record.status === EmployeePerformanceStatus.EDIT_GRANTED ||
+          record.status === EmployeePerformanceStatus.APPROVED_FOR_EDITING ||
+          record.status === EmployeePerformanceStatus.ALLOWED_TO_EDIT;
+        nextStatus = keepStatus
+          ? record.status
+          : asDraft || DRAFT_ON_SAVE_STATUSES.includes(record.status)
+            ? EmployeePerformanceStatus.DRAFT
+            : record.status;
+        const draftFields = { ...dto };
+        if (draftFields.attachments == null) {
+          delete draftFields.attachments;
+        }
+        if (draftFields.projects == null) {
+          delete draftFields.projects;
+        }
+        Object.assign(record, draftFields, {
           status: nextStatus,
           lastModifiedDate: new Date(),
           lastModifiedBy: dto.employeeId,
@@ -108,33 +133,16 @@ export class EmployeePerformanceService {
       }
 
       const saved = await this.performanceRepository.save(record);
-
-      // Keep QuarterlyReview status in sync if review exists
-      const review = await this.reviewRepository.findOne({
-        where: {
-          employeeId: dto.employeeId,
-          quarter: dto.quarter,
-          financialYear: dto.financialYear,
-        },
-      });
-      const protectedReviewStatuses = [
-        QuarterlyReviewStatus.REVIEWED,
-        QuarterlyReviewStatus.COMPLETED,
-      ];
-      if (review && !protectedReviewStatuses.includes(review.status)) {
-        review.status = nextStatus;
-        review.performanceId = saved.id;
-        await this.reviewRepository.save(review);
-        await this.annualService.syncEmployeeAnnualRating(dto.employeeId, dto.financialYear);
-      }
+      await this.linkPerformanceToReview(saved.employeeId, saved.quarter, saved.financialYear, saved.id);
 
       const enriched = await this.enrichPerformancesWithEmployeeDetails([saved]);
       return enriched[0];
     } catch (error) {
-      this.logger.error(`Error saving draft performance: ${error.message}`, error.stack);
+      const caught = this.caughtError(error);
+      this.logger.error(`Error saving draft performance: ${caught.message}`, caught.stack);
       if (error instanceof HttpException) throw error;
       throw new HttpException(
-        `Failed to save draft: ${error.message}`,
+        `Failed to save draft: ${caught.message}`,
         HttpStatus.INTERNAL_SERVER_ERROR,
       );
     }
@@ -144,32 +152,39 @@ export class EmployeePerformanceService {
    * FR-04: Submit Review
    * Validates mandatory fields, locks editing, changes status to SUBMITTED.
    */
-  async submitReview(dto: SubmitReviewDto): Promise<EnrichedEmployeePerformance> {
+  async submitReview(id: number, dto: SubmitReviewDto): Promise<EnrichedEmployeePerformance> {
     try {
       this.logger.log(
-        `Submitting review for: ${dto.employeeId}, Quarter: ${dto.quarter}, FY: ${dto.financialYear}`,
+        `Submitting review ${id} for: ${dto.employeeId}, Quarter: ${dto.quarter}, FY: ${dto.financialYear}`,
       );
 
-      let record = await this.performanceRepository.findOne({
-        where: {
-          employeeId: dto.employeeId,
-          quarter: dto.quarter,
-          financialYear: dto.financialYear,
-        },
-      });
+      let record = await this.performanceRepository.findOne({ where: { id } });
 
       if (!record) {
         throw new NotFoundException(
           'No draft found for this quarter. Please fill in the submission before submitting.',
         );
       }
+      if (
+        record.employeeId !== dto.employeeId ||
+        record.quarter !== dto.quarter ||
+        record.financialYear !== dto.financialYear
+      ) {
+        throw new BadRequestException('This submission does not match the selected quarter.');
+      }
 
       record = await this.lockIfGrantExpired(record);
 
-      if (record.status === EmployeePerformanceStatus.SUBMITTED) {
+      if (
+        record.status === EmployeePerformanceStatus.SUBMITTED ||
+        record.status === EmployeePerformanceStatus.RE_SUBMITTED
+      ) {
         throw new BadRequestException('This quarterly submission is already submitted.');
       }
-      if (record.status === EmployeePerformanceStatus.REVIEWED) {
+      if (
+        record.status === EmployeePerformanceStatus.REVIEWED ||
+        record.status === EmployeePerformanceStatus.COMPLETED
+      ) {
         throw new BadRequestException('This review has already been evaluated by your manager.');
       }
       if (!SUBMITTABLE_PERFORMANCE_STATUSES.includes(record.status)) {
@@ -177,10 +192,14 @@ export class EmployeePerformanceService {
           'This quarterly submission is locked. You must request edit permission.',
         );
       }
+      const resubmitting = record.status === EmployeePerformanceStatus.APPROVED_FOR_EDITING;
 
       // Validate Section requirements
-      if (!record.majorProjects?.trim()) {
-        throw new BadRequestException('Section A: Major Projects is required before submission.');
+      const savedProjects = (record.projects || []).filter(
+        (project) => project.title?.trim() && project.description?.trim() && project.challenge?.trim(),
+      );
+      if (savedProjects.length === 0) {
+        throw new BadRequestException('Add at least one project before submission.');
       }
       if (!record.responsibilitiesHandled?.trim()) {
         throw new BadRequestException('Section A: Responsibilities Handled is required before submission.');
@@ -201,8 +220,11 @@ export class EmployeePerformanceService {
         throw new BadRequestException('Section E: Planned Deliverables for Next Quarter is required.');
       }
 
-      record.status = EmployeePerformanceStatus.SUBMITTED;
-      record.submittedAt = new Date();
+      const submittedAt = resubmitting ? record.submittedAt || new Date() : new Date();
+      record.status = resubmitting
+        ? EmployeePerformanceStatus.RE_SUBMITTED
+        : EmployeePerformanceStatus.SUBMITTED;
+      record.submittedAt = submittedAt;
       record.lastModifiedDate = new Date();
       record.lastModifiedBy = dto.employeeId;
       record.editRequestStatus = EditRequestStatus.NONE;
@@ -220,10 +242,15 @@ export class EmployeePerformanceService {
         },
       });
 
+      const reviewStatus = resubmitting
+        ? QuarterlyReviewStatus.RE_SUBMITTED
+        : QuarterlyReviewStatus.PERFORMANCE_RECEIVED;
       if (review) {
-        review.status = QuarterlyReviewStatus.SUBMITTED;
-        review.submittedDate = new Date();
+        if (!resubmitting || !review.submittedDate) {
+          review.submittedDate = submittedAt;
+        }
         review.performanceId = saved.id;
+        review.status = reviewStatus;
         await this.reviewRepository.save(review);
       } else {
         // Auto-create QuarterlyReview master if it wasn't pre-assigned
@@ -241,16 +268,14 @@ export class EmployeePerformanceService {
           designation: emp?.designation || '',
           financialYear: dto.financialYear,
           quarter: dto.quarter,
-          status: QuarterlyReviewStatus.SUBMITTED,
-          submittedDate: new Date(),
+          status: QuarterlyReviewStatus.PERFORMANCE_RECEIVED,
+          submittedDate: submittedAt,
           performanceId: saved.id,
           assignerId: mapping?.managerId || 'MANAGER',
           managerName: mapping?.managerName || 'Reporting Manager',
         });
         await this.reviewRepository.save(review);
       }
-
-      await this.annualService.syncEmployeeAnnualRating(dto.employeeId, dto.financialYear);
 
       const employee = await this.employeeDetailsRepository.findOne({
         where: { employeeId: dto.employeeId },
@@ -267,10 +292,11 @@ export class EmployeePerformanceService {
       const enriched = await this.enrichPerformancesWithEmployeeDetails([saved]);
       return enriched[0];
     } catch (error) {
-      this.logger.error(`Error submitting review: ${error.message}`, error.stack);
+      const caught = this.caughtError(error);
+      this.logger.error(`Error submitting review: ${caught.message}`, caught.stack);
       if (error instanceof HttpException) throw error;
       throw new HttpException(
-        `Failed to submit review: ${error.message}`,
+        `Failed to submit review: ${caught.message}`,
         HttpStatus.INTERNAL_SERVER_ERROR,
       );
     }
@@ -290,35 +316,68 @@ export class EmployeePerformanceService {
         throw new NotFoundException('Performance submission not found.');
       }
 
-      if (record.status !== EmployeePerformanceStatus.SUBMITTED) {
-        throw new BadRequestException('Edit request can only be submitted for a SUBMITTED review.');
+      const review = await this.reviewRepository.findOne({
+        where: {
+          employeeId: record.employeeId,
+          quarter: record.quarter,
+          financialYear: record.financialYear,
+        },
+      });
+      if (
+        review?.status === QuarterlyReviewStatus.COMPLETED ||
+        review?.status === QuarterlyReviewStatus.REVIEWED
+      ) {
+        throw new BadRequestException('This review is completed. You can only view it.');
       }
-
-      // 1-Day Window verification (24 hours)
-      const submittedAt = record.submittedAt || record.createdAt;
-      const now = new Date();
-      const diffMs = now.getTime() - new Date(submittedAt).getTime();
-
-      if (diffMs > appraisalWindowMs(APPRAISAL_EDIT_WINDOW_HOURS)) {
-        throw new BadRequestException(
-          'Edit request window has expired. You can only request edit permission within 1 day (24 hours) of submission.',
-        );
+      if (record.status === EmployeePerformanceStatus.RE_SUBMITTED) {
+        throw new BadRequestException('This submission cannot be edited again.');
       }
-
+      if (
+        record.status === EmployeePerformanceStatus.COMPLETED ||
+        record.status === EmployeePerformanceStatus.REVIEWED
+      ) {
+        throw new BadRequestException('This review is completed. You can only view it.');
+      }
       if (record.editRequestStatus === EditRequestStatus.PENDING) {
         throw new BadRequestException(
           'An edit request is already pending approval from your manager.',
         );
       }
 
-      record.status = EmployeePerformanceStatus.EDIT_REQUESTED;
-      record.editRequestStatus = EditRequestStatus.PENDING;
-      record.editRequestedAt = new Date();
-      record.editRequestReason = dto.reason || EDIT_REQUEST_DEFAULT_REASON;
-      record.editPopupSeenStatus = null;
+      if (record.status === EmployeePerformanceStatus.NOT_UPDATED) {
+        record.editRequestStatus = EditRequestStatus.PENDING;
+        record.editRequestedAt = new Date();
+        record.editRequestReason = dto.reason || EDIT_REQUEST_DEFAULT_REASON;
+        record.editPopupSeenStatus = null;
+      } else if (record.status === EmployeePerformanceStatus.SUBMITTED) {
+        const submittedAt = record.submittedAt || record.createdAt;
+        const diffMs = Date.now() - new Date(submittedAt).getTime();
+        if (diffMs > appraisalWindowMs(APPRAISAL_EDIT_WINDOW_HOURS)) {
+          throw new BadRequestException(
+            'Edit request window has expired. You can request an edit within 2 days of submission.',
+          );
+        }
+        record.status = EmployeePerformanceStatus.REQUESTED_FOR_EDIT;
+        record.editRequestStatus = EditRequestStatus.PENDING;
+        record.editRequestedAt = new Date();
+        record.editRequestReason = dto.reason || EDIT_REQUEST_DEFAULT_REASON;
+        record.editPopupSeenStatus = null;
+      } else {
+        throw new BadRequestException('Edit request can only be submitted for a submitted review.');
+      }
 
       const saved = await this.performanceRepository.save(record);
-      await this.copyStatusToReview(saved.employeeId, saved.quarter, saved.financialYear, saved.status, saved.id);
+      if (saved.status === EmployeePerformanceStatus.REQUESTED_FOR_EDIT) {
+        await this.setReviewStatus(
+          saved.employeeId,
+          saved.quarter,
+          saved.financialYear,
+          QuarterlyReviewStatus.REQUESTED_FOR_EDIT,
+          saved.id,
+        );
+      } else {
+        await this.linkPerformanceToReview(saved.employeeId, saved.quarter, saved.financialYear, saved.id);
+      }
       const enriched = await this.enrichPerformancesWithEmployeeDetails([saved]);
       await this.noticeService.notifyManagerOfEditRequest({
         employeeId: saved.employeeId,
@@ -328,10 +387,11 @@ export class EmployeePerformanceService {
       });
       return enriched[0];
     } catch (error) {
-      this.logger.error(`Error requesting edit permission: ${error.message}`, error.stack);
+      const caught = this.caughtError(error);
+      this.logger.error(`Error requesting edit permission: ${caught.message}`, caught.stack);
       if (error instanceof HttpException) throw error;
       throw new HttpException(
-        `Failed to request edit: ${error.message}`,
+        `Failed to request edit: ${caught.message}`,
         HttpStatus.INTERNAL_SERVER_ERROR,
       );
     }
@@ -360,18 +420,37 @@ export class EmployeePerformanceService {
       record.editResponseNote = dto.responseNote || null;
       record.editPopupSeenStatus = null;
 
+      const missedDeadline = record.status === EmployeePerformanceStatus.NOT_UPDATED;
       if (dto.approved) {
-        record.status = EmployeePerformanceStatus.EDIT_GRANTED;
-        record.editAllowedUntil = dto.editAllowedUntil
-          ? new Date(dto.editAllowedUntil)
-          : new Date(Date.now() + appraisalWindowMs(APPRAISAL_EDIT_WINDOW_HOURS));
-      } else {
+        record.status = missedDeadline
+          ? EmployeePerformanceStatus.ALLOWED_TO_EDIT
+          : EmployeePerformanceStatus.APPROVED_FOR_EDITING;
+        record.editAllowedUntil = null;
+      } else if (!missedDeadline) {
         record.status = EmployeePerformanceStatus.SUBMITTED;
         record.editAllowedUntil = null;
       }
 
       const saved = await this.performanceRepository.save(record);
-      await this.copyStatusToReview(saved.employeeId, saved.quarter, saved.financialYear, saved.status, saved.id);
+      if (saved.status === EmployeePerformanceStatus.APPROVED_FOR_EDITING) {
+        await this.setReviewStatus(
+          saved.employeeId,
+          saved.quarter,
+          saved.financialYear,
+          QuarterlyReviewStatus.APPROVED_FOR_EDITING,
+          saved.id,
+        );
+      } else if (!dto.approved && !missedDeadline) {
+        await this.setReviewStatus(
+          saved.employeeId,
+          saved.quarter,
+          saved.financialYear,
+          QuarterlyReviewStatus.PERFORMANCE_RECEIVED,
+          saved.id,
+        );
+      } else {
+        await this.linkPerformanceToReview(saved.employeeId, saved.quarter, saved.financialYear, saved.id);
+      }
       const enriched = await this.enrichPerformancesWithEmployeeDetails([saved]);
       if (dto.approved) {
         await this.noticeService.notifyEmployeeOfEditGrant({
@@ -384,10 +463,11 @@ export class EmployeePerformanceService {
       }
       return enriched[0];
     } catch (error) {
-      this.logger.error(`Error responding to edit request: ${error.message}`, error.stack);
+      const caught = this.caughtError(error);
+      this.logger.error(`Error responding to edit request: ${caught.message}`, caught.stack);
       if (error instanceof HttpException) throw error;
       throw new HttpException(
-        `Failed to process edit request: ${error.message}`,
+        `Failed to process edit request: ${caught.message}`,
         HttpStatus.INTERNAL_SERVER_ERROR,
       );
     }
@@ -451,7 +531,7 @@ export class EmployeePerformanceService {
    * Create standard performance record
    */
   async create(createDto: CreateEmployeePerformanceDto): Promise<EnrichedEmployeePerformance> {
-    return this.saveDraft(createDto);
+    return this.writePerformance(createDto, false);
   }
 
   /**
@@ -523,7 +603,7 @@ export class EmployeePerformanceService {
       if (params?.q?.trim()) {
         const keyword = `%${params.q.trim()}%`;
         qb.andWhere(
-          '(ep.employeeId LIKE :keyword OR ep.majorProjects LIKE :keyword OR ep.keyAccomplishments LIKE :keyword OR ep.financialYear LIKE :keyword OR ep.status LIKE :keyword)',
+          '(ep.employeeId LIKE :keyword OR ep.projects LIKE :keyword OR ep.keyAccomplishments LIKE :keyword OR ep.financialYear LIKE :keyword OR ep.status LIKE :keyword)',
           { keyword },
         );
       }
@@ -547,10 +627,11 @@ export class EmployeePerformanceService {
         limit: params?.limit,
       };
     } catch (error) {
-      this.logger.error(`Error in getByParams performance: ${error.message}`, error.stack);
+      const caught = this.caughtError(error);
+      this.logger.error(`Error in getByParams performance: ${caught.message}`, caught.stack);
       if (error instanceof HttpException) throw error;
       throw new HttpException(
-        `Failed to fetch performance records: ${error.message}`,
+        `Failed to fetch performance records: ${caught.message}`,
         HttpStatus.INTERNAL_SERVER_ERROR,
       );
     }
@@ -609,13 +690,98 @@ export class EmployeePerformanceService {
 
     const fields = { ...updateDto };
     delete fields.status;
+    if (fields.attachments == null) {
+      delete fields.attachments;
+    }
+    if (fields.projects == null) {
+      delete fields.projects;
+    }
+    const nextStatus = DRAFT_ON_SAVE_STATUSES.includes(record.status)
+      ? EmployeePerformanceStatus.DRAFT
+      : record.status;
     Object.assign(record, fields, {
+      status: nextStatus,
       lastModifiedDate: new Date(),
     });
 
     const updated = await this.performanceRepository.save(record);
     const enrichedList = await this.enrichPerformancesWithEmployeeDetails([updated]);
     return enrichedList[0];
+  }
+
+  /**
+   * Upload one file to MinIO and store its object key on the performance row.
+   */
+  async addAttachment(id: number, file: BufferedFile | undefined): Promise<PerformanceAttachment> {
+    let record = await this.performanceRepository.findOne({ where: { id } });
+    if (!record) {
+      throw new NotFoundException(`Employee performance record with ID ${id} not found`);
+    }
+    record = await this.lockIfGrantExpired(record);
+    if (LOCKED_PERFORMANCE_STATUSES.includes(record.status)) {
+      throw new BadRequestException(
+        'Submission is locked. You cannot edit a submitted or reviewed evaluation without manager approval.',
+      );
+    }
+    if (!file || !file.buffer?.length) {
+      throw new BadRequestException('Choose a file to upload.');
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      throw new BadRequestException('Each file must be 10 MB or smaller.');
+    }
+
+    const details = new DocumentMetaInfo();
+    details.refId = id;
+    details.refType = ReferenceType.PROJECT_DOCUMENT;
+    details.entityId = id;
+    details.entityType = EntityType.PROJECT;
+
+    const uploaded = await this.documentUploaderService.uploadImage(file, details);
+    const attachment: PerformanceAttachment = {
+      fileName: file.originalname || uploaded.fileName,
+      fileUrl: uploaded.image_url,
+      fileSize: file.size,
+      fileType: file.mimetype,
+      objectKey: uploaded.key,
+    };
+    return attachment;
+  }
+
+  /**
+   * Remove one stored file from MinIO and from the performance attachments list.
+   */
+  async removeAttachment(id: number, objectKey: string): Promise<PerformanceAttachment[]> {
+    let record = await this.performanceRepository.findOne({ where: { id } });
+    if (!record) {
+      throw new NotFoundException(`Employee performance record with ID ${id} not found`);
+    }
+    record = await this.lockIfGrantExpired(record);
+    if (LOCKED_PERFORMANCE_STATUSES.includes(record.status)) {
+      throw new BadRequestException(
+        'Submission is locked. You cannot edit a submitted or reviewed evaluation without manager approval.',
+      );
+    }
+    if (!objectKey) {
+      throw new BadRequestException('Choose an attachment to remove.');
+    }
+    const current = record.attachments || [];
+    const next = current.filter((item) => item.objectKey !== objectKey);
+    const projects = (record.projects || []).map((project) => ({
+      ...project,
+      attachments: (project.attachments || []).filter((item) => item.objectKey !== objectKey),
+    }));
+    const removedFromColumn = next.length !== current.length;
+    const removedFromProject = JSON.stringify(projects) !== JSON.stringify(record.projects || []);
+    if (!removedFromColumn && !removedFromProject) {
+      await this.documentUploaderService.deleteMinioDoc(objectKey);
+      return current;
+    }
+    await this.documentUploaderService.deleteMinioDoc(objectKey);
+    record.attachments = next;
+    record.projects = projects;
+    record.lastModifiedDate = new Date();
+    const saved = await this.performanceRepository.save(record);
+    return saved.attachments || [];
   }
 
   /**
@@ -659,11 +825,18 @@ export class EmployeePerformanceService {
     return enriched[0];
   }
 
-  private async copyStatusToReview(
+  private caughtError(error: unknown): { message: string; stack?: string } {
+    if (error instanceof Error) {
+      return { message: error.message, stack: error.stack };
+    }
+    return { message: 'Unknown error' };
+  }
+
+  private async setReviewStatus(
     employeeId: string,
     quarter: EmployeePerformance['quarter'],
     financialYear: string,
-    status: EmployeePerformanceStatus,
+    status: QuarterlyReviewStatus,
     performanceId: number,
   ): Promise<void> {
     const review = await this.reviewRepository.findOne({
@@ -675,14 +848,27 @@ export class EmployeePerformanceService {
     review.status = status;
     review.performanceId = performanceId;
     await this.reviewRepository.save(review);
-    await this.annualService.syncEmployeeAnnualRating(employeeId, financialYear);
+  }
+
+  private async linkPerformanceToReview(
+    employeeId: string,
+    quarter: EmployeePerformance['quarter'],
+    financialYear: string,
+    performanceId: number,
+  ): Promise<void> {
+    const review = await this.reviewRepository.findOne({
+      where: { employeeId, quarter, financialYear },
+    });
+    if (!review || review.performanceId === performanceId) {
+      return;
+    }
+    review.performanceId = performanceId;
+    await this.reviewRepository.save(review);
   }
 
   private async lockIfGrantExpired(record: EmployeePerformance): Promise<EmployeePerformance> {
     const allowedUntil = record.editAllowedUntil;
-    const grantOpen =
-      record.status === EmployeePerformanceStatus.EDIT_GRANTED ||
-      record.editRequestStatus === EditRequestStatus.APPROVED;
+    const grantOpen = record.status === EmployeePerformanceStatus.EDIT_GRANTED;
     const expired =
       !!allowedUntil && Date.now() > new Date(allowedUntil).getTime();
 
@@ -696,7 +882,6 @@ export class EmployeePerformanceService {
     record.editAllowedUntil = null;
     record.editPopupSeenStatus = null;
     await this.performanceRepository.save(record);
-    await this.copyStatusToReview(record.employeeId, record.quarter, record.financialYear, record.status, record.id);
     throw new BadRequestException(
       `The edit window granted by your manager expired on ${deadline}. Editing is locked.`,
     );
@@ -730,7 +915,8 @@ export class EmployeePerformanceService {
           });
         });
       } catch (err) {
-        this.logger.warn(`Could not fetch employee details for enrichment: ${err.message}`);
+        const caught = this.caughtError(err);
+        this.logger.warn(`Could not fetch employee details for enrichment: ${caught.message}`);
       }
     }
 

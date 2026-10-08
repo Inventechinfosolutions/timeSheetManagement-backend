@@ -8,19 +8,61 @@ import {
   Min,
   Max,
   IsArray,
+  ValidateNested,
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional, PartialType } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import { QuaterlyEnum } from '../enums/quarterly_review.enums';
 import {
   EmployeePerformanceStatus,
-  LearningGoalsEnum,
-  FeedbackOnWorkCultureEnum,
-  WorkLifeBalanceEnum,
-  SuggestionsForImprovementEnum,
   RateCompanyEnvironmentEnum,
 } from '../enums/employee_performance.enums';
 import { PerformanceAttachment } from '../entities/employee_performance.entity';
+
+export class PerformanceProjectAttachmentDto {
+  @IsString()
+  @IsNotEmpty()
+  fileName: string;
+
+  @IsOptional()
+  @IsString()
+  fileUrl?: string;
+
+  @IsOptional()
+  @IsInt()
+  fileSize?: number;
+
+  @IsOptional()
+  @IsString()
+  fileType?: string;
+
+  @IsString()
+  @IsNotEmpty()
+  objectKey: string;
+}
+
+export class PerformanceProjectDto {
+  @ApiProperty({ example: 'Timesheet Workflow' })
+  @IsString()
+  @IsNotEmpty()
+  title: string;
+
+  @ApiProperty({ example: 'Delivered the appraisal flow' })
+  @IsString()
+  @IsNotEmpty()
+  description: string;
+
+  @ApiProperty({ example: 'Resolved the quarter window' })
+  @IsString()
+  @IsNotEmpty()
+  challenge: string;
+
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => PerformanceProjectAttachmentDto)
+  attachments?: PerformanceProjectAttachmentDto[];
+}
 
 export class CreateEmployeePerformanceDto {
   @ApiProperty({ example: 'EMP-10021', description: 'Employee ID' })
@@ -46,11 +88,6 @@ export class CreateEmployeePerformanceDto {
   financialYear: string;
 
   // --- Section A: Key Deliverables (Stepper 1) ---
-  @ApiPropertyOptional({ example: 'Timesheet Migration, Auth Redesign', description: 'Major projects worked on' })
-  @IsOptional()
-  @IsString()
-  majorProjects?: string;
-
   @ApiPropertyOptional({ example: 'Backend lead, API design, testing', description: 'Responsibilities handled' })
   @IsOptional()
   @IsString()
@@ -72,11 +109,6 @@ export class CreateEmployeePerformanceDto {
   @IsOptional()
   @IsString()
   challengesFaced?: string;
-
-  @ApiPropertyOptional({ example: 'Implemented read replicas and indexed foreign keys', description: 'Risk mitigation steps' })
-  @IsOptional()
-  @IsString()
-  riskMitigationSteps?: string;
 
   // --- Section D: Learning & Development (Stepper 4) ---
   @ApiPropertyOptional({ example: 'NestJS CQRS, Docker containerization', description: 'Skills acquired' })
@@ -107,20 +139,12 @@ export class CreateEmployeePerformanceDto {
   @IsString()
   overview?: string;
 
-  @ApiPropertyOptional({ description: 'Legacy project title' })
+  @ApiPropertyOptional({ type: [PerformanceProjectDto] })
   @IsOptional()
-  @IsString()
-  projectTitle?: string;
-
-  @ApiPropertyOptional({ description: 'Legacy project description' })
-  @IsOptional()
-  @IsString()
-  projectDescription?: string;
-
-  @ApiPropertyOptional({ description: 'Legacy challenge' })
-  @IsOptional()
-  @IsString()
-  challenge?: string;
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => PerformanceProjectDto)
+  projects?: PerformanceProjectDto[];
 
   @ApiPropertyOptional({ description: 'Legacy metric' })
   @IsOptional()
@@ -152,25 +176,25 @@ export class CreateEmployeePerformanceDto {
   @IsInt()
   adaptabilityInitiative?: number;
 
-  @ApiPropertyOptional({ enum: LearningGoalsEnum })
+  @ApiPropertyOptional()
   @IsOptional()
-  @IsEnum(LearningGoalsEnum)
-  learningGoals?: LearningGoalsEnum;
+  @IsString()
+  learningGoals?: string;
 
-  @ApiPropertyOptional({ enum: FeedbackOnWorkCultureEnum })
+  @ApiPropertyOptional()
   @IsOptional()
-  @IsEnum(FeedbackOnWorkCultureEnum)
-  feedbackOnWorkCulture?: FeedbackOnWorkCultureEnum;
+  @IsString()
+  feedbackOnWorkCulture?: string;
 
-  @ApiPropertyOptional({ enum: WorkLifeBalanceEnum })
+  @ApiPropertyOptional()
   @IsOptional()
-  @IsEnum(WorkLifeBalanceEnum)
-  workLifeBalance?: WorkLifeBalanceEnum;
+  @IsString()
+  workLifeBalance?: string;
 
-  @ApiPropertyOptional({ enum: SuggestionsForImprovementEnum })
+  @ApiPropertyOptional()
   @IsOptional()
-  @IsEnum(SuggestionsForImprovementEnum)
-  suggestionsForImprovement?: SuggestionsForImprovementEnum;
+  @IsString()
+  suggestionsForImprovement?: string;
 
   @ApiPropertyOptional({ enum: RateCompanyEnvironmentEnum })
   @IsOptional()
