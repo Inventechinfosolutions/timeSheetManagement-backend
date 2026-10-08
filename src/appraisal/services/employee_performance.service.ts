@@ -23,7 +23,6 @@ import {
 } from '../dto/employee_performance.dto';
 import { EmployeePerformanceStatus } from '../enums/employee_performance.enums';
 import { QuarterlyReviewStatus } from '../enums/quarterly_review.enums';
-import { EditRequestStatus } from '../enums/edit_request.enums';
 import { AppraisalNoticeService } from './appraisal_notice.service';
 import { DocumentUploaderService } from '../../common/document-uploader/services/document-uploader.service';
 import { DocumentMetaInfo, EntityType, ReferenceType } from '../../common/document-uploader/models/documentmetainfo.model';
@@ -31,13 +30,20 @@ import { BufferedFile } from '../../common/s3-client/file.model';
 import { PerformanceAttachment } from '../entities/employee_performance.entity';
 import {
   APPRAISAL_EDIT_WINDOW_HOURS,
-  EDIT_NOTICE_STATUSES,
   EDIT_REQUEST_DEFAULT_REASON,
   DRAFT_ON_SAVE_STATUSES,
   LOCKED_PERFORMANCE_STATUSES,
   SUBMITTABLE_PERFORMANCE_STATUSES,
   appraisalWindowMs,
 } from '../constants/appraisal.constants';
+
+export interface PerformanceListMeta {
+  totalItems: number;
+  itemCount: number;
+  itemsPerPage: number;
+  totalPages: number;
+  currentPage: number;
+}
 
 export interface EnrichedEmployeePerformance extends EmployeePerformance {
   averageCollaborationScore?: number | null;
@@ -46,7 +52,9 @@ export interface EnrichedEmployeePerformance extends EmployeePerformance {
   designation?: string | null;
   canRequestEdit?: boolean;
   isEditWindowActive?: boolean;
-  showEditPopup?: boolean;
+  assignedBy?: string | null;
+  assignedDate?: Date | string | null;
+  deadlineDate?: Date | string | null;
 }
 
 @Injectable()
@@ -227,9 +235,7 @@ export class EmployeePerformanceService {
       record.submittedAt = submittedAt;
       record.lastModifiedDate = new Date();
       record.lastModifiedBy = dto.employeeId;
-      record.editRequestStatus = EditRequestStatus.NONE;
       record.editAllowedUntil = null;
-      record.editPopupSeenStatus = null;
 
       const saved = await this.performanceRepository.save(record);
 
@@ -338,17 +344,17 @@ export class EmployeePerformanceService {
       ) {
         throw new BadRequestException('This review is completed. You can only view it.');
       }
-      if (record.editRequestStatus === EditRequestStatus.PENDING) {
+      if (record.status === EmployeePerformanceStatus.REQUESTED_FOR_EDIT) {
         throw new BadRequestException(
           'An edit request is already pending approval from your manager.',
         );
       }
 
-      if (record.status === EmployeePerformanceStatus.NOT_UPDATED) {
-        record.editRequestStatus = EditRequestStatus.PENDING;
+      const missedDeadline = record.status === EmployeePerformanceStatus.NOT_UPDATED;
+      if (missedDeadline) {
+        record.status = EmployeePerformanceStatus.REQUESTED_FOR_EDIT;
         record.editRequestedAt = new Date();
         record.editRequestReason = dto.reason || EDIT_REQUEST_DEFAULT_REASON;
-        record.editPopupSeenStatus = null;
       } else if (record.status === EmployeePerformanceStatus.SUBMITTED) {
         const submittedAt = record.submittedAt || record.createdAt;
         const diffMs = Date.now() - new Date(submittedAt).getTime();
@@ -358,16 +364,14 @@ export class EmployeePerformanceService {
           );
         }
         record.status = EmployeePerformanceStatus.REQUESTED_FOR_EDIT;
-        record.editRequestStatus = EditRequestStatus.PENDING;
         record.editRequestedAt = new Date();
         record.editRequestReason = dto.reason || EDIT_REQUEST_DEFAULT_REASON;
-        record.editPopupSeenStatus = null;
       } else {
         throw new BadRequestException('Edit request can only be submitted for a submitted review.');
       }
 
       const saved = await this.performanceRepository.save(record);
-      if (saved.status === EmployeePerformanceStatus.REQUESTED_FOR_EDIT) {
+      if (saved.status === EmployeePerformanceStatus.REQUESTED_FOR_EDIT && !missedDeadline) {
         await this.setReviewStatus(
           saved.employeeId,
           saved.quarter,
@@ -411,23 +415,32 @@ export class EmployeePerformanceService {
         throw new NotFoundException(`Performance submission with ID ${targetId} not found.`);
       }
 
-      if (record.editRequestStatus !== EditRequestStatus.PENDING) {
+      if (record.status !== EmployeePerformanceStatus.REQUESTED_FOR_EDIT) {
         throw new BadRequestException('This submission does not have a pending edit request.');
       }
 
-      record.editRequestStatus = dto.approved ? EditRequestStatus.APPROVED : EditRequestStatus.REJECTED;
+      const review = await this.reviewRepository.findOne({
+        where: {
+          employeeId: record.employeeId,
+          quarter: record.quarter,
+          financialYear: record.financialYear,
+        },
+      });
       record.editRespondedAt = new Date();
       record.editResponseNote = dto.responseNote || null;
-      record.editPopupSeenStatus = null;
 
-      const missedDeadline = record.status === EmployeePerformanceStatus.NOT_UPDATED;
+      const missedDeadline =
+        review?.status === QuarterlyReviewStatus.ASSIGNED ||
+        review?.status === QuarterlyReviewStatus.NOT_STARTED;
       if (dto.approved) {
         record.status = missedDeadline
           ? EmployeePerformanceStatus.ALLOWED_TO_EDIT
           : EmployeePerformanceStatus.APPROVED_FOR_EDITING;
         record.editAllowedUntil = null;
-      } else if (!missedDeadline) {
-        record.status = EmployeePerformanceStatus.SUBMITTED;
+      } else {
+        record.status = missedDeadline
+          ? EmployeePerformanceStatus.NOT_UPDATED
+          : EmployeePerformanceStatus.SUBMITTED;
         record.editAllowedUntil = null;
       }
 
@@ -482,7 +495,13 @@ export class EmployeePerformanceService {
     q?: string,
   ): Promise<EnrichedEmployeePerformance[]> {
     const qb = this.performanceRepository.createQueryBuilder('ep')
-      .where('ep.editRequestStatus != :none', { none: EditRequestStatus.NONE });
+      .where('ep.status IN (:...editStatuses)', {
+        editStatuses: [
+          EmployeePerformanceStatus.REQUESTED_FOR_EDIT,
+          EmployeePerformanceStatus.APPROVED_FOR_EDITING,
+          EmployeePerformanceStatus.ALLOWED_TO_EDIT,
+        ],
+      });
 
     if (employeeId?.trim()) {
       qb.andWhere('ep.employeeId = :employeeId', { employeeId: employeeId.trim() });
@@ -539,9 +558,7 @@ export class EmployeePerformanceService {
    */
   async findAll(query?: QueryEmployeePerformanceDto): Promise<{
     data: EnrichedEmployeePerformance[];
-    total: number;
-    page?: number;
-    limit?: number;
+    meta: PerformanceListMeta;
   }> {
     return this.getByParams(query);
   }
@@ -551,9 +568,7 @@ export class EmployeePerformanceService {
    */
   async getByParams(params?: QueryEmployeePerformanceDto): Promise<{
     data: EnrichedEmployeePerformance[];
-    total: number;
-    page?: number;
-    limit?: number;
+    meta: PerformanceListMeta;
   }> {
     try {
       const qb = this.performanceRepository.createQueryBuilder('ep');
@@ -579,7 +594,7 @@ export class EmployeePerformanceService {
         const matchedIds = matchedEmployees.map((e) => e.employeeId).filter(Boolean);
 
         if (matchedIds.length === 0) {
-          return { data: [], total: 0, page: params?.page, limit: params?.limit };
+          return { data: [], meta: this.listMeta(0, 0, params?.page, params?.limit) };
         }
         qb.andWhere('ep.employeeId IN (:...matchedIds)', { matchedIds });
       }
@@ -618,13 +633,13 @@ export class EmployeePerformanceService {
       }
 
       const records = await qb.getMany();
-      const enriched = await this.enrichPerformancesWithEmployeeDetails(records);
+      const enriched = await this.attachReviewAssignment(
+        await this.enrichPerformancesWithEmployeeDetails(records),
+      );
 
       return {
         data: enriched,
-        total,
-        page: params?.page,
-        limit: params?.limit,
+        meta: this.listMeta(total, enriched.length, params?.page, params?.limit),
       };
     } catch (error) {
       const caught = this.caughtError(error);
@@ -642,9 +657,7 @@ export class EmployeePerformanceService {
    */
   async getBySearch(searchDto: SearchEmployeePerformanceDto): Promise<{
     data: EnrichedEmployeePerformance[];
-    total: number;
-    page?: number;
-    limit?: number;
+    meta: PerformanceListMeta;
   }> {
     return this.getByParams(searchDto);
   }
@@ -661,8 +674,8 @@ export class EmployeePerformanceService {
       throw new NotFoundException(`Employee performance record with ID ${id} not found`);
     }
 
-    const enriched = await this.enrichPerformancesWithEmployeeDetails([record]);
-    return enriched[0];
+    const [withReview] = await this.attachReviewAssignment([record]);
+    return withReview;
   }
 
   /**
@@ -803,26 +816,22 @@ export class EmployeePerformanceService {
     };
   }
 
-  async acknowledgeEditPopup(
-    id: number,
-    employeeId: string,
-  ): Promise<EnrichedEmployeePerformance> {
-    const record = await this.performanceRepository.findOne({
-      where: { id, employeeId },
-    });
-
-    if (!record) {
-      throw new NotFoundException('Performance submission not found.');
-    }
-
-    if (!EDIT_NOTICE_STATUSES.includes(record.status)) {
-      throw new BadRequestException('There is no edit notice to acknowledge.');
-    }
-
-    record.editPopupSeenStatus = record.status;
-    const saved = await this.performanceRepository.save(record);
-    const enriched = await this.enrichPerformancesWithEmployeeDetails([saved]);
-    return enriched[0];
+  private listMeta(
+    totalItems: number,
+    itemCount: number,
+    page?: number,
+    limit?: number,
+  ): PerformanceListMeta {
+    const currentPage = page && page > 0 ? page : 1;
+    const itemsPerPage = limit && limit > 0 ? limit : Math.max(itemCount, 1);
+    const totalPages = totalItems === 0 ? 0 : Math.ceil(totalItems / itemsPerPage);
+    return {
+      totalItems,
+      itemCount,
+      itemsPerPage,
+      totalPages,
+      currentPage,
+    };
   }
 
   private caughtError(error: unknown): { message: string; stack?: string } {
@@ -878,13 +887,49 @@ export class EmployeePerformanceService {
 
     const deadline = new Date(allowedUntil).toLocaleString();
     record.status = EmployeePerformanceStatus.SUBMITTED;
-    record.editRequestStatus = EditRequestStatus.NONE;
     record.editAllowedUntil = null;
-    record.editPopupSeenStatus = null;
     await this.performanceRepository.save(record);
     throw new BadRequestException(
       `The edit window granted by your manager expired on ${deadline}. Editing is locked.`,
     );
+  }
+
+  private async attachReviewAssignment(
+    records: EnrichedEmployeePerformance[],
+  ): Promise<EnrichedEmployeePerformance[]> {
+    if (!records.length) {
+      return records;
+    }
+
+    const reviews = await this.reviewRepository.find({
+      where: records.map((record) => ({
+        employeeId: record.employeeId,
+        quarter: record.quarter,
+        financialYear: record.financialYear,
+      })),
+      select: ['employeeId', 'quarter', 'financialYear', 'assignerId', 'assignedDate', 'deadlineDate'],
+    });
+    const assignerIds = Array.from(new Set(reviews.map((review) => review.assignerId).filter(Boolean)));
+    const assigners = assignerIds.length
+      ? await this.employeeDetailsRepository.find({
+          where: { employeeId: In(assignerIds) },
+          select: ['employeeId', 'fullName'],
+        })
+      : [];
+    const nameById = new Map(assigners.map((person) => [person.employeeId, person.fullName]));
+    const reviewByKey = new Map(
+      reviews.map((review) => [`${review.employeeId}|${review.quarter}|${review.financialYear}`, review]),
+    );
+
+    return records.map((record) => {
+      const review = reviewByKey.get(`${record.employeeId}|${record.quarter}|${record.financialYear}`);
+      return {
+        ...record,
+        assignedBy: review ? nameById.get(review.assignerId) || null : null,
+        assignedDate: review?.assignedDate ?? null,
+        deadlineDate: review?.deadlineDate ?? null,
+      };
+    });
   }
 
   /**
@@ -938,9 +983,6 @@ export class EmployeePerformanceService {
         now.getTime() <= new Date(r.editAllowedUntil).getTime()
       );
 
-      const showEditPopup =
-        EDIT_NOTICE_STATUSES.includes(r.status) && r.editPopupSeenStatus !== r.status;
-
       return {
         ...r,
         employeeName: empInfo?.fullName || null,
@@ -948,7 +990,6 @@ export class EmployeePerformanceService {
         designation: empInfo?.designation || null,
         canRequestEdit,
         isEditWindowActive,
-        showEditPopup,
       };
     });
   }

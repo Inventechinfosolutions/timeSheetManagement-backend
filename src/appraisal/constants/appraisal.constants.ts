@@ -33,15 +33,7 @@ export const LOCKED_PERFORMANCE_STATUSES: readonly EmployeePerformanceStatus[] =
   EmployeePerformanceStatus.COMPLETED,
   EmployeePerformanceStatus.NOT_UPDATED,
   EmployeePerformanceStatus.REVIEWED,
-  EmployeePerformanceStatus.EDIT_REQUESTED,
   EmployeePerformanceStatus.PERFORMANCE_RECEIVED,
-];
-
-export const EDIT_NOTICE_STATUSES: readonly EmployeePerformanceStatus[] = [
-  EmployeePerformanceStatus.EDIT_REQUESTED,
-  EmployeePerformanceStatus.EDIT_GRANTED,
-  EmployeePerformanceStatus.APPROVED_FOR_EDITING,
-  EmployeePerformanceStatus.ALLOWED_TO_EDIT,
 ];
 
 export const SUBMITTABLE_PERFORMANCE_STATUSES: readonly EmployeePerformanceStatus[] = [

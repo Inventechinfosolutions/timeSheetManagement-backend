@@ -5,8 +5,6 @@ import {
   EmployeePerformanceStatus,
   RateCompanyEnvironmentEnum,
 } from '../enums/employee_performance.enums';
-import { EditRequestStatus } from '../enums/edit_request.enums';
-
 export interface PerformanceAttachment {
   fileName: string;
   fileUrl: string;
@@ -64,15 +62,6 @@ export class EmployeePerformance extends BaseEntity {
   @Column({ type: 'varchar', length: 100, nullable: true })
   lastModifiedBy: string;
 
-  // --- Edit Permission Tracking (Option A - No separate table needed) ---
-  @Column({
-    type: 'enum',
-    enum: EditRequestStatus,
-    default: EditRequestStatus.NONE,
-    nullable: false,
-  })
-  editRequestStatus: EditRequestStatus;
-
   @Column({ type: 'datetime', nullable: true })
   editRequestedAt: Date | null;
 
@@ -87,9 +76,6 @@ export class EmployeePerformance extends BaseEntity {
 
   @Column({ type: 'datetime', nullable: true })
   editAllowedUntil: Date | null;
-
-  @Column({ type: 'varchar', name: 'editPopupSeenStatus', length: 50, nullable: true })
-  editPopupSeenStatus: EmployeePerformanceStatus | null;
 
   // --- FRS Stepper 1 & Section A: Key Deliverables ---
   @Column({ type: 'text', nullable: true })

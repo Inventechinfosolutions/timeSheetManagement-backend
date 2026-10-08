@@ -29,7 +29,6 @@ import {
   QuaterlyEnum,
 } from '../enums/quarterly_review.enums';
 import { EmployeePerformanceStatus } from '../enums/employee_performance.enums';
-import { EditRequestStatus } from '../enums/edit_request.enums';
 import { AnnualAppraisalService } from './annual_appraisal.service';
 import { AppraisalNoticeService } from './appraisal_notice.service';
 import {
@@ -527,6 +526,7 @@ export class QuarterlyReviewService {
       quarter: review.quarter,
       financialYear: review.financialYear,
       finalRating: review.finalRating,
+      averageScore: Number(review.averageScore ?? review.finalRating),
       ratingDescription: review.ratingDescription || '',
       productivity: Number(review.productivity),
       qualityOfWork: Number(review.qualityOfWork),
@@ -962,7 +962,6 @@ export class QuarterlyReviewService {
         quarter,
         financialYear,
         status: EmployeePerformanceStatus.NOT_STARTED,
-        editRequestStatus: EditRequestStatus.NONE,
       }),
     );
   }

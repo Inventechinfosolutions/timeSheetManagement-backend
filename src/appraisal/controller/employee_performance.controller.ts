@@ -36,7 +36,6 @@ import {
   SubmitReviewDto,
   RequestEditPermissionDto,
   RespondEditPermissionDto,
-  AckEditPopupDto,
 } from '../dto/employee_performance.dto';
 import { EmployeePerformance } from '../entities/employee_performance.entity';
 
@@ -127,16 +126,6 @@ export class EmployeePerformanceController {
     @Query('q') q?: string,
   ) {
     return await this.performanceService.getEditRequests(managerId, employeeId, q);
-  }
-
-  @Post(':id/ack-edit-popup')
-  @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Mark the one-time edit notice as seen' })
-  async acknowledgeEditPopup(
-    @Param('id', ParseIntPipe) id: number,
-    @Body() dto: AckEditPopupDto,
-  ) {
-    return await this.performanceService.acknowledgeEditPopup(id, dto.employeeId);
   }
 
   /**

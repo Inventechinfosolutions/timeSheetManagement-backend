@@ -11,6 +11,9 @@ export class RevealedEvaluationDto {
   finalRating: number;
 
   @ApiProperty()
+  averageScore: number;
+
+  @ApiProperty()
   ratingDescription: string;
 
   @ApiProperty()
