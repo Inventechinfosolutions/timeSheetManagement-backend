@@ -74,7 +74,7 @@ export const buildReviewCompletedNotice = (
   context: Pick<AppraisalNoticeContext, 'quarter' | 'financialYear'>,
 ): AppraisalNoticeContent => ({
   title: `Quarterly review completed (${context.quarter} ${context.financialYear})`,
-  message: `Your ${context.quarter} ${context.financialYear} quarterly review is complete.`,
+  message: `Your ${context.quarter} ${context.financialYear} quarterly review is complete. You can log in and view your review.`,
 });
 
 const NOTICE_DATE_LOCALE = 'en-GB';
@@ -122,7 +122,7 @@ export const buildAssignmentNotice = (
   context: AppraisalNoticeContext & { deadlineDate: Date | string | null },
 ): AppraisalNoticeContent => ({
   title: `Quarterly review assigned (${context.quarter} ${context.financialYear})`,
-  message: `A ${context.quarter} review for ${context.financialYear} has been assigned to you.\nPlease fill in all the details as stated and submit it before ${formatAppraisalNoticeDate(context.deadlineDate)}.`,
+  message: `A ${context.quarter} review for ${context.financialYear} has been assigned to you.\nPlease fill in all the details and submit it before ${formatAppraisalNoticeDate(context.deadlineDate)}.`,
 });
 
 export const buildEmployeeSubmissionNotice = (

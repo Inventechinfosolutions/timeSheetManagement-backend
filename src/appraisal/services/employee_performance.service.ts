@@ -55,6 +55,7 @@ export interface EnrichedEmployeePerformance extends EmployeePerformance {
   assignedBy?: string | null;
   assignedDate?: Date | string | null;
   deadlineDate?: Date | string | null;
+  description?: string | null;
   reviewId?: number | null;
 }
 
@@ -908,7 +909,7 @@ export class EmployeePerformanceService {
         quarter: record.quarter,
         financialYear: record.financialYear,
       })),
-      select: ['id', 'employeeId', 'quarter', 'financialYear', 'assignerId', 'assignedDate', 'deadlineDate'],
+      select: ['id', 'employeeId', 'quarter', 'financialYear', 'assignerId', 'assignedDate', 'deadlineDate', 'description'],
     });
     const assignerIds = Array.from(new Set(reviews.map((review) => review.assignerId).filter(Boolean)));
     const assigners = assignerIds.length
@@ -929,6 +930,7 @@ export class EmployeePerformanceService {
         assignedBy: review ? nameById.get(review.assignerId) || null : null,
         assignedDate: review?.assignedDate ?? null,
         deadlineDate: review?.deadlineDate ?? null,
+        description: review?.description ?? null,
         reviewId: review?.id ?? null,
       };
     });

@@ -837,13 +837,10 @@ export class QuarterlyReviewService {
       delete definedUpdate.description;
     }
     if (definedUpdate.deadlineDate) {
-      const assigned =
-        definedUpdate.assignedDate ||
-        (review.assignedDate ? review.assignedDate.toISOString().slice(0, 10) : undefined);
-      this.assertDeadlineAfterAssigned(
-        typeof assigned === 'string' ? assigned : undefined,
-        String(definedUpdate.deadlineDate),
+      const assigned = this.dateOnly(
+        typeof definedUpdate.assignedDate === 'string' ? definedUpdate.assignedDate : review.assignedDate,
       );
+      this.assertDeadlineAfterAssigned(assigned, String(definedUpdate.deadlineDate));
     }
     Object.assign(review, definedUpdate);
 
@@ -893,6 +890,17 @@ export class QuarterlyReviewService {
       success: true,
       message: `Quarterly review with ID ${id} deleted successfully`,
     };
+  }
+
+  private dateOnly(value?: Date | string | null): string | undefined {
+    if (!value) {
+      return undefined;
+    }
+    if (value instanceof Date) {
+      return Number.isNaN(value.getTime()) ? undefined : value.toISOString().slice(0, 10);
+    }
+    const text = String(value).slice(0, 10);
+    return /^\d{4}-\d{2}-\d{2}$/.test(text) ? text : undefined;
   }
 
   private assertDeadlineAfterAssigned(assignedDate?: string | null, deadlineDate?: string | null): void {
