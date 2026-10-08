@@ -132,8 +132,8 @@ export class EmployeePerformance extends BaseEntity {
   @Column({ type: 'int', nullable: true })
   adaptabilityInitiative: number;
 
-  @Column({ type: 'text', nullable: true })
-  learningGoals: string;
+  @Column({ type: 'simple-json', nullable: true })
+  learningGoals: string[];
 
   @Column({ type: 'text', nullable: true })
   feedbackOnWorkCulture: string;

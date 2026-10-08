@@ -176,10 +176,10 @@ export class CreateEmployeePerformanceDto {
   @IsInt()
   adaptabilityInitiative?: number;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({ type: [String], description: 'List of learning goals' })
   @IsOptional()
-  @IsString()
-  learningGoals?: string;
+  @IsArray()
+  learningGoals?: string[];
 
   @ApiPropertyOptional()
   @IsOptional()
