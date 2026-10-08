@@ -170,6 +170,58 @@ export class DocumentUploaderService {
     }
   }
 
+  /**
+   * One query for many notes, then storage metadata in parallel.
+   * List and inbox only need keys and names, not a storage call per note.
+   */
+  async getDocsForEntities(
+    entityType: EntityType,
+    entityIds: number[],
+    referenceType?: ReferenceType,
+    loadNames = false,
+  ): Promise<Map<number, DocumentDetailsDto[]>> {
+    const grouped = new Map<number, DocumentDetailsDto[]>();
+    const ids = Array.from(new Set(entityIds.filter((id) => id != null)));
+    if (ids.length === 0) return grouped;
+
+    const qb = this.documentRepo
+      .createQueryBuilder('doc')
+      .where('doc.entityType = :entityType', { entityType })
+      .andWhere('doc.entityId IN (:...ids)', { ids });
+    if (referenceType) {
+      qb.andWhere('doc.refType = :referenceType', { referenceType });
+    }
+    const objects = await qb.getMany();
+
+    await Promise.all(
+      objects.map(async (e) => {
+        const key = e.s3Key || e.id;
+        let name = 'Attachment';
+        if (loadNames) {
+          try {
+            const metadata = await this.getMetaData(key);
+            name = metadata?.filename || name;
+          } catch {
+            name = 'Attachment';
+          }
+        }
+        const docDetails = new DocumentDetailsDto();
+        docDetails.entityType = e.entityType;
+        docDetails.entityId = e.entityId;
+        docDetails.refType = e.refType;
+        docDetails.refId = e.refId;
+        docDetails.name = name;
+        docDetails.key = key;
+        docDetails.createdAt = e.createdAt;
+        const list = grouped.get(e.entityId) || [];
+        list.push(docDetails);
+        grouped.set(e.entityId, list);
+      }),
+    );
+
+    return grouped;
+  }
+
   async deleteDoc(key: string) {
     try {
       this.logger.log(`Attempting to delete document with key: ${key}`);
