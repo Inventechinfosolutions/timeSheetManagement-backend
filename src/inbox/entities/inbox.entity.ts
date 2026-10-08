@@ -48,6 +48,9 @@ export class Inbox {
   @Column({ name: 'is_read', type: 'boolean', default: false })
   isRead: boolean;
 
+  @Column({ name: 'is_starred', type: 'tinyint', width: 1, default: 0 })
+  isStarred: number;
+
   @Column({ name: 'has_document', type: 'boolean', default: false })
   hasDocument: boolean;
 
