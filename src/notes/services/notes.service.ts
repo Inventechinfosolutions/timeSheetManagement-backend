@@ -11,6 +11,10 @@ import { Repository } from 'typeorm';
 import { Note } from '../entities/note.entity';
 import { NotePermission } from '../enums/note-permission.enum';
 import { Inbox } from '../../inbox/entities/inbox.entity';
+import {
+  hasNotePermission,
+  resolveInboxPermissionsForUser,
+} from '../../inbox/services/inbox.service';
 import { CreateNoteDto } from '../dto/create-note.dto';
 import { UpdateNoteDto } from '../dto/update-note.dto';
 import { CreateSubNoteDto } from '../dto/create-sub-note.dto';
@@ -80,10 +84,7 @@ export class NotesService {
             : ((createDto as any).isAutoSave !== undefined
               ? (createDto as any).isAutoSave
               : true),
-        isVertical:
-          createDto.isVertical !== undefined
-            ? createDto.isVertical
-            : true,
+        isVertical: createDto.isVertical !== undefined ? createDto.isVertical : true,
         userId: userInfo.userId,
         employeeId: userInfo.employeeId,
         createdBy: userInfo.createdBy,
@@ -230,21 +231,17 @@ export class NotesService {
           (note as any).canEdit = true;
           (note as any).canDelete = true;
         } else {
-          const recipient = await this.inboxRepo.findOne({
-            where: [
-              { notesId: note.id, employeeId: employeeId || '' },
-              { notesId: note.id, toMail: user.email || '' },
-              { notesId: note.id, employeeId: user.email || '' },
-            ],
-          });
-          const perms = recipient?.permission || NotePermission.CanView;
-          const permsLower = perms.toLowerCase();
+          const perms =
+            (await resolveInboxPermissionsForUser(this.inboxRepo, note.id, {
+              employeeId,
+              email: user.email || '',
+            })) || NotePermission.CanView;
           (note as any).permission = perms;
           (note as any).userPermission = perms;
           (note as any).isOwner = false;
           (note as any).canView = true;
-          (note as any).canEdit = permsLower.includes('edit');
-          (note as any).canDelete = permsLower.includes('delete');
+          (note as any).canEdit = hasNotePermission(perms, NotePermission.CanEdit);
+          (note as any).canDelete = hasNotePermission(perms, NotePermission.CanDelete);
         }
       }
 
@@ -274,20 +271,16 @@ export class NotesService {
         (employeeId && note.employeeId === employeeId);
 
       if (!isOwner) {
-        const recipient = await this.inboxRepo.findOne({
-          where: [
-            { notesId: id, employeeId: employeeId || '' },
-            { notesId: id, toMail: user?.email || '' },
-            { notesId: id, employeeId: user?.email || '' },
-          ],
+        const perms = await resolveInboxPermissionsForUser(this.inboxRepo, id, {
+          employeeId,
+          email: user?.email || '',
         });
 
-        if (!recipient) {
+        if (!perms) {
           throw new ForbiddenException('You do not have access to edit this note');
         }
 
-        const perms = (recipient.permission || '').toLowerCase();
-        if (!perms.includes('canedit') && !perms.includes('edit')) {
+        if (!hasNotePermission(perms, NotePermission.CanEdit)) {
           throw new ForbiddenException('You do not have edit permission for this note');
         }
       }
@@ -333,15 +326,12 @@ export class NotesService {
       (employeeId && note.employeeId === employeeId);
 
     if (!isOwner) {
-      const recipient = await this.inboxRepo.findOne({
-        where: [
-          { notesId: id, employeeId: employeeId || '' },
-          { notesId: id, toMail: user?.email || '' },
-          { notesId: id, employeeId: user?.email || '' },
-        ],
+      const perms = await resolveInboxPermissionsForUser(this.inboxRepo, id, {
+        employeeId,
+        email: user?.email || '',
       });
 
-      if (!recipient || (recipient.permission !== NotePermission.CanEdit && (recipient.permission as any) !== 'CanEdit')) {
+      if (!perms || !hasNotePermission(perms, NotePermission.CanEdit)) {
         throw new ForbiddenException('You need edit permission to change auto-save settings');
       }
     }
@@ -373,20 +363,16 @@ export class NotesService {
         (employeeId && note.employeeId === employeeId);
 
       if (!isOwner) {
-        const recipient = await this.inboxRepo.findOne({
-          where: [
-            { notesId: id, employeeId: employeeId || '' },
-            { notesId: id, toMail: user?.email || '' },
-            { notesId: id, employeeId: user?.email || '' },
-          ],
+        const perms = await resolveInboxPermissionsForUser(this.inboxRepo, id, {
+          employeeId,
+          email: user?.email || '',
         });
 
-        if (!recipient) {
+        if (!perms) {
           throw new ForbiddenException('You do not have access to delete this note');
         }
 
-        const perms = (recipient.permission || '').toLowerCase();
-        if (!perms.includes('candelete') && !perms.includes('delete')) {
+        if (!hasNotePermission(perms, NotePermission.CanDelete)) {
           throw new ForbiddenException('You do not have delete permission for this note');
         }
       }
@@ -615,7 +601,7 @@ export class NotesService {
   async extractFileContent(
     file: Express.Multer.File,
     options?: { useOcr?: boolean; bodyOnly?: boolean },
-  ): Promise<{ filename: string; html: string; markdown: string; json: any; text: string }> {
+  ): Promise<{ filename: string; html: string; markdown: string; json: any; text: string; pages?: any[] }> {
     if (!file) {
       throw new BadRequestException('File is required for extraction');
     }
@@ -727,16 +713,26 @@ if (!doclingUrl) {
         },
         maxBodyLength: Infinity,
         maxContentLength: Infinity,
-        timeout: 120000,
+        timeout: 180000,
       });
 
       const html = response.data?.html || '';
+      const extractPages = Array.isArray(response.data?.pages) ? response.data.pages : [];
+
+      // Drop blank Docling pages so the frontend does not render an empty leading sheet
+      const pagesWithContent = extractPages.filter((page: any) => {
+        const pageHtml = String(page?.html || '');
+        const text = pageHtml.replace(/<[^>]*>/g, '').replace(/\u00a0/g, ' ').trim();
+        return Boolean(text) || /<(img|table|svg|canvas)\b/i.test(pageHtml);
+      });
+
       return {
         filename: response.data?.filename || filename,
         html,
         text: html,
         markdown: response.data?.markdown || '',
         json: response.data?.json || null,
+        pages: pagesWithContent,
       };
     } catch (err: any) {
       this.logger.error(`Failed to connect to Docling service at ${doclingUrl}: ${err.message}`);
@@ -797,7 +793,8 @@ if (!doclingUrl) {
         html.push(`<h2 class="section-title">${item.text || item.orig || ''}</h2>`);
       } else if (item.label === 'table') {
         const rows = item.data?.grid || item.data?.rows || [];
-        html.push('<div class="table-container"><table>');
+        const oClass = item.orientation ? ` docling-${item.orientation}` : '';
+        html.push(`<div class=\"table-container${oClass}\"><table>`);
         rows.forEach((row: any[], rIdx: number) => {
           html.push('<tr>');
           row.forEach((cell: any) => {
@@ -810,7 +807,10 @@ if (!doclingUrl) {
         html.push('</table></div>');
       } else {
         const text = (item.text || item.orig || '').trim();
-        if (text) html.push(`<p>${text}</p>`);
+        if (text) {
+          const oClass = item.orientation ? ` class=\"docling-${item.orientation}\"` : '';
+          html.push(`<p${oClass}>${text}</p>`);
+        }
       }
     }
 
@@ -1287,10 +1287,67 @@ if (!doclingUrl) {
   /**
    * Retrieve attachment metadata and stream from storage.
    */
-  async getAttachmentMetaAndStream(key: string) {
-    const metaData = await this.documentUploaderService.getMetaData(key);
-    const dataStream = await this.documentUploaderService.downloadFile(key);
+  async getAttachmentMetaAndStream(key: string, fileName?: string) {
+    const storedKey = await this.resolveStoredAttachmentKey(key, fileName);
+    const metaData = await this.documentUploaderService.getMetaData(storedKey);
+    const dataStream = await this.documentUploaderService.downloadFile(storedKey);
     return { metaData, dataStream };
+  }
+
+  /**
+   * Table chips keep the key from the moment of upload. If that object was
+   * replaced by a later upload of the same file, serve the stored copy.
+   */
+  private async resolveStoredAttachmentKey(key: string, fileName?: string): Promise<string> {
+    if (await this.attachmentObjectExists(key)) {
+      return key;
+    }
+
+    const wanted = this.normalizeAttachmentName(fileName);
+    if (!wanted) {
+      throw new NotFoundException('File not found in storage');
+    }
+
+    const docs = await this.documentRepo.find({
+      where: { refType: ReferenceType.NOTE_ATTACHMENT },
+      order: { createdAt: 'DESC' },
+    });
+
+    for (const doc of docs) {
+      const storedKey = doc.s3Key || doc.id;
+      if (!storedKey || storedKey === key) continue;
+      try {
+        const meta = await this.documentUploaderService.getMetaData(storedKey);
+        if (this.normalizeAttachmentName(meta?.filename) === wanted) {
+          this.logger.warn(
+            `Attachment ${key} is missing. Serving stored file ${storedKey} for "${fileName}".`,
+          );
+          return storedKey;
+        }
+      } catch {
+        continue;
+      }
+    }
+
+    throw new NotFoundException('File not found in storage');
+  }
+
+  private async attachmentObjectExists(key: string): Promise<boolean> {
+    try {
+      await this.documentUploaderService.getMetaData(key);
+      return true;
+    } catch (error: any) {
+      const status = typeof error?.getStatus === 'function' ? error.getStatus() : error?.status;
+      const detail = `${error?.name || ''} ${error?.message || ''}`;
+      if (status === 404 || /NotFound|NoSuchKey|File not found in storage|Unknown/.test(detail)) {
+        return false;
+      }
+      throw error;
+    }
+  }
+
+  private normalizeAttachmentName(name?: string): string {
+    return (name || '').replace(/[^a-zA-Z0-9.]/g, '').toLowerCase();
   }
 
   /**
@@ -1318,20 +1375,19 @@ if (!doclingUrl) {
             (employeeId && note.employeeId === employeeId);
 
           if (!isOwner) {
-            const recipient = await this.inboxRepo.findOne({
-              where: [
-                { notesId: note.id, employeeId: employeeId || '' },
-                { notesId: note.id, toMail: user?.email || '' },
-                { notesId: note.id, employeeId: user?.email || '' },
-              ],
+            const perms = await resolveInboxPermissionsForUser(this.inboxRepo, note.id, {
+              employeeId,
+              email: user?.email || '',
             });
 
-            if (!recipient) {
+            if (!perms) {
               throw new ForbiddenException('You do not have access to delete this attachment');
             }
 
-            const perms = (recipient.permission || '').toLowerCase();
-            if (!perms.includes('candelete') && !perms.includes('delete') && !perms.includes('canedit') && !perms.includes('edit')) {
+            if (
+              !hasNotePermission(perms, NotePermission.CanDelete) &&
+              !hasNotePermission(perms, NotePermission.CanEdit)
+            ) {
               throw new ForbiddenException('You do not have delete permission for this note attachment');
             }
           }

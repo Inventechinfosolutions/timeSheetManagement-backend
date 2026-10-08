@@ -13,6 +13,10 @@ import { Note } from '../entities/note.entity';
 import { NotePermission } from '../enums/note-permission.enum';
 import { Inbox } from '../../inbox/entities/inbox.entity';
 import { DocumentMetaInfo } from '../../common/document-uploader/models/documentmetainfo.model';
+import {
+  hasNotePermission,
+  resolveInboxPermissionsForUser,
+} from '../../inbox/services/inbox.service';
 
 @Injectable()
 export class NotePermissionGuard implements CanActivate {
@@ -58,7 +62,6 @@ export class NotePermissionGuard implements CanActivate {
     } else if (request.query?.noteId && !isNaN(Number(request.query.noteId))) {
       noteId = Number(request.query.noteId);
     } else if (request.params?.key) {
-      // Attachment route: look up entityId from object_store
       const key = request.params.key;
       const doc = await this.documentRepo.findOne({
         where: [{ id: key }, { s3Key: key }],
@@ -86,47 +89,41 @@ export class NotePermissionGuard implements CanActivate {
       return true;
     }
 
-    // Shared Recipient check
-    const recipient = await this.inboxRepo.findOne({
-      where: [
-        { notesId: noteId, employeeId: employeeId || '' },
-        { notesId: noteId, toMail: userEmail || '' },
-        { notesId: noteId, employeeId: userEmail || '' },
-      ],
+    // Merge permissions across all INBOX deliveries (re-sends may grant higher access)
+    const assigned = await resolveInboxPermissionsForUser(this.inboxRepo, noteId, {
+      employeeId,
+      email: userEmail,
     });
 
-    if (!recipient) {
+    if (!assigned) {
       throw new ForbiddenException('You do not have access to this note');
     }
 
-    const userPerms = (recipient.permission || '')
-      .split(',')
-      .map((p: string) => p.trim().toLowerCase());
-
-    // If CanDelete is required
     if (
       requiredPermission === NotePermission.CanDelete ||
       requiredPermission === 'CanDelete' ||
       requiredPermission === 'canDelete' ||
       requiredPermission === 'DELETE'
     ) {
-      if (!userPerms.includes('candelete') && !userPerms.includes('delete')) {
+      if (!hasNotePermission(assigned, NotePermission.CanDelete)) {
         throw new ForbiddenException('You do not have delete permission for this note');
       }
+      return true;
     }
 
-    // If CanEdit is required, verify recipient has CanEdit permission
     if (
       requiredPermission === NotePermission.CanEdit ||
       requiredPermission === 'CanEdit' ||
       requiredPermission === 'canEdit' ||
       requiredPermission === 'EDIT'
     ) {
-      if (!userPerms.includes('canedit') && !userPerms.includes('edit')) {
+      if (!hasNotePermission(assigned, NotePermission.CanEdit)) {
         throw new ForbiddenException('You only have view permission for this note');
       }
+      return true;
     }
 
+    // CanView (or any other) — presence of an inbox delivery is enough
     return true;
   }
 }

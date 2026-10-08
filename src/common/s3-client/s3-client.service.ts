@@ -214,7 +214,7 @@ export class S3ClientService implements OnModuleInit {
       );
  
       if (!stat.Metadata) {
-        throw new HttpException('File metadata not found', HttpStatus.NOT_FOUND);
+        throw new HttpException('File not found in storage', HttpStatus.NOT_FOUND);
       }
  
       const metaData = {
@@ -230,6 +230,17 @@ export class S3ClientService implements OnModuleInit {
  
       return metaData;
     } catch (error) {
+      if (error instanceof HttpException) {
+        throw error;
+      }
+      const statusCode = error?.$metadata?.httpStatusCode;
+      const missing =
+        error?.name === 'NotFound' ||
+        error?.name === 'NoSuchKey' ||
+        statusCode === HttpStatus.NOT_FOUND;
+      if (missing) {
+        throw new HttpException('File not found in storage', HttpStatus.NOT_FOUND);
+      }
       this.logger.error(`Failed to get metadata for object ${objetName}: ${error.stack}`);
       throw new HttpException(
         error.message || 'Failed to get metadata',
@@ -250,6 +261,17 @@ export class S3ClientService implements OnModuleInit {
       this.logger.log(`File downloaded successfully: ${objectName}`);
       return result;
     } catch (error) {
+      if (error instanceof HttpException) {
+        throw error;
+      }
+      const statusCode = error?.$metadata?.httpStatusCode;
+      const missing =
+        error?.name === 'NotFound' ||
+        error?.name === 'NoSuchKey' ||
+        statusCode === HttpStatus.NOT_FOUND;
+      if (missing) {
+        throw new HttpException('File not found in storage', HttpStatus.NOT_FOUND);
+      }
       this.logger.error(`Failed to download file ${objectName}: ${error.stack}`);
       throw error;
     }

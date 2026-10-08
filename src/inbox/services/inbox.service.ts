@@ -20,7 +20,7 @@ import { QueryInboxDto } from '../dto/query-inbox.dto';
 import { MailService } from '../../common/mail/mail.service';
 import { DocumentUploaderService } from '../../common/document-uploader/services/document-uploader.service';
 import { EntityType, ReferenceType } from '../../common/document-uploader/models/documentmetainfo.model';
-import { getNoteEmailTemplate } from '../../common/mail/email-templates';
+import { getNoteEmailTemplate, stripAttachmentUiFromHtml } from '../../common/mail/email-templates';
 
 export function parseNotePermissions(
   val?: any,
@@ -58,9 +58,10 @@ export function parseNotePermissions(
     }
   }
 
-  if (extra?.canDelete) result.add(NotePermission.CanDelete);
-  if (extra?.canEdit) result.add(NotePermission.CanEdit);
-  if (extra?.canView) result.add(NotePermission.CanView);
+  const asBool = (v: any) => v === true || v === 'true' || v === 1 || v === '1';
+  if (asBool(extra?.canDelete)) result.add(NotePermission.CanDelete);
+  if (asBool(extra?.canEdit)) result.add(NotePermission.CanEdit);
+  if (asBool(extra?.canView)) result.add(NotePermission.CanView);
 
   // If nothing specified, default to CanView
   if (result.size === 0) {
@@ -82,7 +83,58 @@ export function hasNotePermission(
   if (!assignedPermissions) return target === NotePermission.CanView;
   const list = assignedPermissions.split(',').map((p) => p.trim().toLowerCase());
   const targetLower = String(target).trim().toLowerCase();
+  // "CanEdit" / "edit" / "CanView,CanEdit" etc.
+  if (targetLower === 'canedit' || targetLower === 'edit') {
+    return list.some((p) => p === 'canedit' || p === 'edit');
+  }
+  if (targetLower === 'candelete' || targetLower === 'delete') {
+    return list.some((p) => p === 'candelete' || p === 'delete');
+  }
+  if (targetLower === 'canview' || targetLower === 'view') {
+    return list.some((p) => p === 'canview' || p === 'view') || list.length > 0;
+  }
   return list.includes(targetLower);
+}
+
+/**
+ * Merge permissions from all INBOX deliveries for a user+note.
+ * Important: a note can be re-sent multiple times; findOne() may return an older
+ * View-only row even when a later delivery granted CanEdit.
+ */
+export async function resolveInboxPermissionsForUser(
+  inboxRepo: Repository<Inbox>,
+  noteId: number,
+  opts: { employeeId?: string | null; email?: string | null },
+): Promise<string | null> {
+  const employeeId = (opts.employeeId || '').trim();
+  const email = (opts.email || '').trim();
+  if (!employeeId && !email) return null;
+
+  const qb = inboxRepo
+    .createQueryBuilder('inbox')
+    .where('inbox.notesId = :noteId', { noteId })
+    .andWhere('(inbox.folder = :inboxFolder OR inbox.folder IS NULL)', {
+      inboxFolder: InboxFolder.INBOX,
+    });
+
+  const clauses: string[] = [];
+  const params: Record<string, string> = {};
+  if (employeeId) {
+    clauses.push('(inbox.employeeId = :employeeId OR inbox.receiverId = :employeeId)');
+    params.employeeId = employeeId;
+  }
+  if (email) {
+    clauses.push(
+      '(LOWER(inbox.toMail) = LOWER(:email) OR LOWER(inbox.employeeId) = LOWER(:email) OR LOWER(inbox.receiverId) = LOWER(:email))',
+    );
+    params.email = email;
+  }
+  qb.andWhere(`(${clauses.join(' OR ')})`, params);
+
+  const rows = await qb.getMany();
+  if (!rows.length) return null;
+
+  return parseNotePermissions(rows.map((r) => r.permission).filter(Boolean));
 }
 
 @Injectable()
@@ -153,6 +205,20 @@ export class InboxService {
         ? Boolean(dto.hasDescription)
         : (dto.includeDescription !== undefined ? Boolean(dto.includeDescription) : true);
 
+      const asBool = (v: any, defaultValue: boolean) => {
+        if (v === undefined || v === null || v === '') return defaultValue;
+        return v === true || v === 'true' || v === 1 || v === '1';
+      };
+      // Default both on for backward compatibility when flags are omitted
+      const sendToInbox = asBool((dto as any).sendToInbox, true);
+      const sendToEmail = asBool((dto as any).sendToEmail, true);
+
+      if (!sendToInbox && !sendToEmail) {
+        throw new BadRequestException(
+          'Select at least one delivery option: Worksphere Inbox and/or Email',
+        );
+      }
+
       // Determine sender details
       const senderEmpId = user?.employeeId || user?.loginId || user?.aliasLoginName;
       let fromMail = user?.email || '';
@@ -173,51 +239,69 @@ export class InboxService {
       }
 
       const createdEntries: Inbox[] = [];
-      const recipientList = Array.from(new Set(dto.recipients.map((r) => r.trim()).filter(Boolean)));
+      const recipientList = Array.from(
+        new Set(dto.recipients.map((r) => r.trim().toLowerCase()).filter(Boolean)),
+      );
 
       if (recipientList.length === 0) {
         throw new BadRequestException('At least one valid recipient is required');
       }
+
+      const deliveredEmployeeIds = new Set<string>();
 
       for (const recipient of recipientList) {
         // Resolve Employee ID from recipient (whether email, ID, or login was entered)
         const { employeeId: targetEmployeeId, email: targetEmail } =
           await this.resolveRecipientEmployee(recipient);
 
-        // 1. Recipient record in INBOX folder (create a new record for every send)
-        const inboxItem = this.inboxRepo.create({
-          employeeId: targetEmployeeId,
-          senderId: String(senderEmpId),
-          receiverId: targetEmployeeId,
-          folder: InboxFolder.INBOX,
-          notesId: note.id,
-          permission,
-          fromMail,
-          toMail: targetEmail,
-          isRead: false,
-          hasDocument,
-          hasDescription,
-        });
-        const saved = await this.inboxRepo.save(inboxItem);
-        createdEntries.push(saved);
+        const deliveredKey = targetEmployeeId.trim().toLowerCase();
+        if (deliveredEmployeeIds.has(deliveredKey)) {
+          this.logger.warn(
+            `Skipping duplicate delivery of note ${note.id} to ${targetEmployeeId} from recipient "${recipient}"`,
+          );
+          continue;
+        }
+        deliveredEmployeeIds.add(deliveredKey);
 
-        // 2. Sender record in SENT folder (create a new record for every send)
-        const sentItem = this.inboxRepo.create({
-          employeeId: String(senderEmpId),
-          senderId: String(senderEmpId),
-          receiverId: targetEmployeeId,
-          folder: InboxFolder.SENT,
-          notesId: note.id,
-          permission,
-          fromMail,
-          toMail: targetEmail,
-          isRead: true,
-          hasDocument,
-          hasDescription,
-        });
-        await this.inboxRepo.save(sentItem);
+        // 1–2. Application Inbox (+ Sent) when selected
+        if (sendToInbox) {
+          const inboxItem = this.inboxRepo.create({
+            employeeId: targetEmployeeId,
+            senderId: String(senderEmpId),
+            receiverId: targetEmployeeId,
+            folder: InboxFolder.INBOX,
+            notesId: note.id,
+            permission,
+            fromMail,
+            toMail: targetEmail,
+            isRead: false,
+            hasDocument,
+            hasDescription,
+          });
+          const saved = await this.inboxRepo.save(inboxItem);
+          createdEntries.push(saved);
 
-        // 3. Fetch note attachments for email template display AND direct Outlook file attachments
+          const sentItem = this.inboxRepo.create({
+            employeeId: String(senderEmpId),
+            senderId: String(senderEmpId),
+            receiverId: targetEmployeeId,
+            folder: InboxFolder.SENT,
+            notesId: note.id,
+            permission,
+            fromMail,
+            toMail: targetEmail,
+            isRead: true,
+            hasDocument,
+            hasDescription,
+          });
+          await this.inboxRepo.save(sentItem);
+        }
+
+        // 3–4. Email notification when selected
+        if (!sendToEmail) {
+          continue;
+        }
+
         let noteAttachments: Array<{ name: string; downloadUrl: string }> = [];
         let emailAttachments: Array<{ filename: string; content: string; encoding: string; contentType?: string }> = [];
 
@@ -279,7 +363,6 @@ export class InboxService {
           }
         }
 
-        // 4. Send email for BOTH CanView and CanEdit permissions
         const subject = dto.subject?.trim() || (
           permission === NotePermission.CanEdit
             ? `${senderName} gave you edit access to: "${note.title || 'WorkSphere Note'}"`
@@ -303,7 +386,6 @@ export class InboxService {
         );
 
         try {
-          // Send with physical file attachments so Outlook users can open/download directly
           this.mailService.sendMailAsync(
             targetEmail,
             subject,
@@ -313,16 +395,25 @@ export class InboxService {
             undefined,
             emailAttachments.length > 0 ? emailAttachments : undefined,
           );
-          this.logger.log(`Email dispatched to ${targetEmail} (employeeId: ${targetEmployeeId}) with ${permission} permission (hasDocument: ${hasDocument}, hasDescription: ${hasDescription}, attachments: ${emailAttachments.length})`);
+          this.logger.log(
+            `Email dispatched to ${targetEmail} (employeeId: ${targetEmployeeId}) with ${permission} permission (inbox=${sendToInbox}, email=${sendToEmail}, hasDocument: ${hasDocument}, hasDescription: ${hasDescription}, attachments: ${emailAttachments.length})`,
+          );
         } catch (err: any) {
           this.logger.warn(`Could not dispatch email to ${targetEmail}: ${err.message}`);
         }
       }
 
+      const channels: string[] = [];
+      if (sendToInbox) channels.push('Inbox');
+      if (sendToEmail) channels.push('Email');
+      const deliveredCount = sendToInbox
+        ? createdEntries.length
+        : deliveredEmployeeIds.size;
+
       return {
         success: true,
-        count: createdEntries.length,
-        message: `Note successfully sent with ${permission} permission to ${createdEntries.length} recipient(s)`,
+        count: deliveredCount,
+        message: `Note successfully sent via ${channels.join(' + ')} with ${permission} permission to ${deliveredCount} recipient(s)`,
       };
     } catch (error: any) {
       this.logger.error(`Failed to send note: ${error.message}`, error.stack);
@@ -475,7 +566,10 @@ export class InboxService {
             ? {
               id: note.id,
               title: note.title,
-              description: item.hasDescription !== false ? note.description : '',
+              description:
+                item.hasDescription !== false
+                  ? stripAttachmentUiFromHtml(note.description || '')
+                  : '',
               type: note.type,
               projectName: note.projectName,
               color: note.color,

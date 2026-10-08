@@ -87,6 +87,7 @@ export class NotesController {
       markdown: result.markdown || '',
       json: result.json || null,
       extractedText: result.html || result.text || '',
+      pages: (result as any).pages || [],
     };
   }
 
@@ -104,8 +105,12 @@ export class NotesController {
 
   @Get('attachments/:key/download')
   @ApiOperation({ summary: 'Download note attachment by file key' })
-  async downloadAttachment(@Param('key') key: string, @Res() res: Response) {
-    const { metaData, dataStream } = await this.notesService.getAttachmentMetaAndStream(key);
+  async downloadAttachment(
+    @Param('key') key: string,
+    @Query('name') fileName: string,
+    @Res() res: Response,
+  ) {
+    const { metaData, dataStream } = await this.notesService.getAttachmentMetaAndStream(key, fileName);
 
     res.set({
       ...NO_CACHE_HEADERS,
@@ -126,8 +131,12 @@ export class NotesController {
 
   @Get('attachments/:key/view')
   @ApiOperation({ summary: 'View/Preview note attachment by file key' })
-  async viewAttachment(@Param('key') key: string, @Res() res: Response) {
-    const { metaData, dataStream } = await this.notesService.getAttachmentMetaAndStream(key);
+  async viewAttachment(
+    @Param('key') key: string,
+    @Query('name') fileName: string,
+    @Res() res: Response,
+  ) {
+    const { metaData, dataStream } = await this.notesService.getAttachmentMetaAndStream(key, fileName);
 
     res.set({
       ...NO_CACHE_HEADERS,
@@ -207,7 +216,7 @@ export class NotesController {
       parentId: body.parentId ? Number(body.parentId) : undefined,
       color: body.color,
       isPinned: body.isPinned === 'true' || body.isPinned === true,
-      autoSave: body.autoSave !== undefined ? (body.autoSave === 'true' || body.autoSave === true) : undefined,
+      autoSave: body.autoSave === 'true' || body.autoSave === true || body.isAutoSave === 'true' || body.isAutoSave === true,
       isVertical,
       subNotes,
       attachmentKeys: Array.isArray(attachmentKeys) ? attachmentKeys : undefined,
@@ -352,6 +361,11 @@ export class NotesController {
       throw new BadRequestException('At least one recipient email or employee ID is required');
     }
 
+    const asBool = (v: any, defaultValue: boolean) => {
+      if (v === undefined || v === null || v === '') return defaultValue;
+      return v === true || v === 'true' || v === 1 || v === '1';
+    };
+
     return await this.inboxService.sendNote(
       {
         notesId: id,
@@ -366,6 +380,8 @@ export class NotesController {
         canDelete: body.canDelete,
         hasDocument: body.hasDocument ?? body.includeFiles ?? false,
         hasDescription: body.hasDescription ?? body.includeDescription ?? true,
+        sendToInbox: asBool(body.sendToInbox, true),
+        sendToEmail: asBool(body.sendToEmail, true),
       },
       req.user,
     );
