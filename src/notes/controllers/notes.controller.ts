@@ -88,6 +88,12 @@ export class NotesController {
       json: result.json || null,
       extractedText: result.html || result.text || '',
       pages: (result as any).pages || [],
+      tooLong: Boolean(result.tooLong),
+      pageCount: result.pageCount ?? ((result as any).pages?.length || 0),
+      maxPages: result.maxPages,
+      message: result.tooLong
+        ? `This document is too long (${result.pageCount} pages). Maximum allowed is ${result.maxPages}. It was not extracted into the description — attach it under Files & Attachments instead.`
+        : undefined,
     };
   }
 
