@@ -187,8 +187,8 @@ export class NotesService {
 
       const [data, total] = await qb.getManyAndCount();
 
-      // Populate document attachments from object_store
-      await this.populateAttachments(data);
+      this.shortenDescriptionsForList(data);
+      await this.attachStoredFiles(data);
 
       return { data, total };
     } catch (error) {
@@ -526,13 +526,34 @@ export class NotesService {
         });
       }
 
-      const allNotes = await qb.getMany();
+      const row = await qb
+        .select('COUNT(*)', 'totalNotes')
+        .addSelect(
+          `SUM(CASE WHEN note.type = :personal AND note.isArchived = false THEN 1 ELSE 0 END)`,
+          'personalNotes',
+        )
+        .addSelect(
+          `SUM(CASE WHEN note.type = :project AND note.isArchived = false THEN 1 ELSE 0 END)`,
+          'projectNotes',
+        )
+        .addSelect(
+          `SUM(CASE WHEN note.isPinned = true AND note.isArchived = false THEN 1 ELSE 0 END)`,
+          'pinnedNotes',
+        )
+        .addSelect(
+          `SUM(CASE WHEN note.isArchived = true THEN 1 ELSE 0 END)`,
+          'archivedNotes',
+        )
+        .setParameter('personal', NoteType.PERSONAL)
+        .setParameter('project', NoteType.PROJECT)
+        .getRawOne();
+      const count = (value: unknown) => Number(value || 0);
       return {
-        totalNotes: allNotes.length,
-        personalNotes: allNotes.filter((n) => n.type === NoteType.PERSONAL && !n.isArchived).length,
-        projectNotes: allNotes.filter((n) => n.type === NoteType.PROJECT && !n.isArchived).length,
-        pinnedNotes: allNotes.filter((n) => n.isPinned && !n.isArchived).length,
-        archivedNotes: allNotes.filter((n) => n.isArchived).length,
+        totalNotes: count(row?.totalNotes),
+        personalNotes: count(row?.personalNotes),
+        projectNotes: count(row?.projectNotes),
+        pinnedNotes: count(row?.pinnedNotes),
+        archivedNotes: count(row?.archivedNotes),
         totalAttachments: 0,
       };
     } catch (error) {
@@ -1495,6 +1516,42 @@ if (!doclingUrl) {
         `Failed to link pre-uploaded attachments to note ${noteId}: ${err.message}`,
       );
     }
+  }
+
+  /** List rows only need a short preview, not the full saved HTML. */
+  private shortenDescriptionsForList(notes: Note[]): void {
+    const preview = (html?: string | null) => {
+      const text = this.stripHtml(html || '');
+      return text.length > 180 ? `${text.slice(0, 180)}…` : text;
+    };
+    const walk = (note: Note) => {
+      note.description = preview(note.description);
+      note.subNotes?.forEach(walk);
+    };
+    notes.forEach(walk);
+  }
+
+  /**
+   * Attach stored file keys for a list without one storage lookup per note.
+   * Opening a single note still loads full file names through populateAttachments.
+   */
+  private async attachStoredFiles(notes: Note[]): Promise<void> {
+    const ids: number[] = [];
+    const walkIds = (note: Note) => {
+      if (note?.id) ids.push(note.id);
+      note.subNotes?.forEach(walkIds);
+    };
+    notes.forEach(walkIds);
+    const grouped = await this.documentUploaderService.getDocsForEntities(
+      EntityType.NOTE,
+      ids,
+      ReferenceType.NOTE_ATTACHMENT,
+    );
+    const apply = (note: Note) => {
+      note.attachments = grouped.get(note.id) || [];
+      note.subNotes?.forEach(apply);
+    };
+    notes.forEach(apply);
   }
 
   /**
