@@ -252,9 +252,9 @@ export class QuarterlyReviewService {
       ];
 
       const sum = scores.reduce((acc, curr) => acc + curr, 0);
-      const averageScore = Number((sum / scores.length).toFixed(2));
-      const finalRating = evalDto.overrideFinalScore ?? Math.round(averageScore);
-      const ratingDescription = RATING_DESCRIPTIONS[finalRating] || 'Meets Expectations';
+      const calculated = Number((sum / scores.length).toFixed(2));
+      const finalRating = evalDto.overrideFinalScore ?? calculated;
+      const ratingDescription = RATING_DESCRIPTIONS[Math.round(Number(finalRating))] || 'Meets Expectations';
 
       review.productivity = evalDto.productivity;
       review.qualityOfWork = evalDto.qualityOfWork;
@@ -262,8 +262,7 @@ export class QuarterlyReviewService {
       review.communication = evalDto.communication;
       review.teamCollaboration = evalDto.teamCollaboration;
       review.innovationProblemSolving = evalDto.innovation;
-      review.averageScore = averageScore;
-      review.finalRating = finalRating;
+      review.finalRating = Number(Number(finalRating).toFixed(2));
       review.ratingDescription = ratingDescription;
 
       if (evalDto.overrideFinalScore) {
@@ -525,8 +524,7 @@ export class QuarterlyReviewService {
     const revealed: RevealedEvaluationDto = {
       quarter: review.quarter,
       financialYear: review.financialYear,
-      finalRating: review.finalRating,
-      averageScore: Number(review.averageScore ?? review.finalRating),
+      finalRating: Number(review.finalRating),
       ratingDescription: review.ratingDescription || '',
       productivity: Number(review.productivity),
       qualityOfWork: Number(review.qualityOfWork),
@@ -622,7 +620,6 @@ export class QuarterlyReviewService {
       'Communication (1-5)': r.communication,
       'Team Collaboration (1-5)': r.teamCollaboration,
       'Innovation (1-5)': r.innovationProblemSolving,
-      'Average Score': r.averageScore,
       'Final Rating': r.finalRating,
       'Rating Description': r.ratingDescription,
       'Performance Strengths': r.performanceStrengths,
@@ -783,7 +780,6 @@ export class QuarterlyReviewService {
       'communication',
       'teamCollaboration',
       'innovationProblemSolving',
-      'averageScore',
       'finalRating',
       'ratingDescription',
       'overrideFinalScore',
@@ -830,6 +826,7 @@ export class QuarterlyReviewService {
     delete definedUpdate.quarter;
     delete definedUpdate.financialYear;
     delete definedUpdate.employeeId;
+    delete definedUpdate.finalRating;
     const assignmentFields =
       definedUpdate.deadlineDate !== undefined || definedUpdate.description !== undefined;
     if (this.isEvaluationFinished(review.status) && assignmentFields && !hasEvaluationScores) {
@@ -851,20 +848,13 @@ export class QuarterlyReviewService {
     Object.assign(review, definedUpdate);
 
     if (hasEvaluationScores) {
-      const scores = [
-        Number(review.productivity),
-        Number(review.qualityOfWork),
-        Number(review.ownershipResponsibility),
-        Number(review.communication),
-        Number(review.teamCollaboration),
-        Number(review.innovationProblemSolving),
-      ];
-      const scoreTotal = scores.reduce((total, score) => total + score, 0);
-      const averageScore = Number((scoreTotal / scores.length).toFixed(2));
-      const finalRating = Math.round(averageScore);
-      review.averageScore = averageScore;
-      review.finalRating = finalRating;
-      review.ratingDescription = RATING_DESCRIPTIONS[finalRating] || 'Meets Expectations';
+      const typed = Number(updateDto.finalRating);
+      if (!Number.isFinite(typed) || typed < 1 || typed > 5) {
+        throw new BadRequestException('Enter a final rating from 1 to 5.');
+      }
+      const rounded = Math.min(5, Math.max(1, Math.round(typed)));
+      review.finalRating = Number(typed.toFixed(2));
+      review.ratingDescription = RATING_DESCRIPTIONS[rounded] || 'Meets Expectations';
       review.status = QuarterlyReviewStatus.COMPLETED;
       review.reviewedDate = new Date();
     }

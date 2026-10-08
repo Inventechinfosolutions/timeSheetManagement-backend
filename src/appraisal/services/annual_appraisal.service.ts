@@ -21,7 +21,6 @@ import {
 } from '../constants/appraisal.constants';
 import {
   QuarterlyReviewStatus,
-  RATING_DESCRIPTIONS,
   QuaterlyEnum,
 } from '../enums/quarterly_review.enums';
 
@@ -78,7 +77,6 @@ export class AnnualAppraisalService {
       q3Rating: record?.q3Rating ?? null,
       q4Rating: record?.q4Rating ?? null,
       annualAverageRating: record?.annualAverageRating ?? null,
-      annualRatingDescription: record?.annualRatingDescription ?? null,
       passwordVerified: true,
     };
   }
@@ -138,7 +136,7 @@ export class AnnualAppraisalService {
       const completedRatings: number[] = [];
 
       for (const r of reviews) {
-        const rawRating = r.finalRating ?? (r.averageScore != null ? Math.round(Number(r.averageScore)) : null);
+        const rawRating = r.finalRating;
         const rating = rawRating == null || Number.isNaN(Number(rawRating)) ? null : Number(rawRating);
         const isReviewed =
           r.status === QuarterlyReviewStatus.REVIEWED ||
@@ -164,17 +162,13 @@ export class AnnualAppraisalService {
         }
       }
 
-      // 3. Compute annual average
-      let annualAverageRating: number | null = null;
-      let finalAnnualRating: number | null = null;
-      let annualRatingDescription: string | null = null;
-
-      if (completedRatings.length > 0) {
-        const sum = completedRatings.reduce((acc, curr) => acc + curr, 0);
-        annualAverageRating = Number((sum / completedRatings.length).toFixed(2));
-        finalAnnualRating = Math.round(annualAverageRating);
-        annualRatingDescription = RATING_DESCRIPTIONS[finalAnnualRating] || 'Meets Expectations';
-      }
+      const quarterRatings = [q1Rating, q2Rating, q3Rating, q4Rating].filter(
+        (rating): rating is number => rating !== null,
+      );
+      const annualAverageRating =
+        quarterRatings.length === 4
+          ? Number((quarterRatings.reduce((sum, rating) => sum + rating, 0) / 4).toFixed(2))
+          : null;
 
       // 4. Fetch employee & manager details
       const emp = await this.employeeRepo.findOne({ where: { employeeId } });
@@ -200,9 +194,9 @@ export class AnnualAppraisalService {
         `INSERT INTO annual_appraisal_summary
           (employeeId, employeeName, department, designation, managerId, managerName, financialYear,
            q1Rating, q1Status, q2Rating, q2Status, q3Rating, q3Status, q4Rating, q4Status,
-           annualAverageRating, finalAnnualRating, annualRatingDescription, completedQuartersCount,
+           annualAverageRating, completedQuartersCount,
            createdAt, updatedAt)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(6), NOW(6))
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(6), NOW(6))
          ON DUPLICATE KEY UPDATE
            employeeName = VALUES(employeeName),
            department = VALUES(department),
@@ -218,8 +212,6 @@ export class AnnualAppraisalService {
            q4Rating = VALUES(q4Rating),
            q4Status = VALUES(q4Status),
            annualAverageRating = VALUES(annualAverageRating),
-           finalAnnualRating = VALUES(finalAnnualRating),
-           annualRatingDescription = VALUES(annualRatingDescription),
            completedQuartersCount = VALUES(completedQuartersCount),
            updatedAt = NOW(6)`,
         [
@@ -239,8 +231,6 @@ export class AnnualAppraisalService {
           q4Rating,
           q4Status,
           annualAverageRating,
-          finalAnnualRating,
-          annualRatingDescription,
           completedRatings.length,
         ],
       );
@@ -321,7 +311,7 @@ export class AnnualAppraisalService {
     }
 
     if (query?.rating) {
-      qb.andWhere('a.finalAnnualRating = :rating', { rating: query.rating });
+      qb.andWhere('ROUND(a.annualAverageRating) = :rating', { rating: query.rating });
     }
 
     if (query?.q?.trim()) {

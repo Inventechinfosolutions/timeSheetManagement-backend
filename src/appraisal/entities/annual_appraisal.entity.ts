@@ -61,15 +61,8 @@ export class AnnualAppraisalSummary extends BaseEntity {
   @Column({ type: 'varchar', length: 50, nullable: true })
   q4Status: string | null;
 
-  // Overall Annual Average & Final Rating
   @Column({ type: 'decimal', precision: 3, scale: 2, nullable: true })
-  annualAverageRating: number | null; // Computed average of reviewed quarters
-
-  @Column({ type: 'int', nullable: true })
-  finalAnnualRating: number | null; // 1 to 5 rounded scale
-
-  @Column({ type: 'varchar', length: 100, nullable: true })
-  annualRatingDescription: string | null; // 'Outstanding', 'Exceeds Expectations', etc.
+  annualAverageRating: number | null;
 
   @Column({ type: 'int', default: 0 })
   completedQuartersCount: number; // e.g. 1 to 4 quarters completed

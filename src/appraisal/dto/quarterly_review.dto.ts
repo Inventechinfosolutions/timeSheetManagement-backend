@@ -255,6 +255,14 @@ export class UpdateQuarterlyReviewDto extends PartialType(CreateQuarterlyReviewD
   @IsString()
   additionalRemarks?: string;
 
+  @ApiPropertyOptional({ example: 4.5, description: 'Manager-entered average score from 1 to 5' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(1)
+  @Max(5)
+  finalRating?: number;
+
   @ApiPropertyOptional({ description: 'Override score' })
   @IsOptional()
   @IsInt()

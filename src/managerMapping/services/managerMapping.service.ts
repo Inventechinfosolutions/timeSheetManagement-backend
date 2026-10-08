@@ -51,13 +51,19 @@ export class ManagerMappingService {
 
       if (managerName) {
         queryBuilder
-          .leftJoin('employee_details', 'manager', 'managerMapping.managerName = manager.full_name') // Using leftJoin instead of join to avoid issues with missing details for some mappings
+          .leftJoin('employee_details', 'manager', 'managerMapping.managerId = manager.employee_id')
           .leftJoin('users', 'user', 'manager.employee_id = user.loginId')
           .andWhere(
-            '(managerMapping.managerName = :managerName OR managerMapping.managerId = :managerName OR user.loginId = :managerName OR manager.employee_id = :managerName)',
+            `(
+              managerMapping.managerId = :managerName
+              OR manager.employee_id = :managerName
+              OR user.loginId = :managerName
+            )`,
             { managerName },
           )
-          .andWhere('user.status = :activeStatus', { activeStatus: UserStatus.ACTIVE });
+          .andWhere('(user.status IS NULL OR user.status = :activeStatus)', {
+            activeStatus: UserStatus.ACTIVE,
+          });
       }
 
       // Add search functionality if searchTerm is provided

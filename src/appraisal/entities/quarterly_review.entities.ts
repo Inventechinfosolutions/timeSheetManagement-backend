@@ -99,12 +99,9 @@ export class QuarterlyReview extends BaseEntity {
   @Column({ type: 'decimal', precision: 3, scale: 1, nullable: true })
   innovationProblemSolving: number | null;
 
-  // Rating Management (FR-06)
+  // Rating Management (FR-06). The manager types this score. It is not calculated from the six parameters.
   @Column({ type: 'decimal', precision: 3, scale: 2, nullable: true })
-  averageScore: number | null;
-
-  @Column({ type: 'int', nullable: true })
-  finalRating: number | null; // 1 to 5
+  finalRating: number | null;
 
   @Column({ type: 'varchar', length: 100, nullable: true })
   ratingDescription: string | null; // 'Outstanding', 'Exceeds Expectations', etc.
