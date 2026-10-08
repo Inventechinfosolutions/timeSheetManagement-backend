@@ -492,6 +492,12 @@ export class InboxService {
         if (r.employeeId) receiversMap.set(r.employeeId.toLowerCase(), r);
       });
 
+      const attachmentDocs = await this.documentUploaderService.getDocsForEntities(
+        EntityType.NOTE,
+        noteIds,
+        ReferenceType.NOTE_ATTACHMENT,
+      );
+
       // Assemble enriched response
       const results: any[] = [];
 
@@ -510,21 +516,7 @@ export class InboxService {
           receiver?.fullName || item.toMail?.split('@')[0] || item.receiverId || 'Recipient';
 
         const permission = item.permission || 'CanView';
-
-        // Fetch attachments for this note
-        let attachments: any[] = [];
-        if (note) {
-          try {
-            attachments = await this.documentUploaderService.getAllDocs(
-              EntityType.NOTE,
-              note.id,
-              ReferenceType.NOTE_ATTACHMENT,
-              note.id,
-            );
-          } catch (e: any) {
-            this.logger.warn(`Could not fetch attachments for note ${note.id}: ${e.message}`);
-          }
-        }
+        const attachments = note && item.hasDocument ? attachmentDocs.get(note.id) || [] : [];
 
         // Apply search filter if specified
         if (query?.search && query.search.trim()) {
