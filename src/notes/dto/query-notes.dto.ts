@@ -1,4 +1,4 @@
-import { IsEnum, IsOptional, IsString, IsBoolean } from 'class-validator';
+import { IsEnum, IsOptional, IsString, IsBoolean, IsDateString } from 'class-validator';
 import { Transform } from 'class-transformer';
 import { NoteType } from '../enums/note-type.enum';
 
@@ -10,6 +10,14 @@ export class QueryNotesDto {
   @IsOptional()
   @IsString()
   search?: string;
+
+  @IsOptional()
+  @IsDateString()
+  fromDate?: string;
+
+  @IsOptional()
+  @IsDateString()
+  toDate?: string;
 
   @IsOptional()
   @IsString()

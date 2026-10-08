@@ -224,9 +224,36 @@ export class NotesService {
       if (query.search && query.search.trim()) {
         const searchVal = `%${query.search.trim().toLowerCase()}%`;
         qb.andWhere(
-          '(LOWER(note.title) LIKE :searchVal OR LOWER(note.projectName) LIKE :searchVal OR LOWER(subNote.title) LIKE :searchVal)',
+          `(LOWER(note.title) LIKE :searchVal
+            OR LOWER(note.projectName) LIKE :searchVal
+            OR LOWER(note.createdBy) LIKE :searchVal
+            OR CAST(note.id AS CHAR) LIKE :searchVal
+            OR LOWER(subNote.title) LIKE :searchVal
+            OR LOWER(subNote.createdBy) LIKE :searchVal
+            OR CAST(subNote.id AS CHAR) LIKE :searchVal)`,
           { searchVal },
         );
+      }
+
+      if (query.fromDate || query.toDate) {
+        const fromStart = query.fromDate ? `${query.fromDate} 00:00:00` : undefined;
+        const toEnd = query.toDate ? `${query.toDate} 23:59:59` : undefined;
+        if (fromStart && toEnd) {
+          qb.andWhere(
+            `((note.createdAt BETWEEN :fromStart AND :toEnd) OR (subNote.createdAt BETWEEN :fromStart AND :toEnd))`,
+            { fromStart, toEnd },
+          );
+        } else if (fromStart) {
+          qb.andWhere(
+            `(note.createdAt >= :fromStart OR subNote.createdAt >= :fromStart)`,
+            { fromStart },
+          );
+        } else if (toEnd) {
+          qb.andWhere(
+            `(note.createdAt <= :toEnd OR subNote.createdAt <= :toEnd)`,
+            { toEnd },
+          );
+        }
       }
 
       qb.orderBy('note.isPinned', 'DESC')

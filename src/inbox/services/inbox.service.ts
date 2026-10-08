@@ -521,17 +521,30 @@ export class InboxService {
         const permission = item.permission || 'CanView';
         const attachments = note && item.hasDocument ? attachmentDocs.get(note.id) || [] : [];
 
-        // Apply search filter if specified
+        // Apply search filter if specified (plain text — ignore HTML noise in description)
         if (query?.search && query.search.trim()) {
           const s = query.search.trim().toLowerCase();
+          const plainDesc = (note?.description || '')
+            .replace(/<[^>]*>/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim()
+            .toLowerCase();
           const matchesTitle = note?.title?.toLowerCase().includes(s);
-          const matchesDesc = note?.description?.toLowerCase().includes(s);
+          const matchesDesc = plainDesc.includes(s);
           const matchesSender =
             senderDisplayName.toLowerCase().includes(s) || item.fromMail?.toLowerCase().includes(s);
           const matchesReceiver =
             receiverDisplayName.toLowerCase().includes(s) || item.toMail?.toLowerCase().includes(s);
           const matchesProject = note?.projectName?.toLowerCase().includes(s);
-          if (!matchesTitle && !matchesDesc && !matchesSender && !matchesReceiver && !matchesProject) {
+          const matchesNoteId = note?.id != null && String(note.id).includes(s);
+          if (
+            !matchesTitle &&
+            !matchesDesc &&
+            !matchesSender &&
+            !matchesReceiver &&
+            !matchesProject &&
+            !matchesNoteId
+          ) {
             continue;
           }
         }
