@@ -39,6 +39,8 @@ import {
   QUARTER_WINDOW_UNAVAILABLE_MESSAGE,
   RATING_NOT_READY_MESSAGE,
   quarterNotAssignableMessage,
+  APPRAISAL_EDIT_WINDOW_HOURS,
+  appraisalWindowMs,
 } from '../constants/appraisal.constants';
 import { MasterFinancialYearService } from '../../master/service/master-financialyear.service';
 import { UsersService } from '../../users/service/user.service';
@@ -47,7 +49,16 @@ import { UserType } from '../../users/enums/user-type.enum';
 import { RevealedEvaluationDto } from '../dto/reveal_rating.dto';
 
 export interface EnrichedQuarterlyReview extends QuarterlyReview {
-  performanceDetails?: EmployeePerformance | null;
+  performanceDetails?: (EmployeePerformance & {
+    canRequestEdit?: boolean;
+    remainingRequestHours?: number;
+    canEdit?: boolean;
+    isEditWindowActive?: boolean;
+  }) | null;
+  canRequestEdit?: boolean;
+  remainingRequestHours?: number;
+  canEdit?: boolean;
+  isEditWindowActive?: boolean;
   isOverdue?: boolean;
 }
 
@@ -484,8 +495,8 @@ export class QuarterlyReviewService {
     const employee = userMatches
       ? null
       : await this.employeeDetailsRepository.findOne({
-          where: [{ employeeId: account.loginId }, { email: account.loginId }],
-        });
+        where: [{ employeeId: account.loginId }, { email: account.loginId }],
+      });
     const employeeMatches = userMatches
       ? false
       : await this.matchesStoredPassword(typed, employee?.password);
@@ -696,7 +707,19 @@ export class QuarterlyReviewService {
       }
 
       if (params?.assignerId?.trim()) {
-        qb.andWhere('review.assignerId = :assignerId', { assignerId: params.assignerId.trim() });
+        const assignerId = params.assignerId.trim();
+        const teamMappings = await this.managerMappingRepository.find({
+          where: { managerId: assignerId },
+        });
+        const teamEmployeeIds = teamMappings.map((m) => m.employeeId).filter(Boolean);
+        if (teamEmployeeIds.length > 0) {
+          qb.andWhere(
+            '(review.assignerId = :assignerId OR review.employeeId IN (:...teamEmployeeIds))',
+            { assignerId, teamEmployeeIds },
+          );
+        } else {
+          qb.andWhere('review.assignerId = :assignerId', { assignerId });
+        }
       }
 
       if (params?.q?.trim()) {
@@ -984,12 +1007,58 @@ export class QuarterlyReviewService {
       perfMap.set(`${p.employeeId}-${p.quarter}-${p.financialYear}`, p);
     });
 
+    const now = new Date();
     const today = new Date();
     today.setHours(0, 0, 0, 0);
+    const requestWindowMs = appraisalWindowMs(APPRAISAL_EDIT_WINDOW_HOURS);
 
     return reviews.map((r) => {
       const perfKey = `${r.employeeId}-${r.quarter}-${r.financialYear}`;
-      const perf = perfMap.get(perfKey) || null;
+      const rawPerf = perfMap.get(perfKey) || null;
+
+      let canRequestEdit = false;
+      let remainingRequestHours = 0;
+      let isEditWindowActive = false;
+      let canEdit = false;
+
+      let perf: (EmployeePerformance & {
+        canRequestEdit?: boolean;
+        remainingRequestHours?: number;
+        canEdit?: boolean;
+        isEditWindowActive?: boolean;
+      }) | null = null;
+
+      if (rawPerf) {
+        if (rawPerf.status === EmployeePerformanceStatus.SUBMITTED && rawPerf.submittedAt) {
+          const diffMs = now.getTime() - new Date(rawPerf.submittedAt).getTime();
+          canRequestEdit = diffMs <= requestWindowMs;
+          if (canRequestEdit) {
+            remainingRequestHours = Math.max(1, Math.round((requestWindowMs - diffMs) / (3600 * 1000)));
+          }
+        }
+
+        isEditWindowActive = !!(
+          rawPerf.status === EmployeePerformanceStatus.EDIT_GRANTED &&
+          rawPerf.editAllowedUntil &&
+          now.getTime() <= new Date(rawPerf.editAllowedUntil).getTime()
+        );
+
+        canEdit =
+          isEditWindowActive ||
+          rawPerf.status === EmployeePerformanceStatus.DRAFT ||
+          rawPerf.status === EmployeePerformanceStatus.NOT_STARTED ||
+          rawPerf.status === EmployeePerformanceStatus.NOT_UPDATED;
+
+        perf = {
+          ...rawPerf,
+          canRequestEdit,
+          remainingRequestHours,
+          isEditWindowActive,
+          canEdit,
+        };
+      } else {
+        canEdit = !this.isEvaluationFinished(r.status);
+      }
 
       const deadline = r.deadlineDate ? new Date(r.deadlineDate) : null;
       const isOverdue =
@@ -1000,6 +1069,10 @@ export class QuarterlyReviewService {
       return {
         ...r,
         performanceDetails: perf,
+        canRequestEdit,
+        remainingRequestHours,
+        canEdit,
+        isEditWindowActive,
         isOverdue: !!isOverdue,
       };
     });

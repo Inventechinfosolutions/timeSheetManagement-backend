@@ -51,6 +51,8 @@ export interface EnrichedEmployeePerformance extends EmployeePerformance {
   department?: string | null;
   designation?: string | null;
   canRequestEdit?: boolean;
+  remainingRequestHours?: number;
+  canEdit?: boolean;
   isEditWindowActive?: boolean;
   assignedBy?: string | null;
   assignedDate?: Date | string | null;
@@ -74,7 +76,7 @@ export class EmployeePerformanceService {
     private readonly managerMappingRepository: Repository<ManagerMapping>,
     private readonly noticeService: AppraisalNoticeService,
     private readonly documentUploaderService: DocumentUploaderService,
-  ) {}
+  ) { }
 
   /**
    * FR-03: Save Draft (Create or Resume Draft)
@@ -113,9 +115,7 @@ export class EmployeePerformanceService {
           );
         }
         const keepStatus =
-          record.status === EmployeePerformanceStatus.EDIT_GRANTED ||
-          record.status === EmployeePerformanceStatus.APPROVED_FOR_EDITING ||
-          record.status === EmployeePerformanceStatus.ALLOWED_TO_EDIT;
+          record.status === EmployeePerformanceStatus.EDIT_GRANTED;
         nextStatus = keepStatus
           ? record.status
           : asDraft || DRAFT_ON_SAVE_STATUSES.includes(record.status)
@@ -202,7 +202,7 @@ export class EmployeePerformanceService {
           'This quarterly submission is locked. You must request edit permission.',
         );
       }
-      const resubmitting = record.status === EmployeePerformanceStatus.APPROVED_FOR_EDITING;
+      const resubmitting = record.status === EmployeePerformanceStatus.EDIT_GRANTED;
 
       // Validate Section requirements
       const savedProjects = (record.projects || []).filter(
@@ -316,21 +316,51 @@ export class EmployeePerformanceService {
    */
   async requestEditPermission(dto: RequestEditPermissionDto): Promise<EnrichedEmployeePerformance> {
     try {
-      const record = await this.performanceRepository.findOne({
-        where: { id: dto.performanceId, employeeId: dto.employeeId },
-      });
+      let record = dto.performanceId
+        ? await this.performanceRepository.findOne({
+          where: { id: dto.performanceId, employeeId: dto.employeeId },
+        })
+        : null;
+
+      let review = dto.reviewId
+        ? await this.reviewRepository.findOne({ where: { id: dto.reviewId } })
+        : null;
+
+      if (!record && review) {
+        record = await this.performanceRepository.findOne({
+          where: {
+            employeeId: review.employeeId,
+            quarter: review.quarter,
+            financialYear: review.financialYear,
+          },
+        });
+        if (!record) {
+          record = this.performanceRepository.create({
+            employeeId: review.employeeId,
+            quarter: review.quarter,
+            financialYear: review.financialYear,
+            status: EmployeePerformanceStatus.NOT_UPDATED,
+          });
+          record = await this.performanceRepository.save(record);
+          review.performanceId = record.id;
+          await this.reviewRepository.save(review);
+        }
+      }
 
       if (!record) {
         throw new NotFoundException('Performance submission not found.');
       }
 
-      const review = await this.reviewRepository.findOne({
-        where: {
-          employeeId: record.employeeId,
-          quarter: record.quarter,
-          financialYear: record.financialYear,
-        },
-      });
+      if (!review) {
+        review = await this.reviewRepository.findOne({
+          where: {
+            employeeId: record.employeeId,
+            quarter: record.quarter,
+            financialYear: record.financialYear,
+          },
+        });
+      }
+
       if (
         review?.status === QuarterlyReviewStatus.COMPLETED ||
         review?.status === QuarterlyReviewStatus.REVIEWED
@@ -352,12 +382,16 @@ export class EmployeePerformanceService {
         );
       }
 
-      const missedDeadline = record.status === EmployeePerformanceStatus.NOT_UPDATED;
-      if (missedDeadline) {
-        record.status = EmployeePerformanceStatus.REQUESTED_FOR_EDIT;
-        record.editRequestedAt = new Date();
-        record.editRequestReason = dto.reason || EDIT_REQUEST_DEFAULT_REASON;
-      } else if (record.status === EmployeePerformanceStatus.SUBMITTED) {
+      const deadlinePassed = review?.deadlineDate
+        ? new Date(review.deadlineDate).setHours(23, 59, 59, 999) < Date.now()
+        : false;
+      const missedDeadline =
+        record.status === EmployeePerformanceStatus.NOT_UPDATED ||
+        deadlinePassed ||
+        record.status === EmployeePerformanceStatus.NOT_STARTED ||
+        record.status === EmployeePerformanceStatus.DRAFT;
+
+      if (record.status === EmployeePerformanceStatus.SUBMITTED) {
         const submittedAt = record.submittedAt || record.createdAt;
         const diffMs = Date.now() - new Date(submittedAt).getTime();
         if (diffMs > appraisalWindowMs(APPRAISAL_EDIT_WINDOW_HOURS)) {
@@ -368,8 +402,23 @@ export class EmployeePerformanceService {
         record.status = EmployeePerformanceStatus.REQUESTED_FOR_EDIT;
         record.editRequestedAt = new Date();
         record.editRequestReason = dto.reason || EDIT_REQUEST_DEFAULT_REASON;
+      } else if (missedDeadline) {
+        if (review?.deadlineDate) {
+          const deadlineTime = new Date(review.deadlineDate).setHours(23, 59, 59, 999);
+          const diffMs = Date.now() - deadlineTime;
+          if (diffMs > appraisalWindowMs(APPRAISAL_EDIT_WINDOW_HOURS)) {
+            throw new BadRequestException(
+              'Edit request window has expired. You can request an edit within 2 days of deadline.',
+            );
+          }
+        }
+        record.status = EmployeePerformanceStatus.REQUESTED_FOR_EDIT;
+        record.editRequestedAt = new Date();
+        record.editRequestReason = dto.reason || EDIT_REQUEST_DEFAULT_REASON;
       } else {
-        throw new BadRequestException('Edit request can only be submitted for a submitted review.');
+        throw new BadRequestException(
+          'Edit request can only be submitted for a submitted review or after a missed deadline.',
+        );
       }
 
       const saved = await this.performanceRepository.save(record);
@@ -435,27 +484,31 @@ export class EmployeePerformanceService {
         review?.status === QuarterlyReviewStatus.ASSIGNED ||
         review?.status === QuarterlyReviewStatus.NOT_STARTED;
       if (dto.approved) {
-        record.status = missedDeadline
-          ? EmployeePerformanceStatus.ALLOWED_TO_EDIT
-          : EmployeePerformanceStatus.APPROVED_FOR_EDITING;
-        record.editAllowedUntil = null;
+        record.status = EmployeePerformanceStatus.EDIT_GRANTED;
+        if (dto.editAllowedUntil) {
+          const customDeadline = new Date(dto.editAllowedUntil);
+          if (Number.isNaN(customDeadline.getTime()) || customDeadline.getTime() <= Date.now()) {
+            throw new BadRequestException('Edit deadline must be a valid future date and time.');
+          }
+          record.editAllowedUntil = customDeadline;
+        } else {
+          record.editAllowedUntil = new Date(Date.now() + appraisalWindowMs(APPRAISAL_EDIT_WINDOW_HOURS));
+        }
       } else {
-        record.status = missedDeadline
-          ? EmployeePerformanceStatus.NOT_UPDATED
-          : EmployeePerformanceStatus.SUBMITTED;
+        record.status = EmployeePerformanceStatus.SUBMITTED;
         record.editAllowedUntil = null;
       }
 
       const saved = await this.performanceRepository.save(record);
-      if (saved.status === EmployeePerformanceStatus.APPROVED_FOR_EDITING) {
+      if (saved.status === EmployeePerformanceStatus.EDIT_GRANTED) {
         await this.setReviewStatus(
           saved.employeeId,
           saved.quarter,
           saved.financialYear,
-          QuarterlyReviewStatus.APPROVED_FOR_EDITING,
+          QuarterlyReviewStatus.EDIT_GRANTED,
           saved.id,
         );
-      } else if (!dto.approved && !missedDeadline) {
+      } else {
         await this.setReviewStatus(
           saved.employeeId,
           saved.quarter,
@@ -463,8 +516,6 @@ export class EmployeePerformanceService {
           QuarterlyReviewStatus.PERFORMANCE_RECEIVED,
           saved.id,
         );
-      } else {
-        await this.linkPerformanceToReview(saved.employeeId, saved.quarter, saved.financialYear, saved.id);
       }
       const enriched = await this.enrichPerformancesWithEmployeeDetails([saved]);
       if (dto.approved) {
@@ -891,6 +942,13 @@ export class EmployeePerformanceService {
     record.status = EmployeePerformanceStatus.SUBMITTED;
     record.editAllowedUntil = null;
     await this.performanceRepository.save(record);
+    await this.setReviewStatus(
+      record.employeeId,
+      record.quarter,
+      record.financialYear,
+      QuarterlyReviewStatus.PERFORMANCE_RECEIVED,
+      record.id,
+    );
     throw new BadRequestException(
       `The edit window granted by your manager expired on ${deadline}. Editing is locked.`,
     );
@@ -914,9 +972,9 @@ export class EmployeePerformanceService {
     const assignerIds = Array.from(new Set(reviews.map((review) => review.assignerId).filter(Boolean)));
     const assigners = assignerIds.length
       ? await this.employeeDetailsRepository.find({
-          where: { employeeId: In(assignerIds) },
-          select: ['employeeId', 'fullName'],
-        })
+        where: { employeeId: In(assignerIds) },
+        select: ['employeeId', 'fullName'],
+      })
       : [];
     const nameById = new Map(assigners.map((person) => [person.employeeId, person.fullName]));
     const reviewByKey = new Map(
@@ -976,9 +1034,13 @@ export class EmployeePerformanceService {
       const empInfo = employeeMap.get(r.employeeId);
 
       let canRequestEdit = false;
+      let remainingRequestHours = 0;
       if (r.status === EmployeePerformanceStatus.SUBMITTED && r.submittedAt) {
         const diffMs = now.getTime() - new Date(r.submittedAt).getTime();
         canRequestEdit = diffMs <= requestWindowMs;
+        if (canRequestEdit) {
+          remainingRequestHours = Math.max(1, Math.round((requestWindowMs - diffMs) / (3600 * 1000)));
+        }
       }
 
       const isEditWindowActive = !!(
@@ -987,13 +1049,21 @@ export class EmployeePerformanceService {
         now.getTime() <= new Date(r.editAllowedUntil).getTime()
       );
 
+      const canEdit =
+        isEditWindowActive ||
+        r.status === EmployeePerformanceStatus.DRAFT ||
+        r.status === EmployeePerformanceStatus.NOT_STARTED ||
+        r.status === EmployeePerformanceStatus.NOT_UPDATED;
+
       return {
         ...r,
         employeeName: empInfo?.fullName || null,
         department: empInfo?.department || null,
         designation: empInfo?.designation || null,
         canRequestEdit,
+        remainingRequestHours,
         isEditWindowActive,
+        canEdit,
       };
     });
   }

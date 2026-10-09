@@ -147,13 +147,13 @@ export class QuarterlyReviewController {
   }
 
   /**
-   * FR-05, FR-06, FR-07: Submit Manager Evaluation
-   * POST /api/quarterly-review/:id/evaluate
+   * FR-05, FR-06, FR-07: Submit Manager Evaluation (PUT by ID)
+   * PUT /api/quarterly-review/:id/evaluate
    */
-  @Post(':id/evaluate')
+  @Put(':id/evaluate')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
-    summary: 'Submit Manager Evaluation (FR-07)',
+    summary: 'Submit Manager Evaluation (PUT /:id/evaluate)',
     description: 'Records 1-5 parameter ratings, remarks, calculates average score, and locks review.',
   })
   @ApiParam({ name: 'id', type: Number, description: 'Quarterly review ID' })

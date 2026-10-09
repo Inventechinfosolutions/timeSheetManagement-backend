@@ -82,30 +82,70 @@ export class EmployeePerformanceController {
   }
 
   /**
-   * Request Edit Permission (within 1 day of submission)
-   * POST /api/employee-performance/request-edit
+   * Request Edit Permission by ID (PUT by ID)
+   * PUT /api/employee-performance/:id/request-edit or PUT /api/employee-performance/request-edit
    */
-  @Post('request-edit')
+  @Put(':id/request-edit')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
-    summary: 'Request Edit Permission (1-Day Window)',
-    description: 'Allows an employee to request edit permission from their manager within 1 day (24h) after submission.',
+    summary: 'Request Edit Permission by ID (PUT /:id/request-edit)',
+    description: 'Allows an employee to request edit permission for an existing performance record by ID.',
   })
+  async requestEditPut(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() requestDto: RequestEditPermissionDto,
+  ) {
+    return await this.performanceService.requestEditPermission({
+      ...requestDto,
+      performanceId: id,
+    });
+  }
+
+  @Put('request-edit')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Request Edit Permission (PUT)' })
+  async requestEditPutLegacy(@Body() requestDto: RequestEditPermissionDto) {
+    return await this.performanceService.requestEditPermission(requestDto);
+  }
+
+  @Post('request-edit')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Request Edit Permission (POST legacy)' })
   @ApiBody({ type: RequestEditPermissionDto })
   async requestEdit(@Body() requestDto: RequestEditPermissionDto) {
     return await this.performanceService.requestEditPermission(requestDto);
   }
 
   /**
-   * Manager responds to Edit Permission
-   * POST /api/employee-performance/respond-edit
+   * Manager responds to Edit Permission by ID (PUT by ID)
+   * PUT /api/employee-performance/:id/respond-edit or PUT /api/employee-performance/respond-edit
    */
-  @Post('respond-edit')
+  @Put(':id/respond-edit')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
-    summary: 'Manager Responds to Edit Request (with allowed until date)',
-    description: 'Manager approves (unlocks submission to DRAFT until a deadline date) or rejects the edit request.',
+    summary: 'Manager Responds to Edit Request by ID (PUT /:id/respond-edit)',
+    description: 'Manager approves or rejects edit permission on an existing performance record by ID.',
   })
+  async respondEditPut(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() respondDto: RespondEditPermissionDto,
+  ) {
+    return await this.performanceService.respondEditPermission({
+      ...respondDto,
+      performanceId: id,
+    });
+  }
+
+  @Put('respond-edit')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Manager Responds to Edit Permission (PUT)' })
+  async respondEditPutLegacy(@Body() respondDto: RespondEditPermissionDto) {
+    return await this.performanceService.respondEditPermission(respondDto);
+  }
+
+  @Post('respond-edit')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Manager Responds to Edit Permission (POST legacy)' })
   @ApiBody({ type: RespondEditPermissionDto })
   async respondEdit(@Body() respondDto: RespondEditPermissionDto) {
     return await this.performanceService.respondEditPermission(respondDto);

@@ -232,10 +232,15 @@ export class SubmitReviewDto {
 }
 
 export class RequestEditPermissionDto {
-  @ApiProperty({ example: 1, description: 'EmployeePerformance record ID' })
-  @IsNotEmpty()
+  @ApiPropertyOptional({ example: 1, description: 'EmployeePerformance record ID' })
+  @IsOptional()
   @IsInt()
-  performanceId: number;
+  performanceId?: number;
+
+  @ApiPropertyOptional({ example: 1, description: 'QuarterlyReview record ID' })
+  @IsOptional()
+  @IsInt()
+  reviewId?: number;
 
   @ApiProperty({ example: 'EMP-10021' })
   @IsNotEmpty()
