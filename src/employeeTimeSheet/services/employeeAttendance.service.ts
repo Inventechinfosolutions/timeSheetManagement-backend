@@ -3748,12 +3748,34 @@ export class EmployeeAttendanceService {
             .font('Helvetica-Bold')
             .text('TIMESHEET REPORT', 350, 40, { align: 'right', width: 212 });
 
-          // Employee Details
+          // Employee Details — lineBreak:false keeps PDFKit from concatenating labels/values
+          const drawLabeledValue = (
+            label: string,
+            value: string,
+            labelX: number,
+            valueX: number,
+            y: number,
+            valueWidth = 140,
+          ) => {
+            doc
+              .fillColor(grayColor)
+              .fontSize(10)
+              .font('Helvetica')
+              .text(label, labelX, y, { lineBreak: false, width: valueX - labelX - 6 });
+            doc
+              .fillColor(blueColor)
+              .font('Helvetica-Bold')
+              .text(value || 'N/A', valueX, y, {
+                lineBreak: false,
+                width: valueWidth,
+              });
+          };
+
           doc
             .fillColor(blueColor)
             .fontSize(11)
             .font('Helvetica-Bold')
-            .text('EMPLOYEE DETAILS', 50, 120);
+            .text('EMPLOYEE DETAILS', 50, 120, { lineBreak: false });
           doc
             .strokeColor(borderColor)
             .lineWidth(1)
@@ -3761,42 +3783,24 @@ export class EmployeeAttendanceService {
             .lineTo(562, 133)
             .stroke();
 
-          doc
-            .fillColor(grayColor)
-            .fontSize(10)
-            .font('Helvetica')
-            .text('Name:', 50, 150);
-          doc
-            .fillColor(blueColor)
-            .font('Helvetica-Bold')
-            .text(employee.fullName || 'N/A', 130, 150);
-
-          doc
-            .fillColor(grayColor)
-            .font('Helvetica')
-            .text('Department:', 320, 150);
-          doc
-            .fillColor(blueColor)
-            .font('Helvetica-Bold')
-            .text(employee.department || 'N/A', 410, 150, { width: 160 });
-
-          doc
-            .fillColor(grayColor)
-            .font('Helvetica')
-            .text('Employee ID:', 50, 168);
-          doc
-            .fillColor(blueColor)
-            .font('Helvetica-Bold')
-            .text(employeeId, 130, 168);
-
-          doc
-            .fillColor(grayColor)
-            .font('Helvetica')
-            .text('Designation:', 320, 168);
-          doc
-            .fillColor(blueColor)
-            .font('Helvetica-Bold')
-            .text(employee.designation || 'N/A', 410, 168, { width: 160 });
+          drawLabeledValue('Name:', employee.fullName || 'N/A', 50, 100, 150, 200);
+          drawLabeledValue(
+            'Department:',
+            employee.department || 'N/A',
+            320,
+            400,
+            150,
+            150,
+          );
+          drawLabeledValue('Employee ID:', employeeId || 'N/A', 50, 130, 168, 170);
+          drawLabeledValue(
+            'Designation:',
+            employee.designation || 'N/A',
+            320,
+            400,
+            168,
+            150,
+          );
 
           doc
             .fillColor(blueColor)
@@ -3806,6 +3810,7 @@ export class EmployeeAttendanceService {
               `Period: ${startDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })} to ${endDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`,
               50,
               195,
+              { lineBreak: false, width: 500 },
             );
 
           let currentY = 220;
@@ -3963,16 +3968,22 @@ export class EmployeeAttendanceService {
               .fillColor(blueColor)
               .fontSize(11)
               .font('Helvetica-Bold')
-              .text(monthObj.name, 50, currentY);
+              .text(monthObj.name, 50, currentY, { lineBreak: false });
             currentY += 20;
 
             // Table Header
             doc.fillColor(blueColor).rect(50, currentY, 512, 20).fill();
             doc.fillColor('white').fontSize(10).font('Helvetica-Bold');
-            doc.text('Date', 60, currentY + 5);
-            doc.text('Day', 150, currentY + 5);
-            doc.text('Total Hours', 270, currentY + 5);
-            doc.text('Status', 380, currentY + 5);
+            doc.text('Date', 60, currentY + 5, { lineBreak: false, width: 80 });
+            doc.text('Day', 150, currentY + 5, { lineBreak: false, width: 100 });
+            doc.text('Total Hours', 270, currentY + 5, {
+              lineBreak: false,
+              width: 90,
+            });
+            doc.text('Status', 380, currentY + 5, {
+              lineBreak: false,
+              width: 160,
+            });
             currentY += 25;
 
             let monthlyFullDays = 0;
@@ -3990,14 +4001,24 @@ export class EmployeeAttendanceService {
               }
 
               doc.fillColor('#333333').fontSize(9).font('Helvetica');
-              doc.text(day.dateStr, 60, currentY);
-              doc.text(day.day, 150, currentY);
+              doc.text(String(day.dateStr || ''), 60, currentY, {
+                lineBreak: false,
+                width: 80,
+              });
+              doc.text(String(day.day || ''), 150, currentY, {
+                lineBreak: false,
+                width: 100,
+              });
               doc.text(
                 day.hours > 0 ? day.hours.toFixed(1) : '--',
                 270,
                 currentY,
+                { lineBreak: false, width: 90 },
               );
-              doc.text(day.status, 380, currentY);
+              doc.text(String(day.status || ''), 380, currentY, {
+                lineBreak: false,
+                width: 160,
+              });
 
               // Summarize
               monthlyTotalHours += day.hours;

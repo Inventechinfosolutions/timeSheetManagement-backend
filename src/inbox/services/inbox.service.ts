@@ -521,30 +521,34 @@ export class InboxService {
         const permission = item.permission || 'CanView';
         const attachments = note && item.hasDocument ? attachmentDocs.get(note.id) || [] : [];
 
-        // Apply search filter if specified (plain text — ignore HTML noise in description)
+        // Search only list-visible fields (title, project, people, emails, ids).
+        // Do NOT scan note HTML description — substrings like "rti" match "vertical"/CSS junk.
         if (query?.search && query.search.trim()) {
-          const s = query.search.trim().toLowerCase();
-          const plainDesc = (note?.description || '')
-            .replace(/<[^>]*>/g, ' ')
-            .replace(/\s+/g, ' ')
+          const tokens = query.search
             .trim()
+            .toLowerCase()
+            .split(/\s+/)
+            .filter(Boolean);
+          const haystack = [
+            note?.title,
+            note?.projectName,
+            note?.id != null ? String(note.id) : '',
+            item.notesId != null ? String(item.notesId) : '',
+            senderDisplayName,
+            item.fromMail,
+            item.senderId,
+            sender?.designation,
+            sender?.department,
+            receiverDisplayName,
+            item.toMail,
+            item.receiverId,
+            receiver?.designation,
+            receiver?.department,
+          ]
+            .filter(Boolean)
+            .join(' ')
             .toLowerCase();
-          const matchesTitle = note?.title?.toLowerCase().includes(s);
-          const matchesDesc = plainDesc.includes(s);
-          const matchesSender =
-            senderDisplayName.toLowerCase().includes(s) || item.fromMail?.toLowerCase().includes(s);
-          const matchesReceiver =
-            receiverDisplayName.toLowerCase().includes(s) || item.toMail?.toLowerCase().includes(s);
-          const matchesProject = note?.projectName?.toLowerCase().includes(s);
-          const matchesNoteId = note?.id != null && String(note.id).includes(s);
-          if (
-            !matchesTitle &&
-            !matchesDesc &&
-            !matchesSender &&
-            !matchesReceiver &&
-            !matchesProject &&
-            !matchesNoteId
-          ) {
+          if (!tokens.every((token) => haystack.includes(token))) {
             continue;
           }
         }

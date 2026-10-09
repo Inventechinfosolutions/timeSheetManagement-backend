@@ -109,6 +109,7 @@ export class NotesController {
     return await this.notesService.getDistinctProjects(req.user);
   }
 
+
   @Get('attachments/:key/download')
   @ApiOperation({ summary: 'Download note attachment by file key' })
   async downloadAttachment(

@@ -428,9 +428,12 @@ export class EmployeeDetailsService {
           '(employee.fullName LIKE :term OR employee.employeeId LIKE :term OR employee.email LIKE :term OR employee.designation LIKE :term)',
           { term },
         );
+        // Filtered search — keep a reasonable cap
+        query.orderBy('employee.fullName', 'ASC').limit(100);
+      } else {
+        // Empty search = get all active employees (Select All / Get All)
+        query.orderBy('employee.fullName', 'ASC').limit(2000);
       }
-
-      query.orderBy('employee.fullName', 'ASC').limit(50);
 
       const list = await query.getMany();
       return list.map((emp) => ({
