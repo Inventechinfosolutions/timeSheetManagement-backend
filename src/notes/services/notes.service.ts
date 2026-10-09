@@ -132,9 +132,64 @@ export class NotesService {
         .createQueryBuilder('note')
         .leftJoinAndSelect('note.subNotes', 'subNote')
         .leftJoinAndSelect('subNote.subNotes', 'nestedSubNote')
+        .select([
+          'note.id',
+          'note.title',
+          'note.description',
+          'note.type',
+          'note.projectName',
+          'note.parentId',
+          'note.userId',
+          'note.employeeId',
+          'note.color',
+          'note.isPinned',
+          'note.isArchived',
+          'note.autoSave',
+          'note.isVertical',
+          'note.orderIndex',
+          'note.createdAt',
+          'note.updatedAt',
+          'note.createdBy',
+          'note.updatedBy',
+          'subNote.id',
+          'subNote.title',
+          'subNote.description',
+          'subNote.type',
+          'subNote.projectName',
+          'subNote.parentId',
+          'subNote.userId',
+          'subNote.employeeId',
+          'subNote.color',
+          'subNote.isPinned',
+          'subNote.isArchived',
+          'subNote.autoSave',
+          'subNote.isVertical',
+          'subNote.orderIndex',
+          'subNote.createdAt',
+          'subNote.updatedAt',
+          'subNote.createdBy',
+          'subNote.updatedBy',
+          'nestedSubNote.id',
+          'nestedSubNote.title',
+          'nestedSubNote.description',
+          'nestedSubNote.type',
+          'nestedSubNote.projectName',
+          'nestedSubNote.parentId',
+          'nestedSubNote.userId',
+          'nestedSubNote.employeeId',
+          'nestedSubNote.color',
+          'nestedSubNote.isPinned',
+          'nestedSubNote.isArchived',
+          'nestedSubNote.autoSave',
+          'nestedSubNote.isVertical',
+          'nestedSubNote.orderIndex',
+          'nestedSubNote.createdAt',
+          'nestedSubNote.updatedAt',
+          'nestedSubNote.createdBy',
+          'nestedSubNote.updatedBy',
+        ])
         .where('note.parentId IS NULL');
 
-      // Scoping: users see their personal notes and project notes
       if (userId || employeeId) {
         qb.andWhere(
           '(note.userId = :userId OR note.employeeId = :employeeId OR (note.type = :projectType AND note.employeeId = :employeeId))',
@@ -146,48 +201,69 @@ export class NotesService {
         );
       }
 
-      // Filter by type (PERSONAL vs PROJECT)
       if (query.type) {
         qb.andWhere('note.type = :type', { type: query.type });
       }
 
-      // Filter by project name
       if (query.projectName && query.projectName.trim()) {
         qb.andWhere('LOWER(note.projectName) = LOWER(:projectName)', {
           projectName: query.projectName.trim(),
         });
       }
 
-      // Filter by pinned status
       if (query.isPinned !== undefined) {
         qb.andWhere('note.isPinned = :isPinned', { isPinned: query.isPinned });
       }
 
-      // Filter by archived status
       if (query.isArchived !== undefined) {
         qb.andWhere('note.isArchived = :isArchived', { isArchived: query.isArchived });
       } else {
         qb.andWhere('note.isArchived = false');
       }
 
-      // Keyword search across title, description, projectName, and sub-notes
       if (query.search && query.search.trim()) {
         const searchVal = `%${query.search.trim().toLowerCase()}%`;
         qb.andWhere(
-          '(LOWER(note.title) LIKE :searchVal OR LOWER(note.description) LIKE :searchVal OR LOWER(note.projectName) LIKE :searchVal OR LOWER(subNote.title) LIKE :searchVal OR LOWER(subNote.description) LIKE :searchVal)',
+          `(LOWER(note.title) LIKE :searchVal
+            OR LOWER(note.projectName) LIKE :searchVal
+            OR LOWER(note.createdBy) LIKE :searchVal
+            OR CAST(note.id AS CHAR) LIKE :searchVal
+            OR LOWER(subNote.title) LIKE :searchVal
+            OR LOWER(subNote.createdBy) LIKE :searchVal
+            OR CAST(subNote.id AS CHAR) LIKE :searchVal)`,
           { searchVal },
         );
       }
 
-      // Sort: pinned first, newest updated, and sub-notes in order
+      if (query.fromDate || query.toDate) {
+        const fromStart = query.fromDate ? `${query.fromDate} 00:00:00` : undefined;
+        const toEnd = query.toDate ? `${query.toDate} 23:59:59` : undefined;
+        if (fromStart && toEnd) {
+          qb.andWhere(
+            `((note.createdAt BETWEEN :fromStart AND :toEnd) OR (subNote.createdAt BETWEEN :fromStart AND :toEnd))`,
+            { fromStart, toEnd },
+          );
+        } else if (fromStart) {
+          qb.andWhere(
+            `(note.createdAt >= :fromStart OR subNote.createdAt >= :fromStart)`,
+            { fromStart },
+          );
+        } else if (toEnd) {
+          qb.andWhere(
+            `(note.createdAt <= :toEnd OR subNote.createdAt <= :toEnd)`,
+            { toEnd },
+          );
+        }
+      }
+
       qb.orderBy('note.isPinned', 'DESC')
         .addOrderBy('note.updatedAt', 'DESC')
         .addOrderBy('subNote.orderIndex', 'ASC')
         .addOrderBy('subNote.createdAt', 'ASC');
 
-      const [data, total] = await qb.getManyAndCount();
+      const data = await qb.getMany();
+      const total = data.length;
 
-      this.shortenDescriptionsForList(data);
       await this.attachStoredFiles(data);
 
       return { data, total };
@@ -616,19 +692,90 @@ export class NotesService {
     return results;
   }
 
+  private getExtractMaxPages(): number {
+    const raw =
+      this.configService.get<string>('DOCLING_MAX_PAGES') ||
+      this.configService.get<string>('NOTES_IMPORT_MAX_PAGES') ||
+      '50';
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 50;
+  }
+
+  private async countPdfPages(buffer: Buffer): Promise<number | null> {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const pdfParse = require('pdf-parse');
+      const parsed = await pdfParse(buffer);
+      const pages = Number(parsed?.numpages);
+      return Number.isFinite(pages) && pages > 0 ? pages : null;
+    } catch {
+      return null;
+    }
+  }
+
+  private tooLongResult(
+    filename: string,
+    pageCount: number,
+    maxPages: number,
+  ): {
+    filename: string;
+    html: string;
+    markdown: string;
+    json: any;
+    text: string;
+    pages: any[];
+    tooLong: boolean;
+    pageCount: number;
+    maxPages: number;
+  } {
+    return {
+      filename,
+      html: '',
+      text: '',
+      markdown: '',
+      json: null,
+      pages: [],
+      tooLong: true,
+      pageCount,
+      maxPages,
+    };
+  }
+
   /**
    * Extract styled HTML and text content from a single file via Docling Python service.
    */
   async extractFileContent(
     file: Express.Multer.File,
     options?: { useOcr?: boolean; bodyOnly?: boolean },
-  ): Promise<{ filename: string; html: string; markdown: string; json: any; text: string; pages?: any[] }> {
+  ): Promise<{
+    filename: string;
+    html: string;
+    markdown: string;
+    json: any;
+    text: string;
+    pages?: any[];
+    tooLong?: boolean;
+    pageCount?: number;
+    maxPages?: number;
+  }> {
     if (!file) {
       throw new BadRequestException('File is required for extraction');
     }
 
     const filename = file.originalname || 'document.pdf';
     const ext = filename.substring(filename.lastIndexOf('.')).toLowerCase();
+    const maxPages = this.getExtractMaxPages();
+
+    // Reject oversized PDFs before calling Docling (avoids long parse jobs).
+    if (ext === '.pdf') {
+      const pageCount = await this.countPdfPages(file.buffer);
+      if (pageCount != null && pageCount > maxPages) {
+        this.logger.warn(
+          `Rejecting Description import for ${filename}: ${pageCount} pages exceeds max ${maxPages}`,
+        );
+        return this.tooLongResult(filename, pageCount, maxPages);
+      }
+    }
 
     // 1. If it's a JSON file, parse and convert directly
     if (ext === '.json') {
@@ -734,10 +881,14 @@ if (!doclingUrl) {
         },
         maxBodyLength: Infinity,
         maxContentLength: Infinity,
-        timeout: 180000,
+        timeout: Number(this.configService.get<string>('DOCLING_TIMEOUT_MS')),
       });
 
-      const html = response.data?.html || '';
+      const markdown = response.data?.markdown || '';
+      let html = response.data?.html || '';
+      if (!this.htmlHasVisibleText(html) && markdown.trim()) {
+        html = this.markdownToHtml(markdown);
+      }
       const extractPages = Array.isArray(response.data?.pages) ? response.data.pages : [];
 
       // Drop blank Docling pages so the frontend does not render an empty leading sheet
@@ -747,23 +898,64 @@ if (!doclingUrl) {
         return Boolean(text) || /<(img|table|svg|canvas)\b/i.test(pageHtml);
       });
 
+      const jsonPages =
+        response.data?.json?.pages && typeof response.data.json.pages === 'object'
+          ? Object.keys(response.data.json.pages).length
+          : 0;
+      const pageCount = pagesWithContent.length || jsonPages || 0;
+
+      // Too long for Description — return a flag so the client can attach as a file instead
+      if (maxPages > 0 && pageCount > maxPages) {
+        this.logger.warn(
+          `Rejecting Description import for ${filename}: ${pageCount} pages exceeds max ${maxPages}`,
+        );
+        return this.tooLongResult(
+          response.data?.filename || filename,
+          pageCount,
+          maxPages,
+        );
+      }
+
       return {
         filename: response.data?.filename || filename,
         html,
         text: html,
-        markdown: response.data?.markdown || '',
+        markdown,
         json: response.data?.json || null,
         pages: pagesWithContent,
+        pageCount,
+        maxPages,
       };
     } catch (err: any) {
-      this.logger.error(`Failed to connect to Docling service at ${doclingUrl}: ${err.message}`);
+      const data = err.response?.data;
+      const code = data?.code || data?.detail?.code;
+      if (
+        err.response?.status === 413 ||
+        code === 'DOCUMENT_TOO_LONG' ||
+        data?.attach_as_file ||
+        data?.attachAsFile
+      ) {
+        const pageCount = Number(data?.page_count || data?.pageCount || 0);
+        const limit = Number(data?.max_pages || data?.maxPages || maxPages);
+        return this.tooLongResult(
+          data?.filename || filename,
+          pageCount > 0 ? pageCount : maxPages + 1,
+          limit,
+        );
+      }
+
+      const detail =
+        (typeof data?.detail === 'string' && data.detail) ||
+        data?.message ||
+        err.message;
+      this.logger.error(`Failed to connect to Docling service at ${doclingUrl}: ${detail}`);
       if (err.code === 'ECONNREFUSED' || err.message?.includes('ECONNREFUSED')) {
         throw new BadRequestException(
           `Docling Python service is not running on ${doclingUrl}. Please ensure python service is started on port 8000.`,
         );
       }
       throw new BadRequestException(
-        err.response?.data?.detail || err.message || 'Failed to extract content from document',
+        detail || 'Failed to extract content from document',
       );
     }
   }
@@ -774,6 +966,87 @@ if (!doclingUrl) {
   async extractFileText(file: Express.Multer.File): Promise<string> {
     const res = await this.extractFileContent(file);
     return res.html || res.text || '';
+  }
+
+  private htmlHasVisibleText(html: string): boolean {
+    const text = (html || '').replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ').trim();
+    return Boolean(text) || /<(img|table|svg|canvas)\b/i.test(html || '');
+  }
+
+  /** Word extracts often come back with markdown and an empty html field. */
+  private markdownToHtml(markdown: string): string {
+    const lines = (markdown || '').replace(/\r\n/g, '\n').split('\n');
+    const out: string[] = [];
+    let list: string[] = [];
+    let index = 0;
+
+    const inline = (value: string) => {
+      let text = value
+        .trim()
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+      text = text.replace(
+        /\[([^\]]+)\]\(([^)\s]+)\)/g,
+        (_match, label, href) => `<a href="${href}">${label}</a>`,
+      );
+      text = text.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+      return text;
+    };
+    const flushList = () => {
+      if (!list.length) return;
+      out.push(`<ul>${list.map((item) => `<li>${inline(item)}</li>`).join('')}</ul>`);
+      list = [];
+    };
+    const isRule = (line: string) =>
+      /^\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?$/.test(line.trim());
+    const splitRow = (line: string) =>
+      line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map((cell) => cell.trim());
+
+    while (index < lines.length) {
+      const line = lines[index].trim();
+      if (!line || line.startsWith('<!--')) {
+        flushList();
+        index += 1;
+        continue;
+      }
+      if (line.startsWith('|')) {
+        flushList();
+        const rows: string[][] = [];
+        while (index < lines.length && lines[index].trim().startsWith('|')) {
+          const current = lines[index].trim();
+          if (!isRule(current)) rows.push(splitRow(current));
+          index += 1;
+        }
+        if (rows.length) {
+          const [head, ...body] = rows;
+          const header = `<tr>${head.map((cell) => `<th>${inline(cell)}</th>`).join('')}</tr>`;
+          const bodyHtml = body
+            .map((row) => `<tr>${row.map((cell) => `<td>${inline(cell)}</td>`).join('')}</tr>`)
+            .join('');
+          out.push(`<table><thead>${header}</thead><tbody>${bodyHtml}</tbody></table>`);
+        }
+        continue;
+      }
+      const heading = /^(#{1,6})\s+(.+)$/.exec(line);
+      if (heading) {
+        flushList();
+        out.push(`<h${heading[1].length}>${inline(heading[2])}</h${heading[1].length}>`);
+        index += 1;
+        continue;
+      }
+      const bullet = /^[-*]\s+(.+)$/.exec(line);
+      if (bullet) {
+        list.push(bullet[1]);
+        index += 1;
+        continue;
+      }
+      flushList();
+      out.push(`<p>${inline(line)}</p>`);
+      index += 1;
+    }
+    flushList();
+    return out.join('');
   }
 
   /**
@@ -1516,19 +1789,6 @@ if (!doclingUrl) {
         `Failed to link pre-uploaded attachments to note ${noteId}: ${err.message}`,
       );
     }
-  }
-
-  /** List rows only need a short preview, not the full saved HTML. */
-  private shortenDescriptionsForList(notes: Note[]): void {
-    const preview = (html?: string | null) => {
-      const text = this.stripHtml(html || '');
-      return text.length > 180 ? `${text.slice(0, 180)}…` : text;
-    };
-    const walk = (note: Note) => {
-      note.description = preview(note.description);
-      note.subNotes?.forEach(walk);
-    };
-    notes.forEach(walk);
   }
 
   /**

@@ -84,6 +84,15 @@ export class InboxController {
     return await this.inboxService.getInboxItem(id, req.user);
   }
 
+  @Patch(':id/star')
+  @ApiOperation({ summary: 'Toggle starred flag for an inbox note (1 starred, 0 not starred)' })
+  async toggleStar(
+    @Param('id', ParseIntPipe) id: number,
+    @Req() req: any,
+  ) {
+    return await this.inboxService.toggleStar(id, req.user);
+  }
+
   @Patch(':id/read')
   @ApiOperation({ summary: 'Mark single inbox note item as read' })
   async markAsRead(

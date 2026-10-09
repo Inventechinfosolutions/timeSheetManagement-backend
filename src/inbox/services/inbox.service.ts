@@ -165,6 +165,7 @@ export class InboxService {
       fromMail: dto.fromMail,
       toMail: dto.toMail,
       isRead: dto.isRead || false,
+      isStarred: 0,
       hasDocument: dto.hasDocument || false,
       hasDescription: dto.hasDescription !== undefined ? dto.hasDescription : true,
     });
@@ -275,6 +276,7 @@ export class InboxService {
             fromMail,
             toMail: targetEmail,
             isRead: false,
+            isStarred: 0,
             hasDocument,
             hasDescription,
           });
@@ -291,6 +293,7 @@ export class InboxService {
             fromMail,
             toMail: targetEmail,
             isRead: true,
+            isStarred: 0,
             hasDocument,
             hasDescription,
           });
@@ -518,17 +521,30 @@ export class InboxService {
         const permission = item.permission || 'CanView';
         const attachments = note && item.hasDocument ? attachmentDocs.get(note.id) || [] : [];
 
-        // Apply search filter if specified
+        // Apply search filter if specified (plain text — ignore HTML noise in description)
         if (query?.search && query.search.trim()) {
           const s = query.search.trim().toLowerCase();
+          const plainDesc = (note?.description || '')
+            .replace(/<[^>]*>/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim()
+            .toLowerCase();
           const matchesTitle = note?.title?.toLowerCase().includes(s);
-          const matchesDesc = note?.description?.toLowerCase().includes(s);
+          const matchesDesc = plainDesc.includes(s);
           const matchesSender =
             senderDisplayName.toLowerCase().includes(s) || item.fromMail?.toLowerCase().includes(s);
           const matchesReceiver =
             receiverDisplayName.toLowerCase().includes(s) || item.toMail?.toLowerCase().includes(s);
           const matchesProject = note?.projectName?.toLowerCase().includes(s);
-          if (!matchesTitle && !matchesDesc && !matchesSender && !matchesReceiver && !matchesProject) {
+          const matchesNoteId = note?.id != null && String(note.id).includes(s);
+          if (
+            !matchesTitle &&
+            !matchesDesc &&
+            !matchesSender &&
+            !matchesReceiver &&
+            !matchesProject &&
+            !matchesNoteId
+          ) {
             continue;
           }
         }
@@ -544,6 +560,7 @@ export class InboxService {
           toMail: item.toMail,
           permission,
           isRead: Boolean(item.isRead),
+          isStarred: Number(item.isStarred) ? 1 : 0,
           hasDocument: Boolean(item.hasDocument),
           hasDescription: item.hasDescription !== undefined ? Boolean(item.hasDescription) : true,
           createdAt: item.createdAt,
@@ -706,6 +723,7 @@ export class InboxService {
       toMail: item.toMail,
       permission: item.permission || 'CanView',
       isRead: Boolean(item.isRead),
+      isStarred: Number(item.isStarred) ? 1 : 0,
       createdAt: item.createdAt,
       updatedAt: item.updatedAt,
       senderName: sender?.fullName || item.fromMail?.split('@')[0] || item.senderId || 'Unknown Sender',
@@ -731,6 +749,26 @@ export class InboxService {
   /**
    * Mark a specific inbox message as read.
    */
+  async toggleStar(
+    inboxId: number,
+    user: any,
+  ): Promise<{ success: boolean; inboxId: number; isStarred: 0 | 1 }> {
+    const item = await this.inboxRepo.findOne({ where: { inboxId } });
+    if (!item) {
+      throw new NotFoundException(`Inbox message with ID ${inboxId} not found`);
+    }
+
+    const next = Number(item.isStarred) ? 0 : 1;
+    item.isStarred = next;
+    await this.inboxRepo.save(item);
+
+    return {
+      success: true,
+      inboxId,
+      isStarred: next,
+    };
+  }
+
   async markAsRead(inboxId: number, user: any): Promise<{ success: boolean; inboxId: number; isRead: boolean }> {
     const item = await this.inboxRepo.findOne({ where: { inboxId } });
     if (!item) {
