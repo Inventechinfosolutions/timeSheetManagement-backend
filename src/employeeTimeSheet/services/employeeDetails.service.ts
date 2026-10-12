@@ -192,7 +192,17 @@ export class EmployeeDetailsService {
   async getRoles(): Promise<string[]> {
     this.logger.log('Fetching all roles from enum');
     try {
-      return Object.values(UserType);
+      const roles: string[] = Object.values(UserType);
+      // Only one CEO: hide the option once a non-inactive CEO employee exists.
+      const ceoCount = await this.employeeDetailsRepository
+        .createQueryBuilder('employee')
+        .where('UPPER(employee.role) = :ceo', { ceo: UserType.CEO })
+        .andWhere('(employee.userStatus IS NULL OR employee.userStatus != :inactive)', {
+          inactive: UserStatus.INACTIVE,
+        })
+        .getCount();
+      const ceoExists = ceoCount > 0;
+      return ceoExists ? roles.filter((role) => role !== UserType.CEO) : roles;
     } catch (error) {
       this.logger.error(`Error fetching roles: ${error.message}`);
       throw new HttpException('Failed to fetch roles', HttpStatus.INTERNAL_SERVER_ERROR);
@@ -835,6 +845,9 @@ export class EmployeeDetailsService {
       }
 
       const { confirmPassword, ...updateFields } = updateData;
+      if ((updateFields.dateOfBirth as unknown) === '') {
+        updateFields.dateOfBirth = null;
+      }
 
       // Detect status change for synchronization
       const statusChanged = updateFields.userStatus && updateFields.userStatus !== employee.userStatus;
@@ -1586,8 +1599,10 @@ export class EmployeeDetailsService {
             : UserStatus.DRAFT;
           const joiningDateRaw = rowData.joiningDate ?? rowData.dateOfJoining ?? rowData['Joining Date'] ?? rowData['Date of Joining'];
           const conversionDateRaw = rowData.conversionDate ?? rowData['Conversion Date'] ?? rowData['Date of Conversion'];
+          const dateOfBirthRaw = rowData.dateOfBirth ?? rowData['Date of Birth'] ?? rowData.dob ?? rowData.DOB;
           const joiningDateParsed = this.parseExcelDate(joiningDateRaw);
           const conversionDateParsed = this.parseExcelDate(conversionDateRaw);
+          const dateOfBirthParsed = this.parseExcelDate(dateOfBirthRaw);
 
           const isIntern = (employmentTypeVal && Object.values(EmploymentType).includes(employmentTypeVal) ? employmentTypeVal : null) === EmploymentType.INTERN ||
             (rowData.designation && String(rowData.designation).toLowerCase().includes('intern'));
@@ -1602,6 +1617,7 @@ export class EmployeeDetailsService {
             employmentType: employmentTypeVal && Object.values(EmploymentType).includes(employmentTypeVal) ? employmentTypeVal : null,
             joiningDate: joiningDateParsed ?? undefined,
             conversionDate: conversionDateParsed ?? undefined,
+            dateOfBirth: dateOfBirthParsed ?? null,
             userStatus: Object.values(UserStatus).includes(userStatusVal) ? userStatusVal : UserStatus.DRAFT,
             gender: genderVal && Object.values(Gender).includes(genderVal) ? genderVal : undefined,
             role: roleVal && Object.values(UserType).includes(roleVal) ? roleVal : undefined,
@@ -1702,6 +1718,7 @@ export class EmployeeDetailsService {
         { header: 'email', key: 'email', width: 25 },
         { header: 'employmentType', key: 'employmentType', width: 15 },
         { header: 'joiningDate', key: 'joiningDate', width: 15 },
+        { header: 'dateOfBirth', key: 'dateOfBirth', width: 15 },
         { header: 'gender', key: 'gender', width: 10 },
         { header: 'role', key: 'role', width: 15 },
       ];

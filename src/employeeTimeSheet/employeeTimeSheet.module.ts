@@ -27,6 +27,9 @@ import { LeaveRequestsService } from './services/leave-requests.service';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { FileService } from '../common/core/utils/fileType.utils';
 import { Notification } from '../notifications/entities/notification.entity';
+import { AdminDashboardController } from './controllers/adminDashboard.controller';
+import { ManagerDashboardController } from './controllers/managerDashboard.controller';
+import { AdminDashboardService } from './services/adminDashboard.service';
 
 @Module({
   imports: [
@@ -55,6 +58,8 @@ import { Notification } from '../notifications/entities/notification.entity';
     EmployeeLinkController, 
     TimesheetBlockerController,
     LeaveRequestsController,
+    AdminDashboardController,
+    ManagerDashboardController,
   ],
   providers: [
     EmployeeAttendanceService, 
@@ -63,6 +68,7 @@ import { Notification } from '../notifications/entities/notification.entity';
     TimesheetBlockerService,
     LeaveRequestsService,
     FileService,
+    AdminDashboardService,
   ],
   exports: [EmployeeDetailsService, EmployeeLinkService],
 })
