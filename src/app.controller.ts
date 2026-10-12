@@ -32,4 +32,16 @@ export class AppController {
       throw error;
     }
   }
+
+  @Post('cron/weekly-lock')
+  async runWeeklyLock() {
+    this.logger.log('Manually running weekly lock cron');
+    return this.attendanceCronService.handleWeeklyLock();
+  }
+
+  @Post('cron/monthly-lock')
+  async runMonthlyLock() {
+    this.logger.log('Manually running monthly lock cron');
+    return this.attendanceCronService.handleMonthlyLeaveUpdate();
+  }
 }

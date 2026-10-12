@@ -30,6 +30,9 @@ import { Notification } from '../notifications/entities/notification.entity';
 import { AdminDashboardController } from './controllers/adminDashboard.controller';
 import { ManagerDashboardController } from './controllers/managerDashboard.controller';
 import { AdminDashboardService } from './services/adminDashboard.service';
+import { AttendenceEditRequest } from './entities/attendence-edit-request.entity';
+import { AttendenceEditRequestController } from './controllers/attendence-edit-request.controller';
+import { AttendenceEditRequestService } from './services/attendence-edit-request.service';
 
 @Module({
   imports: [
@@ -40,6 +43,7 @@ import { AdminDashboardService } from './services/adminDashboard.service';
       User, 
       TimesheetBlocker,
       LeaveRequest,
+      AttendenceEditRequest,
       DocumentMetaInfo,
       ManagerMapping,
       MasterHolidays,
@@ -60,6 +64,7 @@ import { AdminDashboardService } from './services/adminDashboard.service';
     LeaveRequestsController,
     AdminDashboardController,
     ManagerDashboardController,
+    AttendenceEditRequestController,
   ],
   providers: [
     EmployeeAttendanceService, 
@@ -67,9 +72,10 @@ import { AdminDashboardService } from './services/adminDashboard.service';
     EmployeeLinkService, 
     TimesheetBlockerService,
     LeaveRequestsService,
+    AttendenceEditRequestService,
     FileService,
     AdminDashboardService,
   ],
-  exports: [EmployeeDetailsService, EmployeeLinkService],
+  exports: [EmployeeDetailsService, EmployeeLinkService, AttendenceEditRequestService],
 })
 export class EmployeeTimeSheetModule {}

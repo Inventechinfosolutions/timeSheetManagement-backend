@@ -27,6 +27,7 @@ import { LeaveRequest } from '../entities/leave-request.entity';
 import { EmployeeAttendanceDto } from '../dto/employeeAttendance.dto';
 import { MasterHolidayService } from '../../master/service/master-holiday.service';
 import { TimesheetBlockerService } from './timesheetBlocker.service';
+import { AttendenceEditRequestService } from './attendence-edit-request.service';
 import { EmployeeDetails } from '../entities/employeeDetails.entity';
 import {
   ManagerMapping,
@@ -53,6 +54,7 @@ export class EmployeeAttendanceService {
     private readonly employeeDetailsRepository: Repository<EmployeeDetails>,
     private readonly masterHolidayService: MasterHolidayService,
     private readonly blockerService: TimesheetBlockerService,
+    private readonly attendenceEditRequestService: AttendenceEditRequestService,
   ) {}
 
   /**
@@ -154,6 +156,7 @@ export class EmployeeAttendanceService {
   async create(
     createEmployeeAttendanceDto: EmployeeAttendanceDto,
     isPrivileged: boolean = false,
+    actorId?: string,
   ): Promise<EmployeeAttendance | null> {
     try {
       if (
@@ -184,6 +187,33 @@ export class EmployeeAttendanceService {
             `Timesheet is locked for this date by ${blockedByName}. Please contact them to unlock.`,
           );
         }
+      }
+
+      if (
+        createEmployeeAttendanceDto.employeeId &&
+        createEmployeeAttendanceDto.workingDate &&
+        !this.canBypassLocked(
+          isPrivileged,
+          actorId,
+          createEmployeeAttendanceDto.employeeId,
+        )
+      ) {
+        const startOfLocked = new Date(createEmployeeAttendanceDto.workingDate);
+        startOfLocked.setHours(0, 0, 0, 0);
+        const endOfLocked = new Date(createEmployeeAttendanceDto.workingDate);
+        endOfLocked.setHours(23, 59, 59, 999);
+        const existingForLock =
+          await this.employeeAttendanceRepository.findOne({
+            where: {
+              employeeId: createEmployeeAttendanceDto.employeeId,
+              workingDate: Between(startOfLocked, endOfLocked),
+            },
+          });
+        await this.attendenceEditRequestService.assertCanEditLockedDay(
+          createEmployeeAttendanceDto.employeeId,
+          createEmployeeAttendanceDto.workingDate,
+          existingForLock?.status,
+        );
       }
 
       const startOfDay = new Date(createEmployeeAttendanceDto.workingDate);
@@ -687,6 +717,19 @@ export class EmployeeAttendanceService {
       });
 
       if (attendance) {
+        if (attendance.status === AttendanceStatus.LOCKED) {
+          const allowed = await this.attendenceEditRequestService.hasApprovedAccess(
+            employeeId,
+            workingDate,
+          );
+          if (!allowed) {
+            return {
+              isBlocked: true,
+              reason: 'Date is Locked. Request Edit Access to update it.',
+            };
+          }
+        }
+
         const h1 = (attendance.firstHalf || '').toLowerCase();
         const h2 = (attendance.secondHalf || '').toLowerCase();
 
@@ -702,7 +745,9 @@ export class EmployeeAttendanceService {
             .toLowerCase()
             .includes(AttendanceStatus.UPCOMING.toLowerCase()) &&
           !val.toLowerCase().includes(AttendanceStatus.HOLIDAY.toLowerCase()) &&
-          !val.toLowerCase().includes(AttendanceStatus.WEEKEND.toLowerCase());
+          !val.toLowerCase().includes(AttendanceStatus.WEEKEND.toLowerCase()) &&
+          !val.toLowerCase().includes(AttendanceStatus.LOCKED.toLowerCase()) &&
+          !val.toLowerCase().includes(AttendanceStatus.ABSENT.toLowerCase());
 
         if (isRestricted(h1) || isRestricted(h2)) {
           return { isBlocked: true, reason: 'Restricted Activity' };
@@ -725,6 +770,7 @@ export class EmployeeAttendanceService {
   async createBulk(
     attendanceDtos: EmployeeAttendanceDto[],
     isPrivileged: boolean = false,
+    actorId?: string,
   ): Promise<EmployeeAttendance[]> {
     this.logger.log(
       `Starting bulk attendance process for ${attendanceDtos.length} items`,
@@ -736,10 +782,10 @@ export class EmployeeAttendanceService {
           let record;
           if (dto.id) {
             // Update existing
-            record = await this.update(dto.id, dto, isPrivileged);
+            record = await this.update(dto.id, dto, isPrivileged, actorId);
           } else {
             // Create new
-            record = await this.create(dto, isPrivileged);
+            record = await this.create(dto, isPrivileged, actorId);
           }
 
           if (record) {
@@ -828,7 +874,8 @@ export class EmployeeAttendanceService {
 
         if (
           r.status === AttendanceStatus.LEAVE ||
-          r.status === AttendanceStatus.HALF_DAY
+          r.status === AttendanceStatus.HALF_DAY ||
+          r.status === AttendanceStatus.LOCKED
         ) {
           existingDates.add(dateStr);
           return;
@@ -1027,6 +1074,7 @@ export class EmployeeAttendanceService {
     id: number,
     updateDto: Partial<EmployeeAttendanceDto>,
     isPrivileged: boolean = false,
+    actorId?: string,
   ): Promise<EmployeeAttendance | null> {
     try {
       const attendance = await this.findOne(id);
@@ -1092,6 +1140,16 @@ export class EmployeeAttendanceService {
         const blockedByName = blocker.blockedBy || 'Administrator';
         throw new BadRequestException(
           `Timesheet is locked for this date by ${blockedByName}. Please contact them to unlock.`,
+        );
+      }
+
+      if (
+        !this.canBypassLocked(isPrivileged, actorId, attendance.employeeId)
+      ) {
+        await this.attendenceEditRequestService.assertCanEditLockedDay(
+          attendance.employeeId,
+          attendance.workingDate,
+          attendance.status,
         );
       }
 
@@ -1678,6 +1736,13 @@ export class EmployeeAttendanceService {
           'Cannot delete locked attendance records.',
         );
       }
+      if (attendance) {
+        await this.attendenceEditRequestService.assertCanEditLockedDay(
+          attendance.employeeId,
+          attendance.workingDate,
+          attendance.status,
+        );
+      }
       const result = await this.employeeAttendanceRepository.delete(id);
       if (result.affected === 0)
         throw new NotFoundException(`Record with ID ${id} not found`);
@@ -1814,6 +1879,16 @@ export class EmployeeAttendanceService {
       );
       throw error;
     }
+  }
+
+  private canBypassLocked(
+    isPrivileged: boolean,
+    actorId: string | undefined,
+    employeeId: string,
+  ): boolean {
+    if (!isPrivileged) return false;
+    if (!actorId) return true;
+    return actorId !== employeeId;
   }
 
   private isEditableMonth(workingDate: Date): boolean {
