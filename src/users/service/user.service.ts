@@ -86,7 +86,7 @@ export class UsersService {
         select: ['id', 'aliasLoginName', 'loginId', 'userType', 'role', 'createdAt', 'updatedAt', 'password'],
       });
 
-      if (user && !user.role && user.userType === UserType.EMPLOYEE) {
+      if (user && !user.role && (!user.userType || user.userType === UserType.EMPLOYEE)) {
         try {
           const employee = await this.employeeDetailsRepository.findOne({
             where: { employeeId: user.loginId },

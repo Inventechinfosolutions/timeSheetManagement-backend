@@ -55,6 +55,11 @@ export class EmployeeDetailsDto {
   @IsNotEmpty()
   @IsDateString()
   joiningDate: Date;
+
+  @IsOptional()
+  @IsDateString()
+  @Transform(({ value }) => (value === '' ? null : value))
+  dateOfBirth?: Date | null;
   
   @IsString()
   @IsNotEmpty()
