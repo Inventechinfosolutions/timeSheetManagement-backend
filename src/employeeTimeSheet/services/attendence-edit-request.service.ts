@@ -136,12 +136,22 @@ export class AttendenceEditRequestService {
     return approved.includes(dateStr);
   }
 
+  private isLockedAttendanceValue(value?: AttendanceStatus | string | null) {
+    return String(value || '').toLowerCase() === AttendanceStatus.LOCKED.toLowerCase();
+  }
+
   async assertCanEditLockedDay(
     employeeId: string,
     workingDate: Date | string,
     currentStatus?: AttendanceStatus | string | null,
+    firstHalf?: AttendanceStatus | string | null,
+    secondHalf?: AttendanceStatus | string | null,
   ): Promise<void> {
-    if (currentStatus !== AttendanceStatus.LOCKED) return;
+    const isLocked =
+      this.isLockedAttendanceValue(currentStatus) ||
+      this.isLockedAttendanceValue(firstHalf) ||
+      this.isLockedAttendanceValue(secondHalf);
+    if (!isLocked) return;
     const allowed = await this.hasApprovedAccess(employeeId, workingDate);
     if (!allowed) {
       throw new BadRequestException(
