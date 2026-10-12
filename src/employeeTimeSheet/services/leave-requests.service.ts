@@ -35,6 +35,7 @@ import { WorkLocation } from '../enums/work-location.enum';
 import { HalfDayType } from '../enums/half-day-type.enum';
 import { ManagerMappingStatus } from '../../managerMapping/entities/managerMapping.entity';
 import { UserType } from '../../users/enums/user-type.enum';
+import { blockedByLabel, hasAdminAccess } from '../../users/utils/admin-access';
 import {
   DocumentMetaInfo,
   EntityType,
@@ -356,7 +357,7 @@ export class LeaveRequestsService {
             dateStr,
           );
           if (blocker) {
-            const role = blocker.blockedBy === UserType.ADMIN ? 'Admin' : 'Manager';
+            const role = blockedByLabel(blocker.blockedBy);
             const reasonPart = blocker.reason ? `: ${blocker.reason}` : '';
             const formattedDate = dayjs(dateStr).format('DD MMM YYYY');
             throw new BadRequestException(
@@ -763,6 +764,7 @@ export class LeaveRequestsService {
     managerName?: string;
     managerId?: string;
     forExport?: boolean;
+    employeeRole?: string;
   }) {
     this.logger.log(
       `[FETCH] Starting unified request fetch. Filters: ${JSON.stringify(filters)}`,
@@ -781,6 +783,7 @@ export class LeaveRequestsService {
         managerName,
         managerId,
         forExport = false,
+        employeeRole,
       } = filters;
 
       const query = this.leaveRequestRepository
@@ -810,6 +813,7 @@ export class LeaveRequestsService {
           'lr.isModified AS isModified',
           'lr.modificationCount AS modificationCount',
           'ed.department AS department',
+          'ed.role AS role',
           'ed.fullName AS fullName',
           'ed.internId AS internId',
           'ed.conversionDate AS conversionDate',
@@ -849,6 +853,16 @@ export class LeaveRequestsService {
             exactManagerId: managerId,
           },
         );
+      }
+
+      if (employeeRole && employeeRole !== 'All') {
+        const roleList = employeeRole
+          .split(',')
+          .map((value) => value.trim())
+          .filter(Boolean);
+        if (roleList.length) {
+          query.andWhere('ed.role IN (:...employeeRoles)', { employeeRoles: roleList });
+        }
       }
 
       // 3. Department Filter
@@ -1260,6 +1274,7 @@ export class LeaveRequestsService {
     requestType?: string;
     managerName?: string;
     managerId?: string;
+    employeeRole?: string;
   }): Promise<Buffer> {
     this.logger.log(
       `[EXPORT] Generating Excel for leave requests. Filters: ${JSON.stringify(filters)}`,
@@ -1483,7 +1498,7 @@ export class LeaveRequestsService {
     }
   }
 
-  async findUnread(managerName?: string) {
+  async findUnread(managerName?: string, managersOnly = false) {
     this.logger.log(`[FETCH] findUnread: Manager=${managerName || 'All'}`);
     try {
       const qb = this.leaveRequestRepository
@@ -1523,6 +1538,10 @@ export class LeaveRequestsService {
           'mm.employeeId = lr.employeeId AND mm.status = :mStatus',
           { mStatus: ManagerMappingStatus.ACTIVE },
         ).andWhere('mm.managerName = :managerName', { managerName });
+      }
+
+      if (managersOnly) {
+        qb.andWhere('ed.role = :ceoManagerRole', { ceoManagerRole: UserType.MANAGER });
       }
 
       const requests = await qb
@@ -1616,7 +1635,7 @@ export class LeaveRequestsService {
       const roleUpper = (user?.role || '').toUpperCase();
       const isPrivileged =
         user &&
-        (user.userType === UserType.ADMIN ||
+        (hasAdminAccess(user) ||
           user.userType === UserType.MANAGER ||
           roleUpper.includes(UserType.ADMIN) ||
           roleUpper.includes('MNG') ||
@@ -2318,6 +2337,33 @@ export class LeaveRequestsService {
       throw new HttpException(
         `Failed to fetch stats: ${error.message}`,
         HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
+  }
+
+  async assertRequestsBelongToManagers(requestIds: number[]): Promise<void> {
+    const ids = requestIds.filter((id) => Number.isFinite(id));
+    if (!ids.length) return;
+    const requests = await this.leaveRequestRepository.find({
+      where: { id: In(ids) },
+      select: ['id', 'employeeId'],
+    });
+    const employeeIds = [...new Set(requests.map((request) => request.employeeId).filter(Boolean))];
+    const employees = employeeIds.length
+      ? await this.employeeDetailsRepository.find({
+          where: { employeeId: In(employeeIds) },
+          select: ['employeeId', 'role'],
+        })
+      : [];
+    const managerIds = new Set(
+      employees
+        .filter((employee) => String(employee.role || '').toUpperCase() === UserType.MANAGER)
+        .map((employee) => employee.employeeId),
+    );
+    const blocked = requests.some((request) => !managerIds.has(request.employeeId));
+    if (blocked || requests.length !== ids.length) {
+      throw new ForbiddenException(
+        'CEO can review leave, work from home, and client visit only for managers',
       );
     }
   }
@@ -3492,7 +3538,7 @@ export class LeaveRequestsService {
       const roleUpper = (user?.role || '').toUpperCase();
       const isPrivileged =
         user &&
-        (user.userType === UserType.ADMIN ||
+        (hasAdminAccess(user) ||
           user.userType === UserType.MANAGER ||
           roleUpper.includes(UserType.ADMIN) ||
           roleUpper.includes('MNG') ||
@@ -5645,8 +5691,9 @@ export class LeaveRequestsService {
     ids?: number[];
     reviewerName?: string;
     reviewerEmail?: string;
+    employeeRole?: string;
   }): Promise<{ successCount: number; failCount: number; total: number }> {
-    const { status, department, search, month, year, requestType, ids: explicitIds, reviewerName, reviewerEmail } = params;
+    const { status, department, search, month, year, requestType, ids: explicitIds, reviewerName, reviewerEmail, employeeRole } = params;
 
     let ids: number[] = [];
     if (explicitIds && Array.isArray(explicitIds) && explicitIds.length > 0) {
@@ -5669,6 +5716,7 @@ export class LeaveRequestsService {
         month: month || 'All',
         year: year || 'All',
         requestType,
+        employeeRole,
         status: queryStatus,
         page: 1,
         limit: 99999,

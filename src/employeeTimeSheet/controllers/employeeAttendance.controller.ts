@@ -18,6 +18,7 @@ import { Response } from 'express';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { ReceptionistReadOnlyGuard } from '../../auth/guards/receptionist-readonly.guard';
 import { UserType } from '../../users/enums/user-type.enum';
+import { hasAdminAccess } from '../../users/utils/admin-access';
 import {
   ApiOperation,
   ApiQuery,
@@ -62,7 +63,7 @@ export class EmployeeAttendanceController {
       let managerId: string | undefined;
 
       const roleUpper = (user?.role || '').toUpperCase();
-      if (user && user.userType !== UserType.ADMIN && (user.userType === UserType.MANAGER || roleUpper.includes('MNG') || roleUpper.includes(UserType.MANAGER))) {
+      if (user && !hasAdminAccess(user) && (user.userType === UserType.MANAGER || roleUpper.includes('MNG') || roleUpper.includes(UserType.MANAGER))) {
         managerName = user.aliasLoginName;
         managerId = user.loginId;
       }
@@ -105,7 +106,7 @@ export class EmployeeAttendanceController {
       let managerId: string | undefined;
 
       const roleUpper = (user?.role || '').toUpperCase();
-      if (user && user.userType !== UserType.ADMIN && (user.userType === UserType.MANAGER || roleUpper.includes('MNG') || roleUpper.includes(UserType.MANAGER))) {
+      if (user && !hasAdminAccess(user) && (user.userType === UserType.MANAGER || roleUpper.includes('MNG') || roleUpper.includes(UserType.MANAGER))) {
         managerName = user.aliasLoginName;
         managerId = user.loginId;
       }
@@ -189,7 +190,7 @@ export class EmployeeAttendanceController {
       this.logger.log(`Creating attendance record for employee: ${createEmployeeAttendanceDto.employeeId}`);
       const user = req.user;
       const roleUpper = (user?.role || '').toUpperCase();
-      const isPrivileged = user && (user.userType === UserType.ADMIN || user.userType === UserType.MANAGER || roleUpper.includes('MNG') || roleUpper.includes(UserType.MANAGER));
+      const isPrivileged = user && (hasAdminAccess(user) || user.userType === UserType.MANAGER || roleUpper.includes('MNG') || roleUpper.includes(UserType.MANAGER));
       return await this.employeeAttendanceService.create(createEmployeeAttendanceDto, isPrivileged);
     } catch (error) {
       this.logger.error(`Error creating attendance record: ${error.message}`, error.stack);
@@ -232,7 +233,7 @@ export class EmployeeAttendanceController {
 
       // Filter for Managers (consistent with other dashboard endpoints)
       const roleUpper = (user?.role || '').toUpperCase();
-      if (user && (user.userType === UserType.MANAGER || roleUpper.includes('MNG') || roleUpper.includes(UserType.MANAGER))) {
+      if (user && !hasAdminAccess(user) && (user.userType === UserType.MANAGER || roleUpper.includes('MNG') || roleUpper.includes(UserType.MANAGER))) {
         managerName = user.aliasLoginName;
         managerId = user.loginId;
       }
@@ -557,7 +558,7 @@ export class EmployeeAttendanceController {
       this.logger.log(`Updating attendance record ID: ${id}`);
       const user = req.user;
       const roleUpper = (user?.role || '').toUpperCase();
-      const isPrivileged = user && (user.userType === UserType.ADMIN || user.userType === UserType.MANAGER || roleUpper.includes('MNG') || roleUpper.includes(UserType.MANAGER));
+      const isPrivileged = user && (hasAdminAccess(user) || user.userType === UserType.MANAGER || roleUpper.includes('MNG') || roleUpper.includes(UserType.MANAGER));
       return await this.employeeAttendanceService.update(
         id,
         updateEmployeeAttendanceDto,
@@ -593,7 +594,7 @@ export class EmployeeAttendanceController {
       this.logger.log(`Bulk creating/updating ${createDtos.length} attendance records`);
       const user = req.user;
       const roleUpper = (user?.role || '').toUpperCase();
-      const isPrivileged = user && (user.userType === UserType.ADMIN || user.userType === UserType.MANAGER || roleUpper.includes('MNG') || roleUpper.includes(UserType.MANAGER));
+      const isPrivileged = user && (hasAdminAccess(user) || user.userType === UserType.MANAGER || roleUpper.includes('MNG') || roleUpper.includes(UserType.MANAGER));
       return await this.employeeAttendanceService.createBulk(createDtos, isPrivileged);
     } catch (error) {
       this.logger.error(`Error in bulk create/update: ${error.message}`, error.stack);
@@ -634,7 +635,7 @@ export class EmployeeAttendanceController {
       let managerId: string | undefined;
 
       const roleUpper = (user?.role || '').toUpperCase();
-      if (user && (user.userType === UserType.MANAGER || roleUpper.includes('MNG') || roleUpper.includes(UserType.MANAGER))) {
+      if (user && !hasAdminAccess(user) && (user.userType === UserType.MANAGER || roleUpper.includes('MNG') || roleUpper.includes(UserType.MANAGER))) {
         managerName = user.aliasLoginName;
         managerId = user.loginId;
       }
