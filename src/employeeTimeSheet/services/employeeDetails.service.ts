@@ -33,6 +33,10 @@ import { LeaveRequest } from '../entities/leave-request.entity';
 import { TimesheetBlocker } from '../entities/timesheetBlocker.entity';
 import { Notification } from '../../notifications/entities/notification.entity';
 import { MonthStatus } from '../enums/month-status.enum';
+import { MasterDepartment } from '../../master/models/master-department.entity';
+
+/** Roles that may be assigned through the employee bulk upload. */
+const BULK_UPLOAD_ROLES: string[] = [UserType.EMPLOYEE, UserType.MANAGER];
 
 
 
@@ -1435,6 +1439,9 @@ export class EmployeeDetailsService {
    */
   private parseExcelDate(value: unknown): Date | null {
     if (value == null || value === '') return null;
+    if (value instanceof Date) {
+      return Number.isNaN(value.getTime()) ? null : value;
+    }
     if (typeof value === 'number' && !Number.isNaN(value)) {
       // Excel serial date: 1 = 1900-01-01 (Unix epoch offset ~25569)
       const date = new Date((value - 25569) * 86400 * 1000);
@@ -1451,12 +1458,21 @@ export class EmployeeDetailsService {
       return Number.isNaN(date.getTime()) ? null : date;
     }
 
-    // dd/mm/yyyy or dd-mm-yyyy (e.g. 09/06/2025 or 9-6-2025)
-    const dmyMatch = /^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/.exec(str);
+    // dd/mm/yyyy, dd-mm-yyyy, dd.mm.yyyy or a 2-digit year (e.g. 09/06/2025, 9-6-2025, 01/02/26)
+    const dmyMatch = /^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{4}|\d{2})$/.exec(str);
     if (dmyMatch) {
       const [, d, m, y] = dmyMatch;
-      const date = new Date(parseInt(y, 10), parseInt(m, 10) - 1, parseInt(d, 10));
-      return Number.isNaN(date.getTime()) ? null : date;
+      let year = parseInt(y, 10);
+      if (y.length === 2) {
+        // 2-digit years up to the current year are 20xx, later ones 19xx (e.g. 26 -> 2026, 98 -> 1998).
+        const currentYY = new Date().getFullYear() % 100;
+        year += year <= currentYY ? 2000 : 1900;
+      }
+      const day = parseInt(d, 10);
+      const month = parseInt(m, 10);
+      if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+      const date = new Date(year, month - 1, day);
+      return Number.isNaN(date.getTime()) || date.getDate() !== day ? null : date;
     }
 
     // Fallback: native parse (e.g. mm/dd/yyyy)
@@ -1492,6 +1508,49 @@ export class EmployeeDetailsService {
           field: 'email',
           message: 'Invalid email format'
         });
+      }
+    }
+
+    return errors;
+  }
+
+  /** Checks dropdown-type columns and dates against the rules described in the template's "Rules" sheet. */
+  private validateBulkUploadValues(
+    data: any,
+    rowNumber: number,
+    departmentByKey: Map<string, string>,
+  ): BulkUploadErrorDto[] {
+    const errors: BulkUploadErrorDto[] = [];
+    const text = (value: unknown) => (value == null ? '' : String(value).trim());
+    const fail = (field: string, message: string) => errors.push({ row: rowNumber, field, message });
+
+    const department = text(data.department);
+    if (department && !departmentByKey.has(department.toLowerCase())) {
+      fail('department', `Department "${department}" is not valid. Use one of the departments listed in the Rules sheet.`);
+    }
+
+    const employmentType = text(data.employmentType);
+    if (employmentType && !this.normalizeEmploymentType(employmentType)) {
+      fail('employmentType', `Employment type "${employmentType}" is not valid. Use ${Object.values(EmploymentType).join(' or ')}.`);
+    }
+
+    const gender = text(data.gender);
+    if (gender && !Object.values(Gender).includes(gender.toUpperCase() as Gender)) {
+      fail('gender', `Gender "${gender}" is not valid. Use ${Object.values(Gender).join(' or ')}.`);
+    }
+
+    const role = text(data.role);
+    if (role && !BULK_UPLOAD_ROLES.includes(role.toUpperCase())) {
+      fail('role', `Role "${role}" is not valid. Use ${BULK_UPLOAD_ROLES.join(' or ')}.`);
+    }
+
+    const dates: [string, unknown][] = [
+      ['joiningDate', data.joiningDate ?? data.dateOfJoining ?? data['Joining Date'] ?? data['Date of Joining']],
+      ['dateOfBirth', data.dateOfBirth ?? data['Date of Birth'] ?? data.dob ?? data.DOB],
+    ];
+    for (const [field, value] of dates) {
+      if (text(value) && !this.parseExcelDate(value)) {
+        fail(field, `${field} "${text(value)}" is not a valid date. Use DD/MM/YYYY, e.g. 15/06/2025.`);
       }
     }
 
@@ -1538,13 +1597,19 @@ export class EmployeeDetailsService {
         throw new BadRequestException('Excel file is empty');
       }
 
+      const departments = await this.getBulkUploadDepartments();
+      const departmentByKey = new Map(departments.map((name) => [name.toLowerCase(), name]));
+
       // Process each row
       for (let i = 0; i < excelData.length; i++) {
         const rowNumber = i + 2; // +2 because Excel rows start at 1 and first row is header
         const rowData = excelData[i];
 
         // 1. Validate Basic Data Structure
-        const rowErrors = this.validateEmployeeData(rowData, rowNumber);
+        const rowErrors = [
+          ...this.validateEmployeeData(rowData, rowNumber),
+          ...this.validateBulkUploadValues(rowData, rowNumber, departmentByKey),
+        ];
         if (rowErrors.length > 0) {
           result.failureCount++;
           result.errors.push(...rowErrors);
@@ -1584,10 +1649,9 @@ export class EmployeeDetailsService {
             hashedPassword = await bcrypt.hash(String(rowData.password).trim(), salt);
           }
 
-          const departmentVal = String(rowData.department || '').trim();
-          const employmentTypeVal = rowData.employmentType != null && String(rowData.employmentType).trim() !== ''
-            ? (String(rowData.employmentType).trim().toUpperCase() as EmploymentType)
-            : null;
+          const departmentInput = String(rowData.department || '').trim();
+          const departmentVal = departmentByKey.get(departmentInput.toLowerCase()) ?? departmentInput;
+          const employmentTypeVal = this.normalizeEmploymentType(rowData.employmentType);
           const genderVal = rowData.gender != null && String(rowData.gender).trim() !== ''
             ? (String(rowData.gender).trim().toUpperCase() as Gender)
             : null;
@@ -1706,25 +1770,28 @@ export class EmployeeDetailsService {
   async getBulkUploadTemplate(): Promise<Buffer> {
     this.logger.log('Generating bulk upload template');
     try {
+      const departments = await this.getBulkUploadDepartments();
+      const employmentTypes = Object.values(EmploymentType);
+      const genders = Object.values(Gender);
+      const roles = BULK_UPLOAD_ROLES;
+
       const workbook = new ExcelJS.Workbook();
+      // Must stay the first sheet: parseExcelFile only reads SheetNames[0].
       const worksheet = workbook.addWorksheet('Employee Template');
 
       // Define headers exactly as expected by parseExcelFile / validateEmployeeData
       worksheet.columns = [
         { header: 'fullName', key: 'fullName', width: 25 },
         { header: 'employeeId', key: 'employeeId', width: 15 },
-        { header: 'department', key: 'department', width: 20 },
-        { header: 'designation', key: 'designation', width: 20 },
-        { header: 'email', key: 'email', width: 25 },
-        { header: 'employmentType', key: 'employmentType', width: 15 },
-        { header: 'joiningDate', key: 'joiningDate', width: 15 },
-        { header: 'dateOfBirth', key: 'dateOfBirth', width: 15 },
+        { header: 'department', key: 'department', width: 34 },
+        { header: 'designation', key: 'designation', width: 22 },
+        { header: 'email', key: 'email', width: 28 },
+        { header: 'employmentType', key: 'employmentType', width: 16 },
+        { header: 'joiningDate', key: 'joiningDate', width: 14 },
+        { header: 'dateOfBirth', key: 'dateOfBirth', width: 14 },
         { header: 'gender', key: 'gender', width: 10 },
-        { header: 'role', key: 'role', width: 15 },
+        { header: 'role', key: 'role', width: 14 },
       ];
-
-      // Add a sample row
-     
 
       // Style the header row
       worksheet.getRow(1).font = { bold: true };
@@ -1733,6 +1800,45 @@ export class EmployeeDetailsService {
         pattern: 'solid',
         fgColor: { argb: 'FFE0E0E0' }
       };
+      worksheet.views = [{ state: 'frozen', ySplit: 1 }];
+
+      // Lists backing the dropdowns (kept in a hidden sheet so the template stays clean)
+      const lists = workbook.addWorksheet('Lists', { state: 'hidden' });
+      const listColumns: [string, string[]][] = [
+        ['department', departments],
+        ['employmentType', employmentTypes],
+        ['gender', genders],
+        ['role', roles],
+      ];
+      const listRanges: Record<string, string> = {};
+      listColumns.forEach(([key, values], index) => {
+        const column = lists.getColumn(index + 1);
+        column.values = [key, ...values];
+        const letter = column.letter;
+        listRanges[key] = `Lists!$${letter}$2:$${letter}$${values.length + 1}`;
+      });
+
+      const TEMPLATE_ROWS = 1000;
+      const columnLetter = (key: string) => worksheet.getColumn(key).letter;
+      for (let row = 2; row <= TEMPLATE_ROWS + 1; row++) {
+        for (const [key] of listColumns) {
+          worksheet.getCell(`${columnLetter(key)}${row}`).dataValidation = {
+            type: 'list',
+            allowBlank: key !== 'department',
+            formulae: [listRanges[key]],
+            showErrorMessage: true,
+            errorStyle: 'error',
+            errorTitle: 'Invalid value',
+            error: `Pick a ${key} from the dropdown. See the "Rules" sheet for details.`,
+          };
+        }
+        // Text cells keep dates exactly as typed (DD/MM/YYYY) instead of Excel's locale guess.
+        worksheet.getCell(`${columnLetter('employeeId')}${row}`).numFmt = '@';
+        worksheet.getCell(`${columnLetter('joiningDate')}${row}`).numFmt = '@';
+        worksheet.getCell(`${columnLetter('dateOfBirth')}${row}`).numFmt = '@';
+      }
+
+      this.addBulkUploadRulesSheet(workbook, { departments, employmentTypes, genders, roles });
 
       const buffer = await workbook.xlsx.writeBuffer();
       return Buffer.from(buffer);
@@ -1740,6 +1846,130 @@ export class EmployeeDetailsService {
       this.logger.error(`Error generating bulk upload template: ${error.message}`, error.stack);
       throw new HttpException('Failed to generate template', HttpStatus.INTERNAL_SERVER_ERROR);
     }
+  }
+
+  /** Departments configured in Master Department, falling back to the enum when none exist. */
+  private async getBulkUploadDepartments(): Promise<string[]> {
+    try {
+      const rows = await this.employeeDetailsRepository.manager
+        .getRepository(MasterDepartment)
+        .find({ select: ['departmentName'], order: { departmentName: 'ASC' } });
+      const names = rows.map((row) => row.departmentName?.trim()).filter(Boolean) as string[];
+      if (names.length > 0) return names;
+    } catch (error) {
+      this.logger.warn(`Falling back to department enum for bulk upload: ${error.message}`);
+    }
+    return Object.values(Department);
+  }
+
+  private addBulkUploadRulesSheet(
+    workbook: ExcelJS.Workbook,
+    lists: { departments: string[]; employmentTypes: string[]; genders: string[]; roles: string[] },
+  ) {
+    const sheet = workbook.addWorksheet('Rules', {
+      properties: { tabColor: { argb: 'FF4318FF' } },
+    });
+    sheet.columns = [
+      { key: 'column', width: 18 },
+      { key: 'required', width: 12 },
+      { key: 'rule', width: 62 },
+      { key: 'allowed', width: 44 },
+      { key: 'example', width: 30 },
+    ];
+
+    const headerFill: ExcelJS.Fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF4318FF' } };
+    const sectionFill: ExcelJS.Fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE9E3FF' } };
+    const border: Partial<ExcelJS.Borders> = {
+      top: { style: 'thin', color: { argb: 'FFD9D9D9' } },
+      bottom: { style: 'thin', color: { argb: 'FFD9D9D9' } },
+      left: { style: 'thin', color: { argb: 'FFD9D9D9' } },
+      right: { style: 'thin', color: { argb: 'FFD9D9D9' } },
+    };
+
+    const title = sheet.addRow(['Employee Bulk Upload – How to fill the "Employee Template" sheet']);
+    sheet.mergeCells(`A${title.number}:E${title.number}`);
+    title.font = { bold: true, size: 14, color: { argb: 'FF2B3674' } };
+    title.height = 24;
+
+    const notes = [
+      '• Fill one employee per row in the "Employee Template" sheet, starting from row 2. Do not rename, reorder or delete the header row.',
+      '• Columns with a dropdown (department, employmentType, gender, role) only accept the values listed below.',
+      '• Employee ID and Email must be unique – rows that match an existing employee are skipped.',
+      '• Uploaded employees are created in DRAFT status. Send the activation link from the Employee Directory afterwards.',
+      '• Upload only the .xlsx file; this "Rules" sheet is ignored during upload.',
+    ];
+    for (const note of notes) {
+      const row = sheet.addRow([note]);
+      sheet.mergeCells(`A${row.number}:E${row.number}`);
+      row.alignment = { wrapText: true, vertical: 'middle' };
+      row.height = 18;
+    }
+    sheet.addRow([]);
+
+    const header = sheet.addRow(['Column', 'Required', 'What to fill', 'Allowed values / format', 'Example']);
+    header.eachCell((cell) => {
+      cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+      cell.fill = headerFill;
+      cell.border = border;
+      cell.alignment = { vertical: 'middle' };
+    });
+    header.height = 20;
+
+    const columnRules: [string, string, string, string, string][] = [
+      ['fullName', 'Yes', 'Employee full name as it should appear in the app.', 'Text', 'Ravi Kumar'],
+      ['employeeId', 'Yes', 'Unique employee / intern ID. Used as the login ID.', 'Text, must be unique', 'IIS0001'],
+      ['department', 'Yes', 'Department the employee belongs to.', 'Pick from the dropdown (see Departments below)', lists.departments[0] ?? ''],
+      ['designation', 'Yes', 'Job title. If it contains "Intern" the employee is treated as an intern.', 'Text', 'Software Engineer'],
+      ['email', 'Yes', 'Official email address. Activation link is sent here.', 'Valid email, must be unique', 'ravi.kumar@company.com'],
+      ['employmentType', 'Recommended', 'Decides leave entitlement: Full timer 18 leaves/year, Intern 12 leaves/year.', lists.employmentTypes.join(' / '), 'FULL_TIMER'],
+      ['joiningDate', 'Recommended', 'Date the employee joined. Used for experience and work anniversaries.', 'DD/MM/YYYY (or YYYY-MM-DD)', '15/06/2025'],
+      ['dateOfBirth', 'Optional', 'Used for birthday wishes and the dashboard events.', 'DD/MM/YYYY (or YYYY-MM-DD)', '20/08/1998'],
+      ['gender', 'Recommended', 'Employee gender.', lists.genders.join(' / '), 'MALE'],
+      ['role', 'Recommended', 'Access level in the app. MANAGER can approve requests of mapped employees.', lists.roles.join(' / '), 'EMPLOYEE'],
+    ];
+    for (const values of columnRules) {
+      const row = sheet.addRow(values);
+      row.eachCell((cell, col) => {
+        cell.border = border;
+        cell.alignment = { wrapText: true, vertical: 'top' };
+        if (col === 1) cell.font = { bold: true };
+        if (col === 2) {
+          cell.font = {
+            bold: true,
+            color: { argb: values[1] === 'Yes' ? 'FFE53935' : values[1] === 'Recommended' ? 'FFFB8C00' : 'FF757575' },
+          };
+        }
+      });
+    }
+
+    const addList = (label: string, values: string[], hint?: string) => {
+      sheet.addRow([]);
+      const heading = sheet.addRow([label, '', hint ?? '']);
+      sheet.mergeCells(`A${heading.number}:B${heading.number}`);
+      sheet.mergeCells(`C${heading.number}:E${heading.number}`);
+      heading.eachCell((cell) => {
+        cell.fill = sectionFill;
+        cell.font = { bold: true, color: { argb: 'FF2B3674' } };
+      });
+      values.forEach((value, index) => {
+        const row = sheet.addRow([`${index + 1}.`, '', value]);
+        sheet.mergeCells(`C${row.number}:E${row.number}`);
+        row.getCell(1).alignment = { horizontal: 'right' };
+      });
+    };
+
+    addList('Departments', lists.departments, 'Type exactly as shown (or pick from the dropdown).');
+    addList('Employment Types', lists.employmentTypes, 'FULL_TIMER = full-time employee, INTERN = intern.');
+    addList('Gender', lists.genders);
+    addList('Roles', lists.roles, 'Admin and CEO accounts cannot be created through bulk upload.');
+  }
+
+  private normalizeEmploymentType(value: unknown): EmploymentType | null {
+    const raw = String(value ?? '').trim().toUpperCase().replace(/[\s_-]+/g, '');
+    if (!raw) return null;
+    if (['FULLTIMER', 'FULLTIME', 'FULLTIMEEMPLOYEE', 'FT', 'PERMANENT'].includes(raw)) return EmploymentType.FULL_TIMER;
+    if (['INTERN', 'INTERNSHIP', 'TRAINEE'].includes(raw)) return EmploymentType.INTERN;
+    return null;
   }
 
   async getInterns(): Promise<any[]> {
