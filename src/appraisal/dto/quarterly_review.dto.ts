@@ -377,3 +377,21 @@ export class ExportQuarterlyReviewDto {
   @IsEnum(QuarterlyReviewStatus)
   status?: QuarterlyReviewStatus;
 }
+
+export class ReassignQuarterlyReviewDto {
+  @ApiProperty({ example: '2026-10-25', description: 'New deadline date (YYYY-MM-DD)' })
+  @IsNotEmpty()
+  @IsDateString()
+  deadlineDate: string;
+
+  @ApiPropertyOptional({ example: '2026-10-11', description: 'Re-assigned date (defaults to today)' })
+  @IsOptional()
+  @IsDateString()
+  reassignedDate?: string;
+
+  @ApiPropertyOptional({ example: 'Extended deadline by manager', description: 'Remarks / reason' })
+  @IsOptional()
+  @IsString()
+  reason?: string;
+}
+

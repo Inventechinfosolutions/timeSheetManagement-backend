@@ -35,6 +35,7 @@ import {
   UpdateQuarterlyReviewDto,
   ManagerEvaluationDto,
   ExportQuarterlyReviewDto,
+  ReassignQuarterlyReviewDto,
 } from '../dto/quarterly_review.dto';
 import { RevealedEvaluationDto } from '../dto/reveal_rating.dto';
 import { QuarterlyReview } from '../entities/quarterly_review.entities';
@@ -60,6 +61,18 @@ export class QuarterlyReviewPerformanceController {
       query,
       this.reviewService.hidesManagerEvaluation(req.user),
     );
+  }
+
+  @Post(':id/reassign')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Re-assign an overdue or locked quarterly review' })
+  async reassignReview(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: ReassignQuarterlyReviewDto,
+    @Req() req: { user: User },
+  ) {
+    return await this.reviewService.reassignReview(id, dto, req.user);
   }
 }
 
@@ -164,6 +177,28 @@ export class QuarterlyReviewController {
   ) {
     return await this.reviewService.evaluateReview(id, evalDto);
   }
+
+  /**
+   * Re-assign & Unlock a Quarterly Review (Set new deadline and reset status to ASSIGNED)
+   * POST /api/quarterly-review/:id/reassign
+   */
+  @Post(':id/reassign')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Re-assign an overdue or locked quarterly review',
+    description: 'Updates deadline date, sets assignedDate to today, sets review status to ASSIGNED, and resets employee performance status to NOT_STARTED.',
+  })
+  @ApiParam({ name: 'id', type: Number, description: 'Quarterly review ID' })
+  @ApiBody({ type: ReassignQuarterlyReviewDto })
+  async reassignReview(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: ReassignQuarterlyReviewDto,
+    @Req() req: { user: User },
+  ) {
+    return await this.reviewService.reassignReview(id, dto, req.user);
+  }
+
 
   /**
    * FR-09: Manager Download Reports (Export Data)

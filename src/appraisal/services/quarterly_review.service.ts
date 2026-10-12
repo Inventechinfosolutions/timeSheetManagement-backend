@@ -19,6 +19,7 @@ import {
   UpdateQuarterlyReviewDto,
   ManagerEvaluationDto,
   ExportQuarterlyReviewDto,
+  ReassignQuarterlyReviewDto,
 } from '../dto/quarterly_review.dto';
 import {
   QuarterlyReviewStatus,
@@ -1044,10 +1045,11 @@ export class QuarterlyReviewService {
         );
 
         canEdit =
-          isEditWindowActive ||
-          rawPerf.status === EmployeePerformanceStatus.DRAFT ||
-          rawPerf.status === EmployeePerformanceStatus.NOT_STARTED ||
-          rawPerf.status === EmployeePerformanceStatus.NOT_UPDATED;
+          (isEditWindowActive ||
+            rawPerf.status === EmployeePerformanceStatus.DRAFT ||
+            rawPerf.status === EmployeePerformanceStatus.NOT_STARTED) &&
+          rawPerf.status !== EmployeePerformanceStatus.NOT_UPDATED &&
+          r.status !== QuarterlyReviewStatus.NOT_UPDATED;
 
         perf = {
           ...rawPerf,
@@ -1057,7 +1059,9 @@ export class QuarterlyReviewService {
           canEdit,
         };
       } else {
-        canEdit = !this.isEvaluationFinished(r.status);
+        canEdit =
+          !this.isEvaluationFinished(r.status) &&
+          r.status !== QuarterlyReviewStatus.NOT_UPDATED;
       }
 
       const deadline = r.deadlineDate ? new Date(r.deadlineDate) : null;
@@ -1076,6 +1080,76 @@ export class QuarterlyReviewService {
         isOverdue: !!isOverdue,
       };
     });
+  }
+
+  async reassignReview(
+    id: number,
+    dto: ReassignQuarterlyReviewDto,
+    user?: User,
+  ): Promise<QuarterlyReview> {
+    const review = await this.reviewRepository.findOne({ where: { id } });
+    if (!review) {
+      throw new NotFoundException(`Quarterly review #${id} was not found.`);
+    }
+
+    if (!dto.deadlineDate) {
+      throw new BadRequestException('A new deadline date is required for re-assignment.');
+    }
+
+    const todayDateStr = this.dateOnly(dto.reassignedDate || new Date()) || '';
+    const newDeadlineStr = this.dateOnly(dto.deadlineDate);
+
+    if (!newDeadlineStr || newDeadlineStr < todayDateStr) {
+      throw new BadRequestException('The new deadline date must be today or in the future.');
+    }
+
+    // 1. Update QuarterlyReview
+    review.assignedDate = new Date(dto.reassignedDate || new Date());
+    review.deadlineDate = new Date(`${newDeadlineStr}T23:59:59.999Z`);
+    review.status = QuarterlyReviewStatus.ASSIGNED;
+    if (dto.reason?.trim()) {
+      const note = `[Re-assigned on ${todayDateStr}]: ${dto.reason.trim()}`;
+      review.description = review.description ? `${review.description}\n${note}` : note;
+    }
+    const savedReview = await this.reviewRepository.save(review);
+
+    // 2. Update matching EmployeePerformance
+    const performance = await this.performanceRepository.findOne({
+      where: {
+        employeeId: review.employeeId,
+        quarter: review.quarter,
+        financialYear: review.financialYear,
+      },
+    });
+
+    if (performance) {
+      performance.status = EmployeePerformanceStatus.NOT_STARTED;
+      performance.editAllowedUntil = null;
+      performance.lastModifiedDate = new Date();
+      if (user?.loginId) {
+        performance.lastModifiedBy = user.loginId;
+      }
+      await this.performanceRepository.save(performance);
+    }
+
+    // 3. Send notification to employee
+    try {
+      await this.noticeService.notifyEmployeeOfAssignment({
+        employeeId: review.employeeId,
+        employeeName: review.employeeName || review.employeeId,
+        quarter: review.quarter,
+        financialYear: review.financialYear,
+        deadlineDate: review.deadlineDate,
+      });
+    } catch (err) {
+      this.logger.warn(`Could not dispatch assignment notice on reassign: ${err}`);
+    }
+
+    this.logger.log(
+      `Re-assigned review #${id} for ${review.employeeId} (${review.quarter} ${review.financialYear}) with new deadline ${newDeadlineStr}`,
+    );
+
+    return savedReview;
   }
 }
 
