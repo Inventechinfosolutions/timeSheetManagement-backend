@@ -220,6 +220,7 @@ export class EmployeeDetailsService {
     managerId?: string,
     includeSelf: boolean = false,
     userStatus?: string,
+    role?: string,
   ): Promise<{ data: EmployeeDetails[]; totalItems: number }> {
     try {
       this.logger.log('Fetching employees with filter:', {
@@ -268,6 +269,13 @@ export class EmployeeDetailsService {
 
       if (userStatus) {
         query.andWhere('user_filter.status = :userStatus', { userStatus });
+      }
+
+      if (role) {
+        const roles = role.split(',').map((value) => value.trim()).filter(Boolean);
+        if (roles.length) {
+          query.andWhere('employee.role IN (:...employeeRoles)', { employeeRoles: roles });
+        }
       }
 
       // Filter by Manager if provided

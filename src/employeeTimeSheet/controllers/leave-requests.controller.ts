@@ -10,6 +10,7 @@ import { FileService } from '../../common/core/utils/fileType.utils';
 import { EntityType, ReferenceType } from '../../common/document-uploader/models/documentmetainfo.model';
 import { Readable } from 'stream';
 import { UserType } from 'src/users/enums/user-type.enum';
+import { hasAdminAccess, isCeoUser } from 'src/users/utils/admin-access';
 import { NO_CACHE_HEADERS } from '../../common/utils/no-cache-headers';
 
 @Controller('leave-requests')
@@ -72,6 +73,7 @@ export class LeaveRequestsController {
       const roleUpper = (user?.role || '').toUpperCase();
       if (
         user &&
+        !hasAdminAccess(user) &&
         (user.userType === UserType.MANAGER ||
           roleUpper.includes('MNG') ||
           roleUpper.includes(UserType.MANAGER))
@@ -90,6 +92,7 @@ export class LeaveRequestsController {
         requestType,
         managerName,
         managerId,
+        employeeRole: isCeoUser(user) ? UserType.MANAGER : undefined,
       });
 
       const stamp = new Date().toISOString().slice(0, 10);
@@ -166,6 +169,7 @@ export class LeaveRequestsController {
     @Query('month') month: string = 'All',
     @Query('year') year: string = 'All',
     @Query('requestType') requestType?: string,
+    @Query('role') employeeRole?: string,
     @Query('page') page: number = 1,
     @Query('limit') limit: number = 10,
   ) {
@@ -176,7 +180,7 @@ export class LeaveRequestsController {
       let managerId: string | undefined;
 
       const roleUpper = (user?.role || '').toUpperCase();
-      if (user && (user.userType === UserType.MANAGER || roleUpper.includes('MNG') || roleUpper.includes(UserType.MANAGER))) {
+      if (user && !hasAdminAccess(user) && (user.userType === UserType.MANAGER || roleUpper.includes('MNG') || roleUpper.includes(UserType.MANAGER))) {
         managerName = user.aliasLoginName;
         managerId = user.loginId;
       }
@@ -192,7 +196,12 @@ export class LeaveRequestsController {
         page,
         limit,
         managerName,
-        managerId
+        managerId,
+        employeeRole: isCeoUser(user)
+          ? UserType.MANAGER
+          : hasAdminAccess(user)
+            ? employeeRole
+            : undefined,
       });
     } catch (error) {
       this.logger.error(`Error fetching leave requests: ${error.message}`, error.stack);
@@ -242,7 +251,7 @@ export class LeaveRequestsController {
       let managerId: string | undefined;
 
       const roleUpper = (user?.role || '').toUpperCase();
-      if (user && (user.userType === UserType.MANAGER || roleUpper.includes(UserType.MANAGER))) {
+      if (user && !hasAdminAccess(user) && (user.userType === UserType.MANAGER || roleUpper.includes(UserType.MANAGER))) {
         managerName = user.aliasLoginName;
         managerId = user.loginId;
       }
@@ -286,8 +295,11 @@ export class LeaveRequestsController {
     try {
       const user = req.user;
       this.logger.log(`Fetching unread notifications for user type: ${user?.userType}`);
-      const isManager = user?.userType === UserType.MANAGER;
-      return this.leaveRequestsService.findUnread(isManager ? user.aliasLoginName : undefined);
+      const isManager = user?.userType === UserType.MANAGER && !hasAdminAccess(user);
+      return this.leaveRequestsService.findUnread(
+        isManager ? user.aliasLoginName : undefined,
+        isCeoUser(user),
+      );
     } catch (error) {
       this.logger.error(`Error fetching unread notifications: ${error.message}`, error.stack);
       throw error;
@@ -333,7 +345,7 @@ export class LeaveRequestsController {
     try {
       const user = req.user;
       this.logger.log(`Marking all notifications as read for user: ${user?.aliasLoginName || 'system'}`);
-      const isManager = user?.userType === UserType.MANAGER;
+      const isManager = user?.userType === UserType.MANAGER && !hasAdminAccess(user);
       return this.leaveRequestsService.markAllAsRead(isManager ? user.aliasLoginName : undefined);
     } catch (error) {
       this.logger.error(`Error marking all notifications as read: ${error.message}`, error.stack);
@@ -382,6 +394,10 @@ export class LeaveRequestsController {
       const user = req.user;
       const reviewerName = user?.aliasLoginName || user?.fullName || 'Admin';
       const reviewerEmail = user?.loginId || user?.email;
+      const employeeRole = isCeoUser(user) ? UserType.MANAGER : undefined;
+      if (employeeRole && ids?.length) {
+        await this.leaveRequestsService.assertRequestsBelongToManagers(ids);
+      }
       return await this.leaveRequestsService.bulkUpdateStatus({
         status: LeaveRequestStatus.APPROVED,
         department,
@@ -392,6 +408,7 @@ export class LeaveRequestsController {
         ids,
         reviewerName,
         reviewerEmail,
+        employeeRole,
       });
     } catch (error) {
       this.logger.error(`Error in bulk approve: ${error.message}`, error.stack);
@@ -418,6 +435,10 @@ export class LeaveRequestsController {
       const user = req.user;
       const reviewerName = user?.aliasLoginName || user?.fullName || 'Admin';
       const reviewerEmail = user?.loginId || user?.email;
+      const employeeRole = isCeoUser(user) ? UserType.MANAGER : undefined;
+      if (employeeRole && ids?.length) {
+        await this.leaveRequestsService.assertRequestsBelongToManagers(ids);
+      }
       return await this.leaveRequestsService.bulkUpdateStatus({
         status: LeaveRequestStatus.REJECTED,
         department,
@@ -428,6 +449,7 @@ export class LeaveRequestsController {
         ids,
         reviewerName,
         reviewerEmail,
+        employeeRole,
       });
     } catch (error) {
       this.logger.error(`Error in bulk reject: ${error.message}`, error.stack);
@@ -453,11 +475,15 @@ export class LeaveRequestsController {
       const user = req.user;
       const reviewerName = user?.aliasLoginName || user?.fullName || 'Admin';
       const reviewerEmail = user?.loginId || user?.email;
+      if (isCeoUser(user)) {
+        await this.leaveRequestsService.assertRequestsBelongToManagers(ids || []);
+      }
       return await this.leaveRequestsService.bulkUpdateStatus({
         status: targetStatus,
         ids,
         reviewerName,
         reviewerEmail,
+        employeeRole: isCeoUser(user) ? UserType.MANAGER : undefined,
       });
     } catch (error) {
       this.logger.error(`Error in bulk cancellation: ${error.message}`, error.stack);
@@ -483,11 +509,15 @@ export class LeaveRequestsController {
       const user = req.user;
       const reviewerName = user?.aliasLoginName || user?.fullName || 'Admin';
       const reviewerEmail = user?.loginId || user?.email;
+      if (isCeoUser(user)) {
+        await this.leaveRequestsService.assertRequestsBelongToManagers(ids || []);
+      }
       return await this.leaveRequestsService.bulkUpdateStatus({
         status: targetStatus,
         ids,
         reviewerName,
         reviewerEmail,
+        employeeRole: isCeoUser(user) ? UserType.MANAGER : undefined,
       });
     } catch (error) {
       this.logger.error(`Error in bulk modification: ${error.message}`, error.stack);
@@ -497,7 +527,7 @@ export class LeaveRequestsController {
 
   @Post(':id/update-status')
   @UseGuards(JwtAuthGuard, ReceptionistReadOnlyGuard)
-  updateStatus(
+  async updateStatus(
     @Param('id') id: string,
     @Body('status') status: string,
     @Req() req: any
@@ -505,6 +535,9 @@ export class LeaveRequestsController {
     try {
       this.logger.log(`Updating leave request ${id} status to ${status}`);
       const user = req.user;
+      if (isCeoUser(user)) {
+        await this.leaveRequestsService.assertRequestsBelongToManagers([+id]);
+      }
       const reviewerName = user?.aliasLoginName || user?.fullName || 'Admin';
       const reviewerEmail = user?.loginId || user?.email;
       return this.leaveRequestsService.updateStatus(+id, status as any, undefined, reviewerName, reviewerEmail);
