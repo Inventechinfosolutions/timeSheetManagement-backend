@@ -179,6 +179,18 @@ export class AttendenceEditRequestService {
       throw new BadRequestException('Select at least one Locked date.');
     }
 
+    // Employees raising for themselves are limited to the current month; managers/admins raising on behalf are not.
+    const isSelfRequest = !actorId || String(actorId).toLowerCase() === String(employeeId).toLowerCase();
+    if (isSelfRequest) {
+      const currentMonth = dayjs().format('YYYY-MM');
+      const outsideMonth = requested.filter((d) => !d.startsWith(currentMonth));
+      if (outsideMonth.length > 0) {
+        throw new BadRequestException(
+          `Edit Access can only be requested for Locked dates in the current month (${dayjs().format('MMMM YYYY')}).`,
+        );
+      }
+    }
+
     const pendingDates = new Set(await this.getPendingDates(employeeId));
     const datesToSave = requested.filter((d) => !pendingDates.has(d));
 
