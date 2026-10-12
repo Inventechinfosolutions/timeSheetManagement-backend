@@ -10,6 +10,8 @@ import { User } from '../../users/entities/user.entity';
 import { EmployeeDetails } from '../../employeeTimeSheet/entities/employeeDetails.entity';
 import { ManagerMappingMapper } from '../mappers/managerMapping.mapper';
 import { UserStatus } from '../../users/enums/user-status.enum';
+import { LockType } from '../../master/enums/lock-type.enum';
+import { MasterDepartmentService } from '../../master/service/master-department.service';
 
 @Injectable()
 export class ManagerMappingService {
@@ -20,6 +22,9 @@ export class ManagerMappingService {
     public readonly managerMappingRepository: Repository<ManagerMapping>,
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
+    @InjectRepository(EmployeeDetails)
+    private readonly employeeDetailsRepository: Repository<EmployeeDetails>,
+    private readonly masterDepartmentService: MasterDepartmentService,
   ) { }
 
   async findAll(
@@ -472,7 +477,7 @@ export class ManagerMappingService {
         managerId: r.loginId || r.managerEmployeeId || r.managerName,
         department: r.department,
         status: r.managerStatus || ManagerMappingStatus.ACTIVE,
-        employeeCount: parseInt(r.employeeCount, 10)
+        employeeCount: parseInt(r.employeeCount, 10),
       }));
 
       return {
@@ -534,5 +539,34 @@ export class ManagerMappingService {
       this.logger.error(`Error fetching ManagerMapping for employeeId ${employeeId}`, error.stack);
       throw new HttpException(error.message, HttpStatus.INTERNAL_SERVER_ERROR);
     }
+  }
+
+  async getLockTypeForUser(
+    user: any,
+    department?: string,
+  ): Promise<{ lockType: LockType }> {
+    const deptName = department || (await this.getUserDepartmentName(user));
+    const lockType = await this.masterDepartmentService.getLockTypeByName(deptName);
+    return { lockType };
+  }
+
+  async setLockTypeForUser(
+    user: any,
+    lockType: LockType,
+    _targetManagerId?: string,
+    department?: string,
+  ): Promise<{ lockType: LockType; updated: number }> {
+    const deptName = department || (await this.getUserDepartmentName(user));
+    return this.masterDepartmentService.setLockTypeByName(deptName, lockType);
+  }
+
+  private async getUserDepartmentName(user: any): Promise<string> {
+    if (user?.department) return String(user.department);
+    const loginId = user?.loginId;
+    if (!loginId) return '';
+    const details = await this.employeeDetailsRepository.findOne({
+      where: { employeeId: loginId },
+    });
+    return details?.department ? String(details.department) : '';
   }
 }

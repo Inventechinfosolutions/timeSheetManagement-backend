@@ -20,6 +20,7 @@ import {
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { ReceptionistReadOnlyGuard } from '../../auth/guards/receptionist-readonly.guard';
 import { UserType } from '../../users/enums/user-type.enum';
+import { hasAdminAccess } from '../../users/utils/admin-access';
 import { Response } from 'express';
 import { Readable } from 'stream';
 import { FileInterceptor } from '@nestjs/platform-express';
@@ -246,7 +247,7 @@ export class EmployeeDetailsController {
 
       // Filter for Managers (consistent with getAllEmployees)
       const roleUpper = (user?.role || '').toUpperCase();
-      if (user && (user.userType === UserType.MANAGER || roleUpper.includes('MNG') || roleUpper.includes(UserType.MANAGER))) {
+      if (user && !hasAdminAccess(user) && (user.userType === UserType.MANAGER || roleUpper.includes('MNG') || roleUpper.includes(UserType.MANAGER))) {
         managerName = user.aliasLoginName;
         managerId = user.loginId;
       }
@@ -327,6 +328,7 @@ export class EmployeeDetailsController {
     @Query('limit', new DefaultValuePipe(10), ParseIntPipe) limit: number,
     @Query('includeSelf') includeSelf: string,
     @Query('userStatus') userStatus: string,
+    @Query('role') role: string,
     @Req() req: any,
   ) {
     try {
@@ -338,7 +340,7 @@ export class EmployeeDetailsController {
 
       // Filter for Managers (check both userType and role for robustness)
       const roleUpper = (user?.role || '').toUpperCase();
-      if (user && (user.userType === UserType.MANAGER || roleUpper.includes('MNG') || roleUpper.includes(UserType.MANAGER))) {
+      if (user && !hasAdminAccess(user) && (user.userType === UserType.MANAGER || roleUpper.includes('MNG') || roleUpper.includes(UserType.MANAGER))) {
         managerName = user.aliasLoginName;
         managerId = user.loginId; // Fallback or alternative match
         this.logger.log(`Manager filter applied: Name=${managerName}, ID=${managerId}`);
@@ -356,7 +358,8 @@ export class EmployeeDetailsController {
         managerName,
         managerId,
         includeSelf === 'true',
-        userStatus
+        userStatus,
+        role,
       );
     } catch (error) {
       this.logger.error(`Error fetching employees: ${error.message}`, error.stack);

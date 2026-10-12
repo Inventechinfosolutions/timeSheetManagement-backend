@@ -19,6 +19,7 @@ import { EmployeeAttendance } from './employeeTimeSheet/entities/employeeAttenda
 import { EmployeeDetails } from './employeeTimeSheet/entities/employeeDetails.entity';
 import { InternDetails } from './employeeTimeSheet/entities/internDetails.entity';
 import { ManagerMapping } from './managerMapping/entities/managerMapping.entity';
+import { MasterDepartment } from './master/models/master-department.entity';
 import { LeaveRequest } from './employeeTimeSheet/entities/leave-request.entity';
 import { MailModule } from './common/mail/mail.module';
 import { NotificationsModule } from './notifications/notifications.module';
@@ -48,6 +49,7 @@ function getEnvFiles(): string[] {
   const envFiles = [`.env.${profile}`, '.env'];
   console.log(`[Config] Using PROFILE="${profile}" -> env files: ${envFiles.join(', ')}`);
   return envFiles;
+
 }
  
 @Module({
@@ -69,6 +71,7 @@ function getEnvFiles(): string[] {
       EmployeeDetails,
       InternDetails,
       ManagerMapping,
+      MasterDepartment,
       LeaveRequest,
       Note,
       NoteRecipient,

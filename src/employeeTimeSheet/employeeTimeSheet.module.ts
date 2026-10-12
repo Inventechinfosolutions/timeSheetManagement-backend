@@ -27,6 +27,12 @@ import { LeaveRequestsService } from './services/leave-requests.service';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { FileService } from '../common/core/utils/fileType.utils';
 import { Notification } from '../notifications/entities/notification.entity';
+import { AdminDashboardController } from './controllers/adminDashboard.controller';
+import { ManagerDashboardController } from './controllers/managerDashboard.controller';
+import { AdminDashboardService } from './services/adminDashboard.service';
+import { AttendenceEditRequest } from './entities/attendence-edit-request.entity';
+import { AttendenceEditRequestController } from './controllers/attendence-edit-request.controller';
+import { AttendenceEditRequestService } from './services/attendence-edit-request.service';
 
 @Module({
   imports: [
@@ -37,6 +43,7 @@ import { Notification } from '../notifications/entities/notification.entity';
       User, 
       TimesheetBlocker,
       LeaveRequest,
+      AttendenceEditRequest,
       DocumentMetaInfo,
       ManagerMapping,
       MasterHolidays,
@@ -55,6 +62,9 @@ import { Notification } from '../notifications/entities/notification.entity';
     EmployeeLinkController, 
     TimesheetBlockerController,
     LeaveRequestsController,
+    AdminDashboardController,
+    ManagerDashboardController,
+    AttendenceEditRequestController,
   ],
   providers: [
     EmployeeAttendanceService, 
@@ -62,8 +72,10 @@ import { Notification } from '../notifications/entities/notification.entity';
     EmployeeLinkService, 
     TimesheetBlockerService,
     LeaveRequestsService,
+    AttendenceEditRequestService,
     FileService,
+    AdminDashboardService,
   ],
-  exports: [EmployeeDetailsService, EmployeeLinkService],
+  exports: [EmployeeDetailsService, EmployeeLinkService, AttendenceEditRequestService],
 })
 export class EmployeeTimeSheetModule {}

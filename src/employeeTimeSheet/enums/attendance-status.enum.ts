@@ -8,5 +8,6 @@ export enum AttendanceStatus {
   HOLIDAY = 'Holiday',
   ABSENT = 'Absent',
   UPCOMING = 'UPCOMING',
+  LOCKED = 'Locked',
 }
 

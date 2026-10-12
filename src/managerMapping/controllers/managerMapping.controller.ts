@@ -37,8 +37,10 @@ import { IPaginationOptions, Pagination } from 'nestjs-typeorm-paginate';
 
 import { ManagerMappingDTO } from '../dto/managerMapping.dto';
 import { ManagerMappingStatus } from '../entities/managerMapping.entity';
+import { LockType } from '../../master/enums/lock-type.enum';
 import { ManagerMappingService } from '../services/managerMapping.service';
 import { JwtAuthGuard } from 'src/auth/guards/jwt-auth.guard';
+import { ReceptionistReadOnlyGuard } from 'src/auth/guards/receptionist-readonly.guard';
 
 @ApiTags('Manager Mapping')
 @Controller('/manager-mapping')
@@ -179,6 +181,33 @@ export class ManagerMappingController {
     }
   }
 
+  @Get('/lock-type')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(200)
+  @ApiOperation({ summary: 'Get Weekly/Monthly lock type for the current manager or admin' })
+  async getLockType(
+    @Req() req: any,
+    @Query('department') department?: string,
+  ): Promise<{ lockType: LockType }> {
+    return this.managerMappingService.getLockTypeForUser(req.user, department);
+  }
+
+  @Patch('/lock-type')
+  @UseGuards(JwtAuthGuard, ReceptionistReadOnlyGuard)
+  @HttpCode(200)
+  @ApiOperation({ summary: 'Set Weekly/Monthly lock type on the department' })
+  async setLockType(
+    @Req() req: any,
+    @Body() body: { lockType: LockType; managerId?: string; department?: string },
+  ): Promise<{ lockType: LockType; updated: number }> {
+    return this.managerMappingService.setLockTypeForUser(
+      req.user,
+      body.lockType,
+      body.managerId,
+      body.department,
+    );
+  }
+
   @Get('/:id')
   @HttpCode(200)
   @ApiOkResponse({ description: 'Fetched Successfully' })
@@ -241,7 +270,7 @@ export class ManagerMappingController {
   @ApiOperation({ summary: 'Partially update manager mapping' })
   async patchManagerMapping(
     @Req() req: any,
-    @Param('id') id: string,
+    @Param('id', ParseIntPipe) id: number,
     @Body() updateData: Partial<ManagerMappingDTO>,
   ): Promise<{ message: string; data: ManagerMappingDTO }> {
     try {
@@ -249,7 +278,7 @@ export class ManagerMappingController {
       const userContext = req.user;
       const loginId = userContext?.userId || 'unknown';
 
-      const updated = await this.managerMappingService.partialUpdate(id, updateData, loginId);
+      const updated = await this.managerMappingService.partialUpdate(String(id), updateData, loginId);
 
       return {
         message: 'Manager mapping partially updated successfully',
