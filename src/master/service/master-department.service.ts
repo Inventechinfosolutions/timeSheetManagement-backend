@@ -2,6 +2,7 @@ import { Injectable, NotFoundException, ConflictException, Logger, HttpException
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { MasterDepartment } from '../models/master-department.entity';
+import { LockType } from '../enums/lock-type.enum';
 import { CreateDepartmentDto } from '../dto/create-department.dto';
 import { UpdateDepartmentDto } from '../dto/update-department.dto';
 
@@ -117,5 +118,47 @@ export class MasterDepartmentService {
         HttpStatus.INTERNAL_SERVER_ERROR
       );
     }
+  }
+
+  async getLockTypeByName(departmentName?: string): Promise<LockType> {
+    const name = (departmentName || '').trim();
+    if (!name) return LockType.WEEKLY;
+    const department = await this.departmentRepository.findOne({
+      where: { departmentName: name },
+    });
+    return department?.lockType || LockType.WEEKLY;
+  }
+
+  async setLockTypeByName(
+    departmentName: string,
+    lockType: LockType,
+  ): Promise<{ lockType: LockType; updated: number; department: string }> {
+    if (lockType !== LockType.WEEKLY && lockType !== LockType.MONTHLY) {
+      throw new HttpException(
+        'lockType must be Weekly or Monthly',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+    const name = (departmentName || '').trim();
+    if (!name) {
+      throw new HttpException('Department is required', HttpStatus.BAD_REQUEST);
+    }
+    const department = await this.departmentRepository.findOne({
+      where: { departmentName: name },
+    });
+    if (!department) {
+      throw new NotFoundException(`Department "${name}" not found`);
+    }
+    department.lockType = lockType;
+    await this.departmentRepository.save(department);
+    this.logger.log(`Set lock_type=${lockType} on department ${name}`);
+    return { lockType, updated: 1, department: name };
+  }
+
+  async getDepartmentNamesByLockType(lockType: LockType): Promise<string[]> {
+    const rows = await this.departmentRepository.find({
+      where: { lockType },
+    });
+    return rows.map((d) => d.departmentName);
   }
 }

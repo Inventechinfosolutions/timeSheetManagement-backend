@@ -32,6 +32,7 @@ import { DownloadAttendanceDto } from '../dto/download-attendance.dto';
 import { EmployeeAttendanceService } from '../services/employeeAttendance.service';
 import { LeaveRequestsService } from '../services/leave-requests.service';
 import { TimesheetBlockerService } from '../services/timesheetBlocker.service';
+import { AttendenceEditRequestService } from '../services/attendence-edit-request.service';
 import { NO_CACHE_HEADERS } from '../../common/utils/no-cache-headers';
 import dayjs from 'dayjs';
 
@@ -44,6 +45,7 @@ export class EmployeeAttendanceController {
     private readonly employeeAttendanceService: EmployeeAttendanceService,
     private readonly leaveRequestsService: LeaveRequestsService,
     private readonly timesheetBlockerService: TimesheetBlockerService,
+    private readonly attendenceEditRequestService: AttendenceEditRequestService,
   ) { }
 
   @UseGuards(JwtAuthGuard, ReceptionistReadOnlyGuard)
@@ -190,8 +192,8 @@ export class EmployeeAttendanceController {
       this.logger.log(`Creating attendance record for employee: ${createEmployeeAttendanceDto.employeeId}`);
       const user = req.user;
       const roleUpper = (user?.role || '').toUpperCase();
-      const isPrivileged = user && (hasAdminAccess(user) || user.userType === UserType.MANAGER || roleUpper.includes('MNG') || roleUpper.includes(UserType.MANAGER));
-      return await this.employeeAttendanceService.create(createEmployeeAttendanceDto, isPrivileged);
+      const isPrivileged = user && (user.userType === UserType.ADMIN || user.userType === UserType.MANAGER || roleUpper.includes('MNG') || roleUpper.includes(UserType.MANAGER));
+      return await this.employeeAttendanceService.create(createEmployeeAttendanceDto, isPrivileged, user?.loginId);
     } catch (error) {
       this.logger.error(`Error creating attendance record: ${error.message}`, error.stack);
       throw error;
@@ -450,12 +452,15 @@ export class EmployeeAttendanceController {
         `Fetching consolidated my-timesheet for ${employeeId} (${resolvedMonth}/${resolvedYear})`,
       );
 
-      const [monthlyAttendance, blockers] = await Promise.all([
-        this.employeeAttendanceService.findByMonth(resolvedMonth, resolvedYear, employeeId),
-        this.timesheetBlockerService.findAllByEmployee(employeeId),
-      ]);
+      const [monthlyAttendance, blockers, pendingDates, approvedDates] =
+        await Promise.all([
+          this.employeeAttendanceService.findByMonth(resolvedMonth, resolvedYear, employeeId),
+          this.timesheetBlockerService.findAllByEmployee(employeeId),
+          this.attendenceEditRequestService.getPendingDates(employeeId),
+          this.attendenceEditRequestService.getApprovedDates(employeeId),
+        ]);
 
-      return { monthlyAttendance, blockers };
+      return { monthlyAttendance, blockers, pendingDates, approvedDates };
     } catch (error) {
       this.logger.error(
         `Error fetching my-timesheet for ${employeeId}: ${error.message}`,
@@ -562,7 +567,8 @@ export class EmployeeAttendanceController {
       return await this.employeeAttendanceService.update(
         id,
         updateEmployeeAttendanceDto,
-        isPrivileged
+        isPrivileged,
+        user?.loginId
       );
     } catch (error) {
       this.logger.error(`Error updating attendance record ${id}: ${error.message}`, error.stack);
@@ -594,8 +600,8 @@ export class EmployeeAttendanceController {
       this.logger.log(`Bulk creating/updating ${createDtos.length} attendance records`);
       const user = req.user;
       const roleUpper = (user?.role || '').toUpperCase();
-      const isPrivileged = user && (hasAdminAccess(user) || user.userType === UserType.MANAGER || roleUpper.includes('MNG') || roleUpper.includes(UserType.MANAGER));
-      return await this.employeeAttendanceService.createBulk(createDtos, isPrivileged);
+      const isPrivileged = user && (user.userType === UserType.ADMIN || user.userType === UserType.MANAGER || roleUpper.includes('MNG') || roleUpper.includes(UserType.MANAGER));
+      return await this.employeeAttendanceService.createBulk(createDtos, isPrivileged, user?.loginId);
     } catch (error) {
       this.logger.error(`Error in bulk create/update: ${error.message}`, error.stack);
       throw error;

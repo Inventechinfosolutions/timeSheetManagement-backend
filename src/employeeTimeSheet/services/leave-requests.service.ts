@@ -2570,6 +2570,7 @@ export class LeaveRequestsService {
                 `[UPDATE_STATUS] Created attendance record for ${targetDate.format('YYYY-MM-DD')}`,
               );
             } else {
+              // Overwrite Locked the same as Not Updated / Pending when Leave / WFH / CV is approved
               await this.employeeAttendanceRepository
                 .createQueryBuilder()
                 .update(EmployeeAttendance)
@@ -2584,7 +2585,7 @@ export class LeaveRequestsService {
                 .where('id = :id', { id: attendance.id })
                 .execute();
               this.logger.log(
-                `[UPDATE_STATUS] Updated attendance record ${attendance.id}`,
+                `[UPDATE_STATUS] Updated attendance record ${attendance.id} (including Locked overwrite)`,
               );
             }
 
