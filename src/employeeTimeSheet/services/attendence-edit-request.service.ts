@@ -18,7 +18,6 @@ import {
   ManagerMappingStatus,
 } from '../../managerMapping/entities/managerMapping.entity';
 import { User } from '../../users/entities/user.entity';
-import { UserType } from '../../users/enums/user-type.enum';
 import { NotificationsService } from '../../notifications/Services/notifications.service';
 import { MasterDepartmentService } from '../../master/service/master-department.service';
 import { LockType } from '../../master/enums/lock-type.enum';
@@ -28,6 +27,7 @@ import {
 } from '../dto/attendence-edit-request.dto';
 import { EmailService } from '../../email/email.service';
 import { getGeneralNotificationTemplate } from '../../common/mail/templates';
+import { hasAdminAccess } from '../../users/utils/admin-access';
 
 export interface AttendenceEditRequestQuery {
   managerId?: string;
@@ -238,7 +238,7 @@ export class AttendenceEditRequestService {
       currentPage: number;
     };
   }> {
-    const isAdmin = user?.userType === UserType.ADMIN;
+    const isAdmin = hasAdminAccess(user);
     const page = Math.max(1, Number(query.page) || 1);
     const limit = Math.min(100, Math.max(1, Number(query.limit) || 10));
     const empty = {
@@ -398,7 +398,7 @@ export class AttendenceEditRequestService {
       throw new NotFoundException(`Edit Access request ${id} not found`);
     }
 
-    const isAdmin = reviewer?.userType === UserType.ADMIN;
+    const isAdmin = hasAdminAccess(reviewer);
     if (!isAdmin) {
       const allowedIds = await this.getVisibleEmployeeIds(
         reviewer?.loginId,
@@ -419,7 +419,7 @@ export class AttendenceEditRequestService {
       throw new BadRequestException('Employee is required.');
     }
     if (actorId && actorId === targetEmployeeId) return;
-    if (actor?.userType === UserType.ADMIN) return;
+    if (hasAdminAccess(actor)) return;
 
     const mapped = await this.getVisibleEmployeeIds(actorId, actor);
     if (!mapped.includes(targetEmployeeId)) {
