@@ -29,6 +29,7 @@ export enum QuarterlyReviewStatus {
   APPROVED_FOR_EDITING = 'APPROVED_FOR_EDITING',
   RE_SUBMITTED = 'RE_SUBMITTED',
   NOT_UPDATED = 'NOT_UPDATED',
+  LOCKED = 'LOCKED',
   ALLOWED_TO_EDIT = 'ALLOWED_TO_EDIT',
 }
 export const QuaterlyReviewStatus = QuarterlyReviewStatus;

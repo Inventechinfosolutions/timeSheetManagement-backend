@@ -36,6 +36,12 @@ import {
   SUBMITTABLE_PERFORMANCE_STATUSES,
   appraisalWindowMs,
 } from '../constants/appraisal.constants';
+import {
+  deadlineHasArrived,
+  isLockedReviewStatus,
+  reviewAccessFlags,
+  shouldCloseRenewedAccess,
+} from '../utils/review-access';
 
 export interface PerformanceListMeta {
   totalItems: number;
@@ -114,6 +120,7 @@ export class EmployeePerformanceService {
             'This quarterly submission is locked. You must request edit permission.',
           );
         }
+        await this.assertEmployeeCanChange(record);
         const keepStatus =
           record.status === EmployeePerformanceStatus.EDIT_GRANTED;
         nextStatus = keepStatus
@@ -143,7 +150,17 @@ export class EmployeePerformanceService {
       }
 
       const saved = await this.performanceRepository.save(record);
-      await this.linkPerformanceToReview(saved.employeeId, saved.quarter, saved.financialYear, saved.id);
+      if (saved.status === EmployeePerformanceStatus.DRAFT) {
+        await this.setReviewStatus(
+          saved.employeeId,
+          saved.quarter,
+          saved.financialYear,
+          QuarterlyReviewStatus.DRAFT,
+          saved.id,
+        );
+      } else {
+        await this.linkPerformanceToReview(saved.employeeId, saved.quarter, saved.financialYear, saved.id);
+      }
 
       const enriched = await this.enrichPerformancesWithEmployeeDetails([saved]);
       return enriched[0];
@@ -184,6 +201,7 @@ export class EmployeePerformanceService {
       }
 
       record = await this.lockIfGrantExpired(record);
+      await this.assertEmployeeCanChange(record);
 
       if (
         record.status === EmployeePerformanceStatus.SUBMITTED ||
@@ -250,9 +268,7 @@ export class EmployeePerformanceService {
         },
       });
 
-      const reviewStatus = resubmitting
-        ? QuarterlyReviewStatus.RE_SUBMITTED
-        : QuarterlyReviewStatus.PERFORMANCE_RECEIVED;
+      const reviewStatus = QuarterlyReviewStatus.PERFORMANCE_RECEIVED;
       if (review) {
         if (!resubmitting || !review.submittedDate) {
           review.submittedDate = submittedAt;
@@ -339,7 +355,7 @@ export class EmployeePerformanceService {
             employeeId: review.employeeId,
             quarter: review.quarter,
             financialYear: review.financialYear,
-            status: EmployeePerformanceStatus.NOT_UPDATED,
+            status: EmployeePerformanceStatus.LOCKED,
           });
           record = await this.performanceRepository.save(record);
           review.performanceId = record.id;
@@ -382,57 +398,69 @@ export class EmployeePerformanceService {
         );
       }
 
-      const deadlinePassed = review?.deadlineDate
-        ? new Date(review.deadlineDate).setHours(23, 59, 59, 999) < Date.now()
-        : false;
-      const missedDeadline =
-        record.status === EmployeePerformanceStatus.NOT_UPDATED ||
-        deadlinePassed ||
+      const renewalCount = review?.reassignCount || 0;
+      const deadlineReached = deadlineHasArrived(review?.deadlineDate);
+      const unsubmitted =
+        isLockedReviewStatus(record.status) ||
         record.status === EmployeePerformanceStatus.NOT_STARTED ||
-        record.status === EmployeePerformanceStatus.DRAFT;
+        record.status === EmployeePerformanceStatus.DRAFT ||
+        record.status === EmployeePerformanceStatus.ASSIGNED ||
+        record.status === EmployeePerformanceStatus.PENDING ||
+        record.status === EmployeePerformanceStatus.IN_PROGRESS;
 
       if (record.status === EmployeePerformanceStatus.SUBMITTED) {
         const submittedAt = record.submittedAt || record.createdAt;
         const diffMs = Date.now() - new Date(submittedAt).getTime();
         if (diffMs > appraisalWindowMs(APPRAISAL_EDIT_WINDOW_HOURS)) {
           throw new BadRequestException(
-            'Edit request window has expired. You can request an edit within 2 days of submission.',
+            'Edit request window has expired. You can request an edit within 42 hours of submission.',
           );
         }
         record.status = EmployeePerformanceStatus.REQUESTED_FOR_EDIT;
         record.editRequestedAt = new Date();
         record.editRequestReason = dto.reason || EDIT_REQUEST_DEFAULT_REASON;
-      } else if (missedDeadline) {
-        if (review?.deadlineDate) {
-          const deadlineTime = new Date(review.deadlineDate).setHours(23, 59, 59, 999);
-          const diffMs = Date.now() - deadlineTime;
-          if (diffMs > appraisalWindowMs(APPRAISAL_EDIT_WINDOW_HOURS)) {
-            throw new BadRequestException(
-              'Edit request window has expired. You can request an edit within 2 days of deadline.',
-            );
-          }
+      } else if (unsubmitted && deadlineReached) {
+        if (renewalCount >= 1) {
+          await this.closeRenewedAccess(review, record);
+          throw new BadRequestException(
+            'This review was already reassigned. Access and editing stay closed.',
+          );
+        }
+        const access = reviewAccessFlags({
+          status: record.status,
+          deadlineDate: review?.deadlineDate,
+          submittedAt: record.submittedAt,
+          editAllowedUntil: record.editAllowedUntil,
+          reassignCount: renewalCount,
+          requestWindowMs: appraisalWindowMs(APPRAISAL_EDIT_WINDOW_HOURS),
+          lockedAt: review?.updatedAt,
+        });
+        if (!access.canRequestEdit) {
+          throw new BadRequestException(
+            'The 42 hour window to request access has ended. Your manager can re-assign this review.',
+          );
         }
         record.status = EmployeePerformanceStatus.REQUESTED_FOR_EDIT;
         record.editRequestedAt = new Date();
-        record.editRequestReason = dto.reason || EDIT_REQUEST_DEFAULT_REASON;
+        record.editRequestReason = dto.reason || 'Access requested after the deadline';
+      } else if (unsubmitted) {
+        throw new BadRequestException(
+          'You can still update and submit this review before the deadline.',
+        );
       } else {
         throw new BadRequestException(
-          'Edit request can only be submitted for a submitted review or after a missed deadline.',
+          'Edit request can only be submitted for a submitted review or after the deadline.',
         );
       }
 
       const saved = await this.performanceRepository.save(record);
-      if (saved.status === EmployeePerformanceStatus.REQUESTED_FOR_EDIT && !missedDeadline) {
-        await this.setReviewStatus(
-          saved.employeeId,
-          saved.quarter,
-          saved.financialYear,
-          QuarterlyReviewStatus.REQUESTED_FOR_EDIT,
-          saved.id,
-        );
-      } else {
-        await this.linkPerformanceToReview(saved.employeeId, saved.quarter, saved.financialYear, saved.id);
-      }
+      await this.setReviewStatus(
+        saved.employeeId,
+        saved.quarter,
+        saved.financialYear,
+        QuarterlyReviewStatus.REQUESTED_FOR_EDIT,
+        saved.id,
+      );
       const enriched = await this.enrichPerformancesWithEmployeeDetails([saved]);
       await this.noticeService.notifyManagerOfEditRequest({
         employeeId: saved.employeeId,
@@ -480,9 +508,7 @@ export class EmployeePerformanceService {
       record.editRespondedAt = new Date();
       record.editResponseNote = dto.responseNote || null;
 
-      const missedDeadline =
-        review?.status === QuarterlyReviewStatus.ASSIGNED ||
-        review?.status === QuarterlyReviewStatus.NOT_STARTED;
+      const neverSubmitted = !record.submittedAt;
       if (dto.approved) {
         record.status = EmployeePerformanceStatus.EDIT_GRANTED;
         if (dto.editAllowedUntil) {
@@ -494,6 +520,9 @@ export class EmployeePerformanceService {
         } else {
           record.editAllowedUntil = new Date(Date.now() + appraisalWindowMs(APPRAISAL_EDIT_WINDOW_HOURS));
         }
+      } else if (neverSubmitted) {
+        record.status = EmployeePerformanceStatus.NOT_STARTED;
+        record.editAllowedUntil = null;
       } else {
         record.status = EmployeePerformanceStatus.SUBMITTED;
         record.editAllowedUntil = null;
@@ -506,6 +535,14 @@ export class EmployeePerformanceService {
           saved.quarter,
           saved.financialYear,
           QuarterlyReviewStatus.EDIT_GRANTED,
+          saved.id,
+        );
+      } else if (neverSubmitted) {
+        await this.setReviewStatus(
+          saved.employeeId,
+          saved.quarter,
+          saved.financialYear,
+          QuarterlyReviewStatus.NOT_STARTED,
           saved.id,
         );
       } else {
@@ -894,6 +931,55 @@ export class EmployeePerformanceService {
     return { message: 'Unknown error' };
   }
 
+  private async assertEmployeeCanChange(record: EmployeePerformance): Promise<void> {
+    if (record.status === EmployeePerformanceStatus.EDIT_GRANTED) {
+      return;
+    }
+    const review = await this.reviewRepository.findOne({
+      where: {
+        employeeId: record.employeeId,
+        quarter: record.quarter,
+        financialYear: record.financialYear,
+      },
+    });
+    if (!review || !deadlineHasArrived(review.deadlineDate)) {
+      return;
+    }
+    const open =
+      record.status === EmployeePerformanceStatus.NOT_STARTED ||
+      record.status === EmployeePerformanceStatus.DRAFT ||
+      record.status === EmployeePerformanceStatus.ASSIGNED ||
+      record.status === EmployeePerformanceStatus.PENDING ||
+      record.status === EmployeePerformanceStatus.IN_PROGRESS;
+    if (!open) {
+      return;
+    }
+    if ((review.reassignCount || 0) >= 1) {
+      await this.closeRenewedAccess(review, record);
+      throw new BadRequestException(
+        'This review was already reassigned. Access and editing stay closed.',
+      );
+    }
+    throw new BadRequestException(
+      'The deadline is today. Submit is closed. Request access from your manager.',
+    );
+  }
+
+  private async closeRenewedAccess(
+    review: QuarterlyReview | null,
+    record: EmployeePerformance,
+  ): Promise<void> {
+    if (review && !isLockedReviewStatus(review.status)) {
+      review.status = QuarterlyReviewStatus.LOCKED;
+      await this.reviewRepository.save(review);
+    }
+    if (!isLockedReviewStatus(record.status)) {
+      record.status = EmployeePerformanceStatus.LOCKED;
+      record.lastModifiedDate = new Date();
+      await this.performanceRepository.save(record);
+    }
+  }
+
   private async setReviewStatus(
     employeeId: string,
     quarter: EmployeePerformance['quarter'],
@@ -967,7 +1053,20 @@ export class EmployeePerformanceService {
         quarter: record.quarter,
         financialYear: record.financialYear,
       })),
-      select: ['id', 'employeeId', 'quarter', 'financialYear', 'assignerId', 'assignedDate', 'deadlineDate', 'description'],
+      select: [
+        'id',
+        'employeeId',
+        'quarter',
+        'financialYear',
+        'assignerId',
+        'assignedDate',
+        'deadlineDate',
+        'description',
+        'status',
+        'reassignCount',
+        'submittedDate',
+        'updatedAt',
+      ],
     });
     const assignerIds = Array.from(new Set(reviews.map((review) => review.assignerId).filter(Boolean)));
     const assigners = assignerIds.length
@@ -981,17 +1080,43 @@ export class EmployeePerformanceService {
       reviews.map((review) => [`${review.employeeId}|${review.quarter}|${review.financialYear}`, review]),
     );
 
-    return records.map((record) => {
+    const now = new Date();
+    const requestWindowMs = appraisalWindowMs(APPRAISAL_EDIT_WINDOW_HOURS);
+    const withAccess: EnrichedEmployeePerformance[] = [];
+    for (const record of records) {
       const review = reviewByKey.get(`${record.employeeId}|${record.quarter}|${record.financialYear}`);
-      return {
+      if (
+        review &&
+        shouldCloseRenewedAccess(review.reassignCount || 0, review.deadlineDate, record.status, now)
+      ) {
+        await this.closeRenewedAccess(review, record);
+      }
+      const access = review
+        ? reviewAccessFlags({
+          status: record.status,
+          deadlineDate: review.deadlineDate,
+          submittedAt: record.submittedAt,
+          editAllowedUntil: record.editAllowedUntil,
+          reassignCount: review.reassignCount || 0,
+          requestWindowMs,
+          lockedAt: review.updatedAt,
+          now,
+        })
+        : null;
+      withAccess.push({
         ...record,
         assignedBy: review ? nameById.get(review.assignerId) || null : null,
         assignedDate: review?.assignedDate ?? null,
         deadlineDate: review?.deadlineDate ?? null,
         description: review?.description ?? null,
         reviewId: review?.id ?? null,
-      };
-    });
+        canEdit: access ? access.canEdit : record.canEdit,
+        canRequestEdit: access ? access.canRequestEdit : record.canRequestEdit,
+        remainingRequestHours: access ? access.remainingRequestHours : record.remainingRequestHours,
+        isEditWindowActive: access ? access.isEditWindowActive : record.isEditWindowActive,
+      });
+    }
+    return withAccess;
   }
 
   /**
@@ -1052,8 +1177,7 @@ export class EmployeePerformanceService {
       const canEdit =
         isEditWindowActive ||
         r.status === EmployeePerformanceStatus.DRAFT ||
-        r.status === EmployeePerformanceStatus.NOT_STARTED ||
-        r.status === EmployeePerformanceStatus.NOT_UPDATED;
+        r.status === EmployeePerformanceStatus.NOT_STARTED;
 
       return {
         ...r,

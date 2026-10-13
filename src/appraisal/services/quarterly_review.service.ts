@@ -43,6 +43,7 @@ import {
   APPRAISAL_EDIT_WINDOW_HOURS,
   appraisalWindowMs,
 } from '../constants/appraisal.constants';
+import { isLockedReviewStatus, reviewAccessFlags, shouldCloseRenewedAccess } from '../utils/review-access';
 import { MasterFinancialYearService } from '../../master/service/master-financialyear.service';
 import { UsersService } from '../../users/service/user.service';
 import { User } from '../../users/entities/user.entity';
@@ -192,9 +193,12 @@ export class QuarterlyReviewService {
         assignedBy: createDto.assignedBy || ReviewAssignedBy.MANAGER,
         assignerId,
         managerName,
-        assignedDate: createDto.assignedDate ? new Date(createDto.assignedDate) : new Date(),
-        deadlineDate: createDto.deadlineDate ? new Date(createDto.deadlineDate) : null,
+        assignedDate: createDto.assignedDate
+          ? this.calendarDate(createDto.assignedDate)
+          : this.calendarDate(new Date()),
+        deadlineDate: createDto.deadlineDate ? this.calendarDate(createDto.deadlineDate) : null,
         status: QuarterlyReviewStatus.ASSIGNED,
+        reassignCount: 0,
       });
 
       const saved = await this.reviewRepository.save(review);
@@ -916,12 +920,26 @@ export class QuarterlyReviewService {
     };
   }
 
+  private calendarDate(value?: Date | string | null): Date | null {
+    const day = this.dateOnly(value);
+    if (!day) {
+      return null;
+    }
+    const [year, month, date] = day.split('-').map(Number);
+    return new Date(year, month - 1, date, 12, 0, 0, 0);
+  }
+
   private dateOnly(value?: Date | string | null): string | undefined {
     if (!value) {
       return undefined;
     }
     if (value instanceof Date) {
-      return Number.isNaN(value.getTime()) ? undefined : value.toISOString().slice(0, 10);
+      if (Number.isNaN(value.getTime())) {
+        return undefined;
+      }
+      const month = String(value.getMonth() + 1).padStart(2, '0');
+      const date = String(value.getDate()).padStart(2, '0');
+      return `${value.getFullYear()}-${month}-${date}`;
     }
     const text = String(value).slice(0, 10);
     return /^\d{4}-\d{2}-\d{2}$/.test(text) ? text : undefined;
@@ -1013,14 +1031,39 @@ export class QuarterlyReviewService {
     today.setHours(0, 0, 0, 0);
     const requestWindowMs = appraisalWindowMs(APPRAISAL_EDIT_WINDOW_HOURS);
 
+    for (const review of reviews) {
+      const perfKey = `${review.employeeId}-${review.quarter}-${review.financialYear}`;
+      const rawPerf = perfMap.get(perfKey) || null;
+      const status = rawPerf?.status || review.status;
+      if (!shouldCloseRenewedAccess(review.reassignCount || 0, review.deadlineDate, status, now)) {
+        continue;
+      }
+      review.status = QuarterlyReviewStatus.LOCKED;
+      await this.reviewRepository.save(review);
+      if (rawPerf && !isLockedReviewStatus(rawPerf.status)) {
+        rawPerf.status = EmployeePerformanceStatus.LOCKED;
+        rawPerf.lastModifiedDate = now;
+        await this.performanceRepository.save(rawPerf);
+      }
+    }
+
     return reviews.map((r) => {
       const perfKey = `${r.employeeId}-${r.quarter}-${r.financialYear}`;
       const rawPerf = perfMap.get(perfKey) || null;
-
-      let canRequestEdit = false;
-      let remainingRequestHours = 0;
-      let isEditWindowActive = false;
-      let canEdit = false;
+      const access = reviewAccessFlags({
+        status: rawPerf?.status || r.status,
+        deadlineDate: r.deadlineDate,
+        submittedAt: rawPerf?.submittedAt || r.submittedDate,
+        editAllowedUntil: rawPerf?.editAllowedUntil || null,
+        reassignCount: r.reassignCount || 0,
+        requestWindowMs,
+        lockedAt: r.updatedAt,
+        now,
+      });
+      const canRequestEdit = access.canRequestEdit;
+      const remainingRequestHours = access.remainingRequestHours;
+      const isEditWindowActive = access.isEditWindowActive;
+      const canEdit = access.canEdit;
 
       let perf: (EmployeePerformance & {
         canRequestEdit?: boolean;
@@ -1030,27 +1073,6 @@ export class QuarterlyReviewService {
       }) | null = null;
 
       if (rawPerf) {
-        if (rawPerf.status === EmployeePerformanceStatus.SUBMITTED && rawPerf.submittedAt) {
-          const diffMs = now.getTime() - new Date(rawPerf.submittedAt).getTime();
-          canRequestEdit = diffMs <= requestWindowMs;
-          if (canRequestEdit) {
-            remainingRequestHours = Math.max(1, Math.round((requestWindowMs - diffMs) / (3600 * 1000)));
-          }
-        }
-
-        isEditWindowActive = !!(
-          rawPerf.status === EmployeePerformanceStatus.EDIT_GRANTED &&
-          rawPerf.editAllowedUntil &&
-          now.getTime() <= new Date(rawPerf.editAllowedUntil).getTime()
-        );
-
-        canEdit =
-          (isEditWindowActive ||
-            rawPerf.status === EmployeePerformanceStatus.DRAFT ||
-            rawPerf.status === EmployeePerformanceStatus.NOT_STARTED) &&
-          rawPerf.status !== EmployeePerformanceStatus.NOT_UPDATED &&
-          r.status !== QuarterlyReviewStatus.NOT_UPDATED;
-
         perf = {
           ...rawPerf,
           canRequestEdit,
@@ -1058,10 +1080,6 @@ export class QuarterlyReviewService {
           isEditWindowActive,
           canEdit,
         };
-      } else {
-        canEdit =
-          !this.isEvaluationFinished(r.status) &&
-          r.status !== QuarterlyReviewStatus.NOT_UPDATED;
       }
 
       const deadline = r.deadlineDate ? new Date(r.deadlineDate) : null;
@@ -1092,6 +1110,29 @@ export class QuarterlyReviewService {
       throw new NotFoundException(`Quarterly review #${id} was not found.`);
     }
 
+    if ((review.reassignCount || 0) >= 1 && isLockedReviewStatus(review.status)) {
+      throw new BadRequestException(
+        'This review was already reassigned. Access and editing stay closed.',
+      );
+    }
+
+    if (isLockedReviewStatus(review.status)) {
+      const access = reviewAccessFlags({
+        status: review.status,
+        deadlineDate: review.deadlineDate,
+        submittedAt: review.submittedDate,
+        editAllowedUntil: null,
+        reassignCount: review.reassignCount || 0,
+        requestWindowMs: appraisalWindowMs(APPRAISAL_EDIT_WINDOW_HOURS),
+        lockedAt: review.updatedAt,
+      });
+      if (access.canRequestEdit) {
+        throw new BadRequestException(
+          'The employee still has 42 hours to request access. Re-assign is available after that window if they do not request it.',
+        );
+      }
+    }
+
     if (!dto.deadlineDate) {
       throw new BadRequestException('A new deadline date is required for re-assignment.');
     }
@@ -1103,10 +1144,11 @@ export class QuarterlyReviewService {
       throw new BadRequestException('The new deadline date must be today or in the future.');
     }
 
-    // 1. Update QuarterlyReview
-    review.assignedDate = new Date(dto.reassignedDate || new Date());
-    review.deadlineDate = new Date(`${newDeadlineStr}T23:59:59.999Z`);
+    // 1. Update QuarterlyReview — same statuses as the first assignment
+    review.assignedDate = this.calendarDate(dto.reassignedDate || new Date());
+    review.deadlineDate = this.calendarDate(newDeadlineStr);
     review.status = QuarterlyReviewStatus.ASSIGNED;
+    review.reassignCount = (review.reassignCount || 0) + 1;
     if (dto.reason?.trim()) {
       const note = `[Re-assigned on ${todayDateStr}]: ${dto.reason.trim()}`;
       review.description = review.description ? `${review.description}\n${note}` : note;

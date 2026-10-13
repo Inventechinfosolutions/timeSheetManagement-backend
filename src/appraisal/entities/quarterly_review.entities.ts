@@ -128,6 +128,9 @@ export class QuarterlyReview extends BaseEntity {
   // Linked employee self-assessment submission
   @Column({ type: 'int', nullable: true })
   performanceId: number | null;
+
+  @Column({ type: 'int', default: 0, nullable: false })
+  reassignCount: number;
 }
 
 // Aliases

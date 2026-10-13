@@ -49,6 +49,7 @@ import { MasterModule } from '../master/master.module';
     QuarterlyReviewService,
     EmployeePerformanceService,
     AnnualAppraisalService,
+    AppraisalDeadlineCronService,
     TypeOrmModule,
   ],
 })

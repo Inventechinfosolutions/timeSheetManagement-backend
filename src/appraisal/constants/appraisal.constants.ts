@@ -1,7 +1,7 @@
 import { EmployeePerformanceStatus } from '../enums/employee_performance.enums';
 import { QuaterlyEnum } from '../enums/quarterly_review.enums';
 
-export const APPRAISAL_EDIT_WINDOW_HOURS = 48;
+export const APPRAISAL_EDIT_WINDOW_HOURS = 42;
 export const EDIT_REQUEST_DEFAULT_REASON = 'Edit requested after submission';
 export const PASSWORD_MISMATCH_MESSAGE = 'Wrong password.';
 export const ANNUAL_SUMMARY_EMPTY_MESSAGE =
@@ -32,6 +32,7 @@ export const LOCKED_PERFORMANCE_STATUSES: readonly EmployeePerformanceStatus[] =
   EmployeePerformanceStatus.REQUESTED_FOR_EDIT,
   EmployeePerformanceStatus.COMPLETED,
   EmployeePerformanceStatus.NOT_UPDATED,
+  EmployeePerformanceStatus.LOCKED,
   EmployeePerformanceStatus.REVIEWED,
   EmployeePerformanceStatus.PERFORMANCE_RECEIVED,
 ];

@@ -7,6 +7,7 @@ import { QuarterlyReview } from '../entities/quarterly_review.entities';
 import { EmployeePerformanceStatus } from '../enums/employee_performance.enums';
 import { QuarterlyReviewStatus } from '../enums/quarterly_review.enums';
 import { AppraisalNoticeService } from './appraisal_notice.service';
+import { deadlineHasArrived, isLockedReviewStatus } from '../utils/review-access';
 
 const OPEN_REVIEW_STATUSES: QuarterlyReviewStatus[] = [
   QuarterlyReviewStatus.ASSIGNED,
@@ -29,7 +30,7 @@ const EDIT_WINDOW_STATUSES: QuarterlyReviewStatus[] = [
   QuarterlyReviewStatus.APPROVED_FOR_EDITING,
 ];
 
-const GRACE_PERIOD_MS = 48 * 60 * 60 * 1000; // 48 Hours (2 Days) Grace Period
+const GRACE_PERIOD_MS = 0;
 
 @Injectable()
 export class AppraisalDeadlineCronService {
@@ -44,9 +45,11 @@ export class AppraisalDeadlineCronService {
   ) {}
 
   @Cron('0 5 * * *')
-  async remindOrCloseOpenReviews(): Promise<void> {
+  async remindOrCloseOpenReviews(): Promise<{ locked: number; reminded: number }> {
     this.logger.log('Starting daily 5:00 AM appraisal deadline & lock verification...');
     const now = Date.now();
+    let locked = 0;
+    let reminded = 0;
 
     // 1. Process Unsubmitted Reviews (Parent QuarterlyReview table)
     const openReviews = await this.reviewRepository.find({
@@ -58,48 +61,35 @@ export class AppraisalDeadlineCronService {
         continue;
       }
 
-      const deadlineDateObj = new Date(review.deadlineDate);
-      if (Number.isNaN(deadlineDateObj.getTime())) {
+      if (!deadlineHasArrived(review.deadlineDate)) {
         continue;
       }
 
-      // Deadline completes at the end of that day (23:59:59.999)
-      const deadlineEndTime = new Date(
-        deadlineDateObj.getFullYear(),
-        deadlineDateObj.getMonth(),
-        deadlineDateObj.getDate(),
-        23,
-        59,
-        59,
-        999,
-      ).getTime();
+      const renewed = (review.reassignCount || 0) >= 1;
+      review.status = QuarterlyReviewStatus.LOCKED;
+      await this.reviewRepository.save(review);
 
-      const gracePeriodEndTime = deadlineEndTime + GRACE_PERIOD_MS;
+      const perf = await this.performanceRepository.findOne({
+        where: {
+          employeeId: review.employeeId,
+          quarter: review.quarter,
+          financialYear: review.financialYear,
+        },
+      });
 
-      // Case A: 48-Hour grace period has expired -> Lock BOTH tables to NOT_UPDATED
-      if (now > gracePeriodEndTime) {
-        review.status = QuarterlyReviewStatus.NOT_UPDATED;
-        await this.reviewRepository.save(review);
+      if (perf && !isLockedReviewStatus(perf.status)) {
+        perf.status = EmployeePerformanceStatus.LOCKED;
+        perf.lastModifiedDate = new Date();
+        await this.performanceRepository.save(perf);
+      }
 
-        const perf = await this.performanceRepository.findOne({
-          where: {
-            employeeId: review.employeeId,
-            quarter: review.quarter,
-            financialYear: review.financialYear,
-          },
-        });
+      locked += 1;
+      this.logger.log(
+        `[CRON 5AM] Review #${review.id} for ${review.employeeId} (${review.quarter} ${review.financialYear}) set to LOCKED because the deadline day has arrived.`,
+      );
 
-        if (perf && perf.status !== EmployeePerformanceStatus.NOT_UPDATED) {
-          perf.status = EmployeePerformanceStatus.NOT_UPDATED;
-          perf.lastModifiedDate = new Date();
-          await this.performanceRepository.save(perf);
-        }
-
-        this.logger.log(
-          `[CRON 5AM] Review #${review.id} for ${review.employeeId} (${review.quarter} ${review.financialYear}) LOCKED to NOT_UPDATED after deadline + 48h grace expired.`,
-        );
-      } else if (now > deadlineEndTime) {
-        // Case B: Deadline passed but still within 48h grace period -> Send reminder notice
+      if (!renewed) {
+        reminded += 1;
         try {
           await this.noticeService.notifyDeadlineReminder({
             employeeId: review.employeeId,
@@ -132,33 +122,17 @@ export class AppraisalDeadlineCronService {
         continue;
       }
 
-      const deadlineDateObj = new Date(review.deadlineDate);
-      if (Number.isNaN(deadlineDateObj.getTime())) {
-        continue;
-      }
-
-      const deadlineEndTime = new Date(
-        deadlineDateObj.getFullYear(),
-        deadlineDateObj.getMonth(),
-        deadlineDateObj.getDate(),
-        23,
-        59,
-        59,
-        999,
-      ).getTime();
-
-      const gracePeriodEndTime = deadlineEndTime + GRACE_PERIOD_MS;
-
-      if (now > gracePeriodEndTime) {
-        if (row.status !== EmployeePerformanceStatus.NOT_UPDATED) {
-          row.status = EmployeePerformanceStatus.NOT_UPDATED;
+      if (deadlineHasArrived(review.deadlineDate)) {
+        if (!isLockedReviewStatus(row.status)) {
+          row.status = EmployeePerformanceStatus.LOCKED;
           row.lastModifiedDate = new Date();
           await this.performanceRepository.save(row);
         }
 
-        if (review.status !== QuarterlyReviewStatus.NOT_UPDATED) {
-          review.status = QuarterlyReviewStatus.NOT_UPDATED;
+        if (!isLockedReviewStatus(review.status)) {
+          review.status = QuarterlyReviewStatus.LOCKED;
           await this.reviewRepository.save(review);
+          locked += 1;
         }
       }
     }
@@ -190,20 +164,22 @@ export class AppraisalDeadlineCronService {
 
       // If the 48-hour window past editAllowedUntil has expired without re-submission -> Lock both
       if (now > editGracePeriodEndTime) {
-        review.status = QuarterlyReviewStatus.NOT_UPDATED;
+        review.status = QuarterlyReviewStatus.LOCKED;
         await this.reviewRepository.save(review);
 
-        perf.status = EmployeePerformanceStatus.NOT_UPDATED;
+        perf.status = EmployeePerformanceStatus.LOCKED;
         perf.lastModifiedDate = new Date();
         await this.performanceRepository.save(perf);
 
+        locked += 1;
         this.logger.log(
-          `[CRON 5AM] Edit-granted review #${review.id} for ${review.employeeId} (${review.quarter} ${review.financialYear}) LOCKED to NOT_UPDATED after editAllowedUntil + 48h expired.`,
+          `[CRON 5AM] Edit-granted review #${review.id} for ${review.employeeId} (${review.quarter} ${review.financialYear}) set to LOCKED after the edit window expired.`,
         );
       }
     }
 
     this.logger.log('Completed daily 5:00 AM appraisal deadline & lock verification.');
+    return { locked, reminded };
   }
 
   private datePart(value: Date): string {
