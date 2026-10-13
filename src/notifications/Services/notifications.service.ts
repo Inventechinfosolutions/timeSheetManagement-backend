@@ -144,6 +144,20 @@ export class NotificationsService {
     }
   }
 
+  async markByTitleAsRead(employeeId: string, title: string) {
+    this.logger.log(`Marking "${title}" notifications as read for employee: ${employeeId}`);
+    try {
+      return await this.notificationRepo.update(
+        { employeeId, title, isRead: false },
+        { isRead: true },
+      );
+    } catch (error) {
+      this.logger.error(
+        `Error marking "${title}" notifications as read for ${employeeId}: ${error.message}`,
+      );
+    }
+  }
+
   async createNotification(data: {
     employeeId: string;
     title: string;

@@ -213,6 +213,8 @@ export class EmployeeAttendanceService {
           createEmployeeAttendanceDto.employeeId,
           createEmployeeAttendanceDto.workingDate,
           existingForLock?.status,
+          existingForLock?.firstHalf,
+          existingForLock?.secondHalf,
         );
       }
 
@@ -717,7 +719,11 @@ export class EmployeeAttendanceService {
       });
 
       if (attendance) {
-        if (attendance.status === AttendanceStatus.LOCKED) {
+        const isLockedDay =
+          attendance.status === AttendanceStatus.LOCKED ||
+          attendance.firstHalf === AttendanceStatus.LOCKED ||
+          attendance.secondHalf === AttendanceStatus.LOCKED;
+        if (isLockedDay) {
           const allowed = await this.attendenceEditRequestService.hasApprovedAccess(
             employeeId,
             workingDate,
@@ -875,7 +881,9 @@ export class EmployeeAttendanceService {
         if (
           r.status === AttendanceStatus.LEAVE ||
           r.status === AttendanceStatus.HALF_DAY ||
-          r.status === AttendanceStatus.LOCKED
+          r.status === AttendanceStatus.LOCKED ||
+          r.firstHalf === AttendanceStatus.LOCKED ||
+          r.secondHalf === AttendanceStatus.LOCKED
         ) {
           existingDates.add(dateStr);
           return;
@@ -1150,6 +1158,8 @@ export class EmployeeAttendanceService {
           attendance.employeeId,
           attendance.workingDate,
           attendance.status,
+          attendance.firstHalf,
+          attendance.secondHalf,
         );
       }
 
@@ -1741,6 +1751,8 @@ export class EmployeeAttendanceService {
           attendance.employeeId,
           attendance.workingDate,
           attendance.status,
+          attendance.firstHalf,
+          attendance.secondHalf,
         );
       }
       const result = await this.employeeAttendanceRepository.delete(id);
@@ -1883,12 +1895,10 @@ export class EmployeeAttendanceService {
 
   private canBypassLocked(
     isPrivileged: boolean,
-    actorId: string | undefined,
-    employeeId: string,
+    _actorId?: string,
+    _employeeId?: string,
   ): boolean {
-    if (!isPrivileged) return false;
-    if (!actorId) return true;
-    return actorId !== employeeId;
+    return isPrivileged;
   }
 
   private isEditableMonth(workingDate: Date): boolean {
