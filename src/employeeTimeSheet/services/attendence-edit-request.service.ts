@@ -136,12 +136,22 @@ export class AttendenceEditRequestService {
     return approved.includes(dateStr);
   }
 
+  private isLockedAttendanceValue(value?: AttendanceStatus | string | null) {
+    return String(value || '').toLowerCase() === AttendanceStatus.LOCKED.toLowerCase();
+  }
+
   async assertCanEditLockedDay(
     employeeId: string,
     workingDate: Date | string,
     currentStatus?: AttendanceStatus | string | null,
+    firstHalf?: AttendanceStatus | string | null,
+    secondHalf?: AttendanceStatus | string | null,
   ): Promise<void> {
-    if (currentStatus !== AttendanceStatus.LOCKED) return;
+    const isLocked =
+      this.isLockedAttendanceValue(currentStatus) ||
+      this.isLockedAttendanceValue(firstHalf) ||
+      this.isLockedAttendanceValue(secondHalf);
+    if (!isLocked) return;
     const allowed = await this.hasApprovedAccess(employeeId, workingDate);
     if (!allowed) {
       throw new BadRequestException(
@@ -167,6 +177,18 @@ export class AttendenceEditRequestService {
 
     if (requested.length === 0) {
       throw new BadRequestException('Select at least one Locked date.');
+    }
+
+    // Employees raising for themselves are limited to the current month; managers/admins raising on behalf are not.
+    const isSelfRequest = !actorId || String(actorId).toLowerCase() === String(employeeId).toLowerCase();
+    if (isSelfRequest) {
+      const currentMonth = dayjs().format('YYYY-MM');
+      const outsideMonth = requested.filter((d) => !d.startsWith(currentMonth));
+      if (outsideMonth.length > 0) {
+        throw new BadRequestException(
+          `Edit Access can only be requested for Locked dates in the current month (${dayjs().format('MMMM YYYY')}).`,
+        );
+      }
     }
 
     const pendingDates = new Set(await this.getPendingDates(employeeId));
@@ -573,14 +595,25 @@ export class AttendenceEditRequestService {
       message,
       type,
     });
-    const details = await this.employeeRepo.findOne({ where: { employeeId } });
-    if (!details?.email) return;
+    const details =
+      (await this.employeeRepo.findOne({ where: { employeeId } })) ||
+      (await this.employeeRepo.findOne({ where: { fullName: employeeId } }));
+    if (!details?.email) {
+      this.logger.warn(`[ACCESS_EMAIL] No email found for recipient: ${employeeId}`);
+      return;
+    }
     const html = getGeneralNotificationTemplate({
       recipientName: details.fullName || 'Team member',
       title,
       message: `${message}\n\nRegards,\nWorksphere Team`,
     });
+    this.logger.log(
+      `[ACCESS_EMAIL] Sending "${title}" email to ${details.email} (${employeeId})`,
+    );
     await this.emailService.sendEmail(details.email, title, message, html);
+    this.logger.log(
+      `[ACCESS_EMAIL] Queued "${title}" email for ${details.email}`,
+    );
   }
 
   private async notifyManagersOnSubmit(
@@ -607,20 +640,23 @@ export class AttendenceEditRequestService {
 
       const mappings = await this.managerMappingRepo
         .createQueryBuilder('m')
-        .select('m.manager_name', 'managerName')
+        .select(['m.manager_name AS managerName', 'm.manager_id AS managerId'])
         .where('m.employee_id = :employeeId', { employeeId })
         .andWhere('m.status = :status', { status: ManagerMappingStatus.ACTIVE })
         .getRawMany();
 
       const notified = new Set<string>([employeeId]);
       for (const mapping of mappings) {
-        const manager = await this.userRepo.findOne({
-          where: [
-            { aliasLoginName: mapping.managerName },
-            { loginId: mapping.managerName },
-          ],
-        });
-        const managerId = manager?.loginId || mapping.managerName;
+        let managerId = mapping.managerId;
+        if (!managerId) {
+          const manager = await this.userRepo.findOne({
+            where: [
+              { aliasLoginName: mapping.managerName },
+              { loginId: mapping.managerName },
+            ],
+          });
+          managerId = manager?.loginId || mapping.managerName;
+        }
         if (!managerId || notified.has(managerId)) continue;
         notified.add(managerId);
         await this.notifyPerson(
@@ -653,6 +689,12 @@ export class AttendenceEditRequestService {
         where: { employeeId: request.employeeId },
       });
       const displayName = employee?.fullName || request.employeeId;
+
+      // Auto-mark previous "Edit Access Request Submitted" notification as read so employee inbox only shows latest outcome
+      await this.notificationsService.markByTitleAsRead(
+        request.employeeId,
+        'Edit Access Request Submitted',
+      );
 
       await this.notifyPerson(
         request.employeeId,

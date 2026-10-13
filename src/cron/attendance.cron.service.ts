@@ -355,22 +355,23 @@ export class AttendanceCronService {
     }
   }
 
-  // 1st of every month at 6:00 AM. Previous month only.
+  // 1st of every month at 6:00 AM. Previous month for ALL active employees.
   @Cron('0 6 1 * *')
   async handleMonthlyLeaveUpdate() {
     const start = dayjs().subtract(1, 'month').startOf('month');
     const end = dayjs().subtract(1, 'month').endOf('month');
-    const monthlyEmployeeIds = await this.getEmployeeIdsWithLockType(
-      LockType.MONTHLY,
-    );
+    const allActive = await this.employeeRepo.find({
+      where: { userStatus: UserStatus.ACTIVE },
+    });
+    const allActiveEmployeeIds = allActive.map((emp) => emp.employeeId);
 
     this.logger.log(
-      `Running Monthly Lock for ${start.format('YYYY-MM-DD')} to ${end.format('YYYY-MM-DD')} (${monthlyEmployeeIds.length} Monthly department employees)...`,
+      `Running Monthly Lock for ${start.format('YYYY-MM-DD')} to ${end.format('YYYY-MM-DD')} (${allActiveEmployeeIds.length} active employees)...`,
     );
 
-    if (monthlyEmployeeIds.length === 0) {
+    if (allActiveEmployeeIds.length === 0) {
       return {
-        message: 'Monthly lock skipped: no Monthly departments',
+        message: 'Monthly lock skipped: no active employees',
         from: start.format('YYYY-MM-DD'),
         to: end.format('YYYY-MM-DD'),
         employees: 0,
@@ -381,7 +382,7 @@ export class AttendanceCronService {
     }
 
     const result = await this.lockWorkdaysForEmployees(
-      monthlyEmployeeIds,
+      allActiveEmployeeIds,
       start,
       end,
     );
@@ -392,7 +393,7 @@ export class AttendanceCronService {
       message: 'Monthly lock cron completed',
       from: start.format('YYYY-MM-DD'),
       to: end.format('YYYY-MM-DD'),
-      employees: monthlyEmployeeIds.length,
+      employees: allActiveEmployeeIds.length,
       ...result,
     };
   }
