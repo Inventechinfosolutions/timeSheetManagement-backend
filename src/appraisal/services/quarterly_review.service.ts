@@ -1144,18 +1144,6 @@ export class QuarterlyReviewService {
       throw new BadRequestException('The new deadline date must be today or in the future.');
     }
 
-    // 1. Update QuarterlyReview — same statuses as the first assignment
-    review.assignedDate = this.calendarDate(dto.reassignedDate || new Date());
-    review.deadlineDate = this.calendarDate(newDeadlineStr);
-    review.status = QuarterlyReviewStatus.ASSIGNED;
-    review.reassignCount = (review.reassignCount || 0) + 1;
-    if (dto.reason?.trim()) {
-      const note = `[Re-assigned on ${todayDateStr}]: ${dto.reason.trim()}`;
-      review.description = review.description ? `${review.description}\n${note}` : note;
-    }
-    const savedReview = await this.reviewRepository.save(review);
-
-    // 2. Update matching EmployeePerformance
     const performance = await this.performanceRepository.findOne({
       where: {
         employeeId: review.employeeId,
@@ -1163,10 +1151,33 @@ export class QuarterlyReviewService {
         financialYear: review.financialYear,
       },
     });
+    const wasSubmitted = !!(performance?.submittedAt || review.submittedDate);
 
+    // 1. Update QuarterlyReview deadline for every login (manager + employee)
+    review.assignedDate = this.calendarDate(dto.reassignedDate || new Date());
+    review.deadlineDate = this.calendarDate(newDeadlineStr);
+    review.status = wasSubmitted
+      ? QuarterlyReviewStatus.EDIT_GRANTED
+      : QuarterlyReviewStatus.ASSIGNED;
+    if (!wasSubmitted) {
+      review.reassignCount = (review.reassignCount || 0) + 1;
+    }
+    if (dto.reason?.trim()) {
+      const note = `[Re-assigned on ${todayDateStr}]: ${dto.reason.trim()}`;
+      review.description = review.description ? `${review.description}\n${note}` : note;
+    }
+    const savedReview = await this.reviewRepository.save(review);
+
+    // 2. Update matching EmployeePerformance
     if (performance) {
-      performance.status = EmployeePerformanceStatus.NOT_STARTED;
-      performance.editAllowedUntil = null;
+      if (wasSubmitted) {
+        performance.status = EmployeePerformanceStatus.EDIT_GRANTED;
+        const [year, month, day] = newDeadlineStr.split('-').map(Number);
+        performance.editAllowedUntil = new Date(year, month - 1, day, 23, 59, 59, 999);
+      } else {
+        performance.status = EmployeePerformanceStatus.NOT_STARTED;
+        performance.editAllowedUntil = null;
+      }
       performance.lastModifiedDate = new Date();
       if (user?.loginId) {
         performance.lastModifiedBy = user.loginId;
