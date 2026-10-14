@@ -1,5 +1,6 @@
 export enum UserType {
   ADMIN = 'ADMIN',
+  CEO = 'CEO',
   EMPLOYEE = 'EMPLOYEE',
   MANAGER = 'MANAGER',
   TEAMLEAD = 'TEAM LEAD',

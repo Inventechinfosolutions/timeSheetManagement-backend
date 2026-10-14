@@ -7,6 +7,8 @@ import { EmployeeAttendance } from '../employeeTimeSheet/entities/employeeAttend
 import { AttendanceStatus } from '../employeeTimeSheet/enums/attendance-status.enum';
 import { EmployeeDetails } from '../employeeTimeSheet/entities/employeeDetails.entity';
 import { ManagerMapping, ManagerMappingStatus } from '../managerMapping/entities/managerMapping.entity';
+import { MasterDepartment } from '../master/models/master-department.entity';
+import { LockType } from '../master/enums/lock-type.enum';
 import { MasterHolidayService } from '../master/service/master-holiday.service';
 import { NotificationsService } from '../notifications/Services/notifications.service';
 import { UserStatus } from '../users/enums/user-status.enum';
@@ -25,6 +27,9 @@ export class AttendanceCronService {
 
     @InjectRepository(ManagerMapping)
     private managerMappingRepo: Repository<ManagerMapping>,
+
+    @InjectRepository(MasterDepartment)
+    private departmentRepo: Repository<MasterDepartment>,
 
     private readonly masterHolidayService: MasterHolidayService,
     private readonly notificationsService: NotificationsService,
@@ -350,74 +355,208 @@ export class AttendanceCronService {
     }
   }
 
-  // Run at 11:00 AM on the 1st day of every month to process the previous month's cleanup.
-  @Cron('0 11 1 * *')
+  // 1st of every month at 6:00 AM. Previous month for ALL active employees.
+  @Cron('0 6 1 * *')
   async handleMonthlyLeaveUpdate() {
-    const today = new Date();
-    // Calculate start and end of the PREVIOUS month
-    const prevMonthDate = new Date(
-      today.getFullYear(),
-      today.getMonth() - 1,
-      1,
-    );
-    const year = prevMonthDate.getFullYear();
-    const month = prevMonthDate.getMonth();
-    const startOfMonth = new Date(year, month, 1, 0, 0, 0);
-    const endOfMonth = new Date(year, month + 1, 0, 23, 59, 59);
-
-    this.logger.debug(
-      `Running Monthly Leave Update for past month ${month + 1}-${year}...`,
-    );
-
-    // Find all records with status 'Not Updated', 'Pending', or NULL for the past month
-    const recordsToUpdate = await this.attendanceRepo.find({
-      where: [
-        {
-          workingDate: Between(startOfMonth, endOfMonth),
-          status: AttendanceStatus.NOT_UPDATED,
-        },
-        {
-          workingDate: Between(startOfMonth, endOfMonth),
-          status: AttendanceStatus.PENDING,
-        },
-        {
-          workingDate: Between(startOfMonth, endOfMonth),
-          status: IsNull(), // Include records with NULL status (cleared leaves)
-        },
-      ],
+    const start = dayjs().subtract(1, 'month').startOf('month');
+    const end = dayjs().subtract(1, 'month').endOf('month');
+    const allActive = await this.employeeRepo.find({
+      where: { userStatus: UserStatus.ACTIVE },
     });
+    const allActiveEmployeeIds = allActive.map((emp) => emp.employeeId);
 
     this.logger.log(
-      `Found ${recordsToUpdate.length} candidate records for past month ${month + 1}-${year}.`,
+      `Running Monthly Lock for ${start.format('YYYY-MM-DD')} to ${end.format('YYYY-MM-DD')} (${allActiveEmployeeIds.length} active employees)...`,
     );
 
-    if (recordsToUpdate.length === 0) return;
+    if (allActiveEmployeeIds.length === 0) {
+      return {
+        message: 'Monthly lock skipped: no active employees',
+        from: start.format('YYYY-MM-DD'),
+        to: end.format('YYYY-MM-DD'),
+        employees: 0,
+        locked: 0,
+        created: 0,
+        updated: 0,
+      };
+    }
 
-    const absentRecords: EmployeeAttendance[] = [];
+    const result = await this.lockWorkdaysForEmployees(
+      allActiveEmployeeIds,
+      start,
+      end,
+    );
+    this.logger.log(
+      `Monthly lock: locked=${result.locked} created=${result.created} updated=${result.updated}`,
+    );
+    return {
+      message: 'Monthly lock cron completed',
+      from: start.format('YYYY-MM-DD'),
+      to: end.format('YYYY-MM-DD'),
+      employees: allActiveEmployeeIds.length,
+      ...result,
+    };
+  }
 
-    for (const record of recordsToUpdate) {
-      const dateObj = new Date(record.workingDate);
-      const dayOfWeek = dateObj.getDay(); // 0 = Sunday, 6 = Saturday
-      const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
-      const dateStr = dayjs(dateObj).format('YYYY-MM-DD');
-      const holiday = await this.masterHolidayService.findByDate(dateStr);
+  /**
+   * Sunday 6:00 AM weekly lock. Weekly departments only.
+   * Last month + this month past weeks (current week is not locked).
+   */
+  @Cron('0 6 * * 0')
+  async handleWeeklyLock() {
+    const start = dayjs().subtract(1, 'month').startOf('month');
+    const end = dayjs().startOf('week').subtract(1, 'day');
+    const weeklyEmployeeIds = await this.getEmployeeIdsWithLockType(
+      LockType.WEEKLY,
+    );
 
-      // Only mark ABSENT if it is a standard working day (NOT weekend and NOT holiday)
-      if (!isWeekend && !holiday) {
-        record.status = AttendanceStatus.ABSENT;
-        record.firstHalf = AttendanceStatus.ABSENT;
-        record.secondHalf = AttendanceStatus.ABSENT;
-        record.totalHours = 0;
-        absentRecords.push(record);
+    this.logger.log(
+      `Running Weekly Lock for ${start.format('YYYY-MM-DD')} to ${end.format('YYYY-MM-DD')} (${weeklyEmployeeIds.length} employees)...`,
+    );
+
+    if (weeklyEmployeeIds.length === 0) {
+      return {
+        message: 'Weekly lock skipped: no Weekly employees',
+        from: start.format('YYYY-MM-DD'),
+        to: end.format('YYYY-MM-DD'),
+        employees: 0,
+        locked: 0,
+        created: 0,
+        updated: 0,
+      };
+    }
+
+    const result = await this.lockWorkdaysForEmployees(
+      weeklyEmployeeIds,
+      start,
+      end,
+    );
+    this.logger.log(
+      `Weekly lock: locked=${result.locked} created=${result.created} updated=${result.updated}`,
+    );
+    return {
+      message: 'Weekly lock cron completed',
+      from: start.format('YYYY-MM-DD'),
+      to: end.format('YYYY-MM-DD'),
+      employees: weeklyEmployeeIds.length,
+      ...result,
+    };
+  }
+
+  private isOpenForLock(status: AttendanceStatus | null | undefined): boolean {
+    return (
+      !status ||
+      status === AttendanceStatus.NOT_UPDATED ||
+      status === AttendanceStatus.PENDING
+    );
+  }
+
+  private async lockWorkdaysForEmployees(
+    employeeIds: string[],
+    start: dayjs.Dayjs,
+    end: dayjs.Dayjs,
+  ): Promise<{ locked: number; created: number; updated: number }> {
+    if (employeeIds.length === 0) {
+      return { locked: 0, created: 0, updated: 0 };
+    }
+
+    const today = dayjs().startOf('day');
+    const rangeStart = start.startOf('day');
+    const rangeEnd = end.endOf('day');
+    const startStr = rangeStart.format('YYYY-MM-DD');
+    const endStr = rangeEnd.format('YYYY-MM-DD');
+
+    const existing = await this.attendanceRepo
+      .createQueryBuilder('a')
+      .where('a.employeeId IN (:...employeeIds)', { employeeIds })
+      .andWhere('a.workingDate BETWEEN :start AND :end', {
+        start: startStr,
+        end: endStr,
+      })
+      .getMany();
+
+    const byKey = new Map<string, EmployeeAttendance>();
+    existing.forEach((row) => {
+      const dateKey = dayjs(row.workingDate).format('YYYY-MM-DD');
+      byKey.set(`${row.employeeId}|${dateKey}`, row);
+    });
+
+    const holidays = await this.masterHolidayService.findByDateRange(
+      startStr,
+      endStr,
+    );
+    const holidaySet = new Set(
+      (holidays || []).map((h: any) => dayjs(h.date).format('YYYY-MM-DD')),
+    );
+
+    const toSave: EmployeeAttendance[] = [];
+    let created = 0;
+    let updated = 0;
+
+    for (const employeeId of employeeIds) {
+      let cursor = rangeStart.clone();
+      while (
+        cursor.isBefore(today) &&
+        (cursor.isBefore(rangeEnd, 'day') || cursor.isSame(rangeEnd, 'day'))
+      ) {
+        const dateStr = cursor.format('YYYY-MM-DD');
+        const dayOfWeek = cursor.day();
+        if (dayOfWeek !== 0 && dayOfWeek !== 6 && !holidaySet.has(dateStr)) {
+          const key = `${employeeId}|${dateStr}`;
+          const row = byKey.get(key);
+          if (!row) {
+            toSave.push(
+              this.attendanceRepo.create({
+                employeeId,
+                workingDate: new Date(`${dateStr}T00:00:00`),
+                status: AttendanceStatus.LOCKED,
+                firstHalf: AttendanceStatus.LOCKED,
+                secondHalf: AttendanceStatus.LOCKED,
+                totalHours: null,
+                workLocation: null,
+              }),
+            );
+            created += 1;
+          } else if (this.isOpenForLock(row.status)) {
+            row.status = AttendanceStatus.LOCKED;
+            row.firstHalf = AttendanceStatus.LOCKED;
+            row.secondHalf = AttendanceStatus.LOCKED;
+            row.totalHours = null;
+            row.workLocation = null;
+            toSave.push(row);
+            updated += 1;
+          }
+        }
+        cursor = cursor.add(1, 'day');
       }
     }
 
-    if (absentRecords.length > 0) {
-      await this.attendanceRepo.save(absentRecords);
-      this.logger.log(
-        `Successfully marked ${absentRecords.length} past workday records as ABSENT for ${month + 1}-${year}. Weekends and holidays were skipped.`,
-      );
+    if (toSave.length > 0) {
+      await this.attendanceRepo.save(toSave);
     }
+
+    return { locked: toSave.length, created, updated };
+  }
+
+  private async getEmployeeIdsWithLockType(
+    lockType: LockType,
+  ): Promise<string[]> {
+    const departments = await this.departmentRepo.find();
+    const monthlyNames = new Set(
+      departments
+        .filter((d) => d.lockType === LockType.MONTHLY)
+        .map((d) => (d.departmentName || '').trim().toLowerCase()),
+    );
+    const allActive = await this.employeeRepo.find({
+      where: { userStatus: UserStatus.ACTIVE },
+    });
+    return allActive
+      .filter((emp) => {
+        const dept = (emp.department || '').toString().trim().toLowerCase();
+        const isMonthly = !!dept && monthlyNames.has(dept);
+        return lockType === LockType.MONTHLY ? isMonthly : !isMonthly;
+      })
+      .map((emp) => emp.employeeId);
   }
 
   // Run at 6:00 PM every Friday (Weekend Reminder)

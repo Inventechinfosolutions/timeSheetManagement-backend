@@ -4,6 +4,7 @@ import { TimesheetBlocker } from '../entities/timesheetBlocker.entity';
 import { JwtAuthGuard } from 'src/auth/guards/jwt-auth.guard';
 import { ReceptionistReadOnlyGuard } from 'src/auth/guards/receptionist-readonly.guard';
 import { UserType } from 'src/users/enums/user-type.enum';
+import { hasAdminAccess } from 'src/users/utils/admin-access';
 
 @Controller('timesheet-blockers')
 @UseGuards(JwtAuthGuard, ReceptionistReadOnlyGuard)
@@ -16,10 +17,13 @@ export class TimesheetBlockerController {
     try {
       this.logger.log(`Creating timesheet blocker for employee: ${data.employeeId}`);
       const user = req.user;
-      const isAdmin = user?.userType === UserType.ADMIN;
+      const isAdmin = hasAdminAccess(user);
 
-      // Set the blocker's identity as strictly the role (Admin or Manager)
-      data.blockedBy = isAdmin ? UserType.ADMIN : UserType.MANAGER;
+      data.blockedBy = user?.userType === UserType.CEO
+        ? UserType.CEO
+        : isAdmin
+          ? UserType.ADMIN
+          : UserType.MANAGER;
 
       return await this.blockerService.create(data, isAdmin);
     } catch (error) {
@@ -44,7 +48,7 @@ export class TimesheetBlockerController {
     try {
       this.logger.log(`Removing timesheet blocker ID: ${id}`);
       const user = req.user;
-      const isAdmin = user?.userType === UserType.ADMIN;
+      const isAdmin = hasAdminAccess(user);
 
       // Check for Manager Role
       const roleUpper = (user?.role || '').toUpperCase();

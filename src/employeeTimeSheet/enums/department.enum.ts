@@ -5,4 +5,5 @@ export enum Department {
   FIN = 'Finance & Accounts',
   AM_CR = 'Account Management / Client Relations',
   IT_SUPPORT = 'IT / Systems Support',
+  CEO = 'CEO',
 }

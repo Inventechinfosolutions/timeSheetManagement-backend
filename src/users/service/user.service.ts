@@ -10,6 +10,7 @@ import { LoginResponse } from '../types/login-response.type';
 import { User } from '../entities/user.entity';
 import { UserStatus } from '../enums/user-status.enum';
 import { UserType } from '../enums/user-type.enum';
+import { hasAdminAccess } from '../utils/admin-access';
 import { EmployeeDetails } from '../../employeeTimeSheet/entities/employeeDetails.entity';
 
 @Injectable()
@@ -85,7 +86,7 @@ export class UsersService {
         select: ['id', 'aliasLoginName', 'loginId', 'userType', 'role', 'createdAt', 'updatedAt', 'password'],
       });
 
-      if (user && !user.role && user.userType === UserType.EMPLOYEE) {
+      if (user && !user.role && (!user.userType || user.userType === UserType.EMPLOYEE)) {
         try {
           const employee = await this.employeeDetailsRepository.findOne({
             where: { employeeId: user.loginId },
@@ -94,7 +95,9 @@ export class UsersService {
           if (employee) {
             user.role = (employee.role ? String(employee.role) : employee.designation) as UserType;
             const roleUpper = (user.role || '').toUpperCase();
-            if (roleUpper.includes('MNG') || roleUpper.includes(UserType.MANAGER)) {
+            if (roleUpper === UserType.CEO) {
+              user.userType = UserType.CEO;
+            } else if (roleUpper.includes('MNG') || roleUpper.includes(UserType.MANAGER)) {
               user.userType = UserType.MANAGER;
             }
           }
@@ -201,7 +204,8 @@ export class UsersService {
       }
 
       const roleUpper = (role || '').toUpperCase();
-      const isManager = roleUpper.includes('MNG') || roleUpper.includes(UserType.MANAGER);
+      const isCeo = user.userType === UserType.CEO || roleUpper === UserType.CEO;
+      const isManager = !isCeo && (roleUpper.includes('MNG') || roleUpper.includes(UserType.MANAGER));
 
       this.logger.log(`User ${userLoginDto.loginId} logged in successfully with employeeId: ${employeeIdStr}`);
 
@@ -209,7 +213,7 @@ export class UsersService {
         userId: user.id,
         name: user.aliasLoginName,
         email: user.loginId,
-        userType: isManager ? UserType.MANAGER : user.userType,
+        userType: isCeo ? UserType.CEO : isManager ? UserType.MANAGER : user.userType,
         role: role,
         employeeId: employeeIdStr,
         accessToken: tokens.accessToken,
@@ -264,7 +268,13 @@ export class UsersService {
         userId: user.id,
         name: user.aliasLoginName,
         email: user.loginId,
-        userType: role?.toUpperCase().includes(UserType.MANAGER) ? UserType.MANAGER : user.userType,
+        userType: hasAdminAccess({ userType: user.userType, role })
+          ? (user.userType === UserType.CEO || String(role || '').toUpperCase() === UserType.CEO
+            ? UserType.CEO
+            : user.userType)
+          : role?.toUpperCase().includes(UserType.MANAGER)
+            ? UserType.MANAGER
+            : user.userType,
         role: role,
         employeeId: employeeIdStr,
         accessToken: tokens.accessToken,
