@@ -1172,8 +1172,9 @@ export class QuarterlyReviewService {
     if (performance) {
       if (wasSubmitted) {
         performance.status = EmployeePerformanceStatus.EDIT_GRANTED;
+        // End of the deadline calendar day. Avoid .999 ms — MySQL can round that to the next day.
         const [year, month, day] = newDeadlineStr.split('-').map(Number);
-        performance.editAllowedUntil = new Date(year, month - 1, day, 23, 59, 59, 999);
+        performance.editAllowedUntil = new Date(year, month - 1, day, 23, 59, 59, 0);
       } else {
         performance.status = EmployeePerformanceStatus.NOT_STARTED;
         performance.editAllowedUntil = null;
