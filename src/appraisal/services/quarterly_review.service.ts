@@ -869,6 +869,28 @@ export class QuarterlyReviewService {
         typeof definedUpdate.assignedDate === 'string' ? definedUpdate.assignedDate : review.assignedDate,
       );
       this.assertDeadlineAfterAssigned(assigned, String(definedUpdate.deadlineDate));
+
+      const newDeadlineStr = this.dateOnly(definedUpdate.deadlineDate);
+      if (newDeadlineStr) {
+        const performance = await this.performanceRepository.findOne({
+          where: {
+            employeeId: review.employeeId,
+            quarter: review.quarter,
+            financialYear: review.financialYear,
+          },
+        });
+        if (
+          performance &&
+          (performance.status === EmployeePerformanceStatus.EDIT_GRANTED ||
+            review.status === QuarterlyReviewStatus.EDIT_GRANTED ||
+            performance.editAllowedUntil)
+        ) {
+          const [year, month, day] = newDeadlineStr.split('-').map(Number);
+          performance.editAllowedUntil = new Date(year, month - 1, day, 23, 59, 59, 0);
+          performance.lastModifiedDate = new Date();
+          await this.performanceRepository.save(performance);
+        }
+      }
     }
     Object.assign(review, definedUpdate);
 
