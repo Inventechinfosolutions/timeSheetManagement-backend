@@ -7,7 +7,7 @@ import { QuarterlyReview } from '../entities/quarterly_review.entities';
 import { EmployeePerformanceStatus } from '../enums/employee_performance.enums';
 import { QuarterlyReviewStatus } from '../enums/quarterly_review.enums';
 import { AppraisalNoticeService } from './appraisal_notice.service';
-import { deadlineHasArrived, isLockedReviewStatus } from '../utils/review-access';
+import { deadlineHasArrived, isLockedReviewStatus, isOneDayBeforeDeadline } from '../utils/review-access';
 
 const OPEN_REVIEW_STATUSES: QuarterlyReviewStatus[] = [
   QuarterlyReviewStatus.ASSIGNED,
@@ -15,6 +15,9 @@ const OPEN_REVIEW_STATUSES: QuarterlyReviewStatus[] = [
   QuarterlyReviewStatus.DRAFT,
   QuarterlyReviewStatus.PENDING,
   QuarterlyReviewStatus.IN_PROGRESS,
+  QuarterlyReviewStatus.EDIT_GRANTED,
+  QuarterlyReviewStatus.ALLOWED_TO_EDIT,
+  QuarterlyReviewStatus.APPROVED_FOR_EDITING,
 ];
 
 const OPEN_PERFORMANCE_STATUSES: EmployeePerformanceStatus[] = [
@@ -44,12 +47,13 @@ export class AppraisalDeadlineCronService {
     private readonly noticeService: AppraisalNoticeService,
   ) {}
 
-  @Cron('0 5 * * *')
-  async remindOrCloseOpenReviews(): Promise<{ locked: number; reminded: number }> {
-    this.logger.log('Starting daily 5:00 AM appraisal deadline & lock verification...');
+  @Cron('0 5,9,14 * * *')
+  async remindOrCloseOpenReviews(): Promise<{ locked: number; reminded: number; oneDayReminded: number }> {
+    this.logger.log('Starting appraisal deadline & 1-day reminder check...');
     const now = Date.now();
     let locked = 0;
     let reminded = 0;
+    let oneDayReminded = 0;
 
     // 1. Process Unsubmitted Reviews (Parent QuarterlyReview table)
     const openReviews = await this.reviewRepository.find({
@@ -61,14 +65,6 @@ export class AppraisalDeadlineCronService {
         continue;
       }
 
-      if (!deadlineHasArrived(review.deadlineDate)) {
-        continue;
-      }
-
-      const renewed = (review.reassignCount || 0) >= 1;
-      review.status = QuarterlyReviewStatus.LOCKED;
-      await this.reviewRepository.save(review);
-
       const perf = await this.performanceRepository.findOne({
         where: {
           employeeId: review.employeeId,
@@ -76,6 +72,48 @@ export class AppraisalDeadlineCronService {
           financialYear: review.financialYear,
         },
       });
+
+      const isSubmitted =
+        perf?.status === EmployeePerformanceStatus.SUBMITTED ||
+        perf?.status === EmployeePerformanceStatus.RE_SUBMITTED ||
+        perf?.status === EmployeePerformanceStatus.COMPLETED ||
+        perf?.status === EmployeePerformanceStatus.REVIEWED ||
+        review.status === QuarterlyReviewStatus.SUBMITTED ||
+        review.status === QuarterlyReviewStatus.RE_SUBMITTED ||
+        review.status === QuarterlyReviewStatus.COMPLETED ||
+        review.status === QuarterlyReviewStatus.REVIEWED;
+
+      if (isSubmitted) {
+        continue;
+      }
+
+      // 1.1 Check if only 1 day is left to submit appraisal
+      if (isOneDayBeforeDeadline(review.deadlineDate, new Date(now))) {
+        try {
+          await this.noticeService.notifyOneDayDeadlineReminder({
+            employeeId: review.employeeId,
+            employeeName: review.employeeName || review.employeeId,
+            quarter: review.quarter,
+            financialYear: review.financialYear,
+            deadlineDate: review.deadlineDate,
+          });
+          oneDayReminded += 1;
+          this.logger.log(
+            `Dispatched 1-day deadline reminder to ${review.employeeId} for review #${review.id} (${review.quarter} ${review.financialYear})`,
+          );
+        } catch (noticeErr) {
+          this.logger.warn(`Could not send 1-day reminder notice for ${review.employeeId}: ${noticeErr}`);
+        }
+      }
+
+      // 1.2 Check if deadline has arrived
+      if (!deadlineHasArrived(review.deadlineDate, new Date(now))) {
+        continue;
+      }
+
+      const renewed = (review.reassignCount || 0) >= 1;
+      review.status = QuarterlyReviewStatus.LOCKED;
+      await this.reviewRepository.save(review);
 
       if (perf && !isLockedReviewStatus(perf.status)) {
         perf.status = EmployeePerformanceStatus.LOCKED;
@@ -85,7 +123,7 @@ export class AppraisalDeadlineCronService {
 
       locked += 1;
       this.logger.log(
-        `[CRON 5AM] Review #${review.id} for ${review.employeeId} (${review.quarter} ${review.financialYear}) set to LOCKED because the deadline day has arrived.`,
+        `Review #${review.id} for ${review.employeeId} (${review.quarter} ${review.financialYear}) set to LOCKED because the deadline day has arrived.`,
       );
 
       if (!renewed) {
@@ -178,8 +216,8 @@ export class AppraisalDeadlineCronService {
       }
     }
 
-    this.logger.log('Completed daily 5:00 AM appraisal deadline & lock verification.');
-    return { locked, reminded };
+    this.logger.log('Completed appraisal deadline & lock verification.');
+    return { locked, reminded, oneDayReminded };
   }
 
   private datePart(value: Date): string {

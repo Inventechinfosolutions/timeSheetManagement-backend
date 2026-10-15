@@ -119,6 +119,13 @@ export const buildDeadlineReminderNotice = (
   message: `Your ${context.quarter} ${context.financialYear} appraisal is still not submitted. Please submit it before ${formatAppraisalNoticeDate(context.deadlineDate)}.`,
 });
 
+export const buildOneDayDeadlineReminderNotice = (
+  context: AppraisalNoticeContext & { deadlineDate: Date | string | null },
+): AppraisalNoticeContent => ({
+  title: `Appraisal deadline reminder (1 day left) (${context.quarter} ${context.financialYear})`,
+  message: `Only 1 day left! Your ${context.quarter} ${context.financialYear} appraisal is due tomorrow (${formatAppraisalNoticeDate(context.deadlineDate)}).\nPlease submit it before the deadline to avoid access being locked.`,
+});
+
 export const buildAssignmentNotice = (
   context: AppraisalNoticeContext & { deadlineDate: Date | string | null },
 ): AppraisalNoticeContent => ({

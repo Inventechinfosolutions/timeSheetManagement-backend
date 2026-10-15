@@ -15,6 +15,7 @@ import {
   buildEditRequestNotice,
   buildEmployeeEditRequestSentNotice,
   buildEmployeeSubmissionNotice,
+  buildOneDayDeadlineReminderNotice,
   buildReassignmentNotice,
   buildReviewCompletedNotice,
   buildSubmissionNotice,
@@ -60,6 +61,31 @@ export class AppraisalNoticeService {
       employee?.fullName || input.employeeName,
       buildDeadlineReminderNotice(input),
       AppraisalNoticeType.DEADLINE_REMINDER,
+    );
+  }
+
+  async notifyOneDayDeadlineReminder(
+    input: AppraisalNoticeInput & { deadlineDate: Date | string | null },
+  ): Promise<void> {
+    const marker = `${input.quarter} ${input.financialYear}`;
+    const sent = await this.notificationRepository.find({
+      where: {
+        employeeId: input.employeeId.trim(),
+        type: AppraisalNoticeType.ONE_DAY_DEADLINE_REMINDER,
+      },
+    });
+    if (sent.some((row) => row.message.includes(marker))) {
+      return;
+    }
+    const employee = await this.employeeDetailsRepository.findOne({
+      where: { employeeId: input.employeeId.trim() },
+    });
+    await this.deliver(
+      input.employeeId.trim(),
+      employee?.email,
+      employee?.fullName || input.employeeName,
+      buildOneDayDeadlineReminderNotice(input),
+      AppraisalNoticeType.ONE_DAY_DEADLINE_REMINDER,
     );
   }
 

@@ -44,6 +44,23 @@ export const deadlineHasArrived = (deadline: Date | string | null | undefined, n
   return deadlineDay <= today;
 };
 
+export const isOneDayBeforeDeadline = (
+  deadline: Date | string | null | undefined,
+  now = new Date(),
+): boolean => {
+  const deadlineDay = dateOnlyValue(deadline);
+  const today = dateOnlyValue(now);
+  if (!deadlineDay || !today) {
+    return false;
+  }
+  const [dYear, dMonth, dDate] = deadlineDay.split('-').map(Number);
+  const [tYear, tMonth, tDate] = today.split('-').map(Number);
+  const deadlineUtc = Date.UTC(dYear, dMonth - 1, dDate);
+  const todayUtc = Date.UTC(tYear, tMonth - 1, tDate);
+  const diffDays = Math.round((deadlineUtc - todayUtc) / (24 * 60 * 60 * 1000));
+  return diffDays === 1;
+};
+
 export const isUnsubmittedStatus = (status: string | null | undefined): boolean =>
   UNSUBMITTED_STATUSES.includes(String(status || ''));
 

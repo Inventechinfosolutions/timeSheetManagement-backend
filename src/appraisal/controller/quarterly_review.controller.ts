@@ -28,6 +28,7 @@ import {
   ApiInternalServerErrorResponse,
 } from '@nestjs/swagger';
 import { QuarterlyReviewService } from '../services/quarterly_review.service';
+import { AppraisalDeadlineCronService } from '../services/appraisal_deadline.cron';
 import {
   CreateQuarterlyReviewDto,
   QueryQuarterlyReviewDto,
@@ -45,7 +46,17 @@ import { User } from '../../users/entities/user.entity';
 @ApiTags('Quarterly Review')
 @Controller('quarterly-review&performance')
 export class QuarterlyReviewPerformanceController {
-  constructor(private readonly reviewService: QuarterlyReviewService) {}
+  constructor(
+    private readonly reviewService: QuarterlyReviewService,
+    private readonly deadlineCronService: AppraisalDeadlineCronService,
+  ) {}
+
+  @Post('trigger-deadline-check')
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({ summary: 'Trigger appraisal deadline checks and 1-day reminders' })
+  async triggerDeadlineCheck() {
+    return await this.deadlineCronService.remindOrCloseOpenReviews();
+  }
 
   /**
    * Review list with the matching performance row.
