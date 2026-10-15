@@ -8,6 +8,8 @@ const UNSUBMITTED_STATUSES: readonly string[] = [
   QuarterlyReviewStatus.IN_PROGRESS,
   QuarterlyReviewStatus.ALLOWED_TO_EDIT,
   QuarterlyReviewStatus.APPROVED_FOR_EDITING,
+  QuarterlyReviewStatus.DEADLINE_REMINDER,
+  QuarterlyReviewStatus.ONE_DAY_DEADLINE_REMINDER,
 ];
 
 const FINISHED_STATUSES: readonly string[] = [
@@ -48,6 +50,9 @@ export const isOneDayBeforeDeadline = (
   deadline: Date | string | null | undefined,
   now = new Date(),
 ): boolean => {
+  if (!deadline) {
+    return false;
+  }
   const deadlineDay = dateOnlyValue(deadline);
   const today = dateOnlyValue(now);
   if (!deadlineDay || !today) {
@@ -58,7 +63,17 @@ export const isOneDayBeforeDeadline = (
   const deadlineUtc = Date.UTC(dYear, dMonth - 1, dDate);
   const todayUtc = Date.UTC(tYear, tMonth - 1, tDate);
   const diffDays = Math.round((deadlineUtc - todayUtc) / (24 * 60 * 60 * 1000));
-  return diffDays === 1;
+  if (diffDays === 1) {
+    return true;
+  }
+  const deadlineDateObj = deadline instanceof Date ? deadline : new Date(deadline);
+  if (!Number.isNaN(deadlineDateObj.getTime())) {
+    const diffHours = (deadlineDateObj.getTime() - now.getTime()) / (60 * 60 * 1000);
+    if (diffHours > 0 && diffHours <= 24) {
+      return true;
+    }
+  }
+  return false;
 };
 
 export const isUnsubmittedStatus = (status: string | null | undefined): boolean =>

@@ -43,7 +43,7 @@ import {
   APPRAISAL_EDIT_WINDOW_HOURS,
   appraisalWindowMs,
 } from '../constants/appraisal.constants';
-import { isLockedReviewStatus, reviewAccessFlags, shouldCloseRenewedAccess } from '../utils/review-access';
+import { isLockedReviewStatus, isOneDayBeforeDeadline, reviewAccessFlags, shouldCloseRenewedAccess } from '../utils/review-access';
 import { MasterFinancialYearService } from '../../master/service/master-financialyear.service';
 import { UsersService } from '../../users/service/user.service';
 import { User } from '../../users/entities/user.entity';
@@ -181,6 +181,10 @@ export class QuarterlyReviewService {
         createDto.deadlineDate,
       );
 
+      if (!createDto.description || !createDto.description.trim()) {
+        throw new BadRequestException('Description is required.');
+      }
+
       const review = this.reviewRepository.create({
         employeeId,
         financialYear,
@@ -216,6 +220,19 @@ export class QuarterlyReviewService {
         financialYear: saved.financialYear,
         deadlineDate: saved.deadlineDate,
       });
+      if (saved.deadlineDate && isOneDayBeforeDeadline(saved.deadlineDate, new Date())) {
+        try {
+          await this.noticeService.notifyOneDayDeadlineReminder({
+            employeeId: saved.employeeId,
+            employeeName: saved.employeeName || saved.employeeId,
+            quarter: saved.quarter,
+            financialYear: saved.financialYear,
+            deadlineDate: saved.deadlineDate,
+          });
+        } catch (noticeErr) {
+          this.logger.warn(`Could not dispatch 1-day reminder notice on create: ${noticeErr}`);
+        }
+      }
       const enrichedList = await this.enrichReviewsWithDetails([saved]);
       return enrichedList[0];
     } catch (error) {
@@ -1218,6 +1235,20 @@ export class QuarterlyReviewService {
       });
     } catch (err) {
       this.logger.warn(`Could not dispatch reassignment notice on reassign: ${err}`);
+    }
+
+    if (review.deadlineDate && isOneDayBeforeDeadline(review.deadlineDate, new Date())) {
+      try {
+        await this.noticeService.notifyOneDayDeadlineReminder({
+          employeeId: review.employeeId,
+          employeeName: review.employeeName || review.employeeId,
+          quarter: review.quarter,
+          financialYear: review.financialYear,
+          deadlineDate: review.deadlineDate,
+        });
+      } catch (noticeErr) {
+        this.logger.warn(`Could not dispatch 1-day reminder notice on reassign: ${noticeErr}`);
+      }
     }
 
     this.logger.log(

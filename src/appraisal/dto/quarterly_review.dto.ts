@@ -69,13 +69,13 @@ export class CreateQuarterlyReviewDto {
   @IsDateString()
   deadlineDate?: string;
 
-  @ApiPropertyOptional({
+  @ApiProperty({
     example: 'Quarterly review cycle for Q1 2025-2026',
-    description: 'Optional description or notes',
+    description: 'Instructions, focus areas, or remarks for the review',
   })
-  @IsOptional()
+  @IsNotEmpty({ message: 'Description is required' })
   @IsString()
-  description?: string;
+  description: string;
 
   @ApiPropertyOptional({
     enum: ReviewAssignedBy,

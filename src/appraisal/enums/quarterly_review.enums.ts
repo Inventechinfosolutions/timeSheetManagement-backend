@@ -31,6 +31,8 @@ export enum QuarterlyReviewStatus {
   NOT_UPDATED = 'NOT_UPDATED',
   LOCKED = 'LOCKED',
   ALLOWED_TO_EDIT = 'ALLOWED_TO_EDIT',
+  DEADLINE_REMINDER = 'DEADLINE_REMINDER',
+  ONE_DAY_DEADLINE_REMINDER = 'ONE_DAY_DEADLINE_REMINDER',
 }
 export const QuaterlyReviewStatus = QuarterlyReviewStatus;
 export type QuaterlyReviewStatus = QuarterlyReviewStatus;

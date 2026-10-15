@@ -18,6 +18,8 @@ const OPEN_REVIEW_STATUSES: QuarterlyReviewStatus[] = [
   QuarterlyReviewStatus.EDIT_GRANTED,
   QuarterlyReviewStatus.ALLOWED_TO_EDIT,
   QuarterlyReviewStatus.APPROVED_FOR_EDITING,
+  QuarterlyReviewStatus.DEADLINE_REMINDER,
+  QuarterlyReviewStatus.ONE_DAY_DEADLINE_REMINDER,
 ];
 
 const OPEN_PERFORMANCE_STATUSES: EmployeePerformanceStatus[] = [
@@ -25,6 +27,8 @@ const OPEN_PERFORMANCE_STATUSES: EmployeePerformanceStatus[] = [
   EmployeePerformanceStatus.DRAFT,
   EmployeePerformanceStatus.PENDING,
   EmployeePerformanceStatus.IN_PROGRESS,
+  EmployeePerformanceStatus.DEADLINE_REMINDER,
+  EmployeePerformanceStatus.ONE_DAY_DEADLINE_REMINDER,
 ];
 
 const EDIT_WINDOW_STATUSES: QuarterlyReviewStatus[] = [
@@ -47,7 +51,7 @@ export class AppraisalDeadlineCronService {
     private readonly noticeService: AppraisalNoticeService,
   ) {}
 
-  @Cron('0 5,9,14 * * *')
+  @Cron('0 * * * *')
   async remindOrCloseOpenReviews(): Promise<{ locked: number; reminded: number; oneDayReminded: number }> {
     this.logger.log('Starting appraisal deadline & 1-day reminder check...');
     const now = Date.now();
