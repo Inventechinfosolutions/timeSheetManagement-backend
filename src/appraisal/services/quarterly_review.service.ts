@@ -865,9 +865,8 @@ export class QuarterlyReviewService {
       delete definedUpdate.description;
     }
     if (definedUpdate.deadlineDate) {
-      const assigned = this.dateOnly(
-        typeof definedUpdate.assignedDate === 'string' ? definedUpdate.assignedDate : review.assignedDate,
-      );
+      review.assignedDate = this.calendarDate(updateDto.assignedDate || new Date());
+      const assigned = this.dateOnly(review.assignedDate);
       this.assertDeadlineAfterAssigned(assigned, String(definedUpdate.deadlineDate));
 
       const newDeadlineStr = this.dateOnly(definedUpdate.deadlineDate);

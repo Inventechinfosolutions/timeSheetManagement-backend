@@ -248,7 +248,7 @@ export class EmployeePerformanceService {
         throw new BadRequestException('Section E: Planned Deliverables for Next Quarter is required.');
       }
 
-      const submittedAt = resubmitting ? record.submittedAt || new Date() : new Date();
+      const submittedAt = new Date();
       record.status = resubmitting
         ? EmployeePerformanceStatus.RE_SUBMITTED
         : EmployeePerformanceStatus.SUBMITTED;
@@ -270,9 +270,7 @@ export class EmployeePerformanceService {
 
       const reviewStatus = QuarterlyReviewStatus.PERFORMANCE_RECEIVED;
       if (review) {
-        if (!resubmitting || !review.submittedDate) {
-          review.submittedDate = submittedAt;
-        }
+        review.submittedDate = submittedAt;
         review.performanceId = saved.id;
         review.status = reviewStatus;
         await this.reviewRepository.save(review);
