@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, LessThanOrEqual, MoreThanOrEqual } from 'typeorm';
 import { TimesheetBlocker } from '../entities/timesheetBlocker.entity';
 import { ManagerMapping, ManagerMappingStatus } from '../../managerMapping/entities/managerMapping.entity';
+import { NotificationsService } from '../../notifications/Services/notifications.service';
 import dayjs from 'dayjs';
 
 @Injectable()
@@ -14,6 +15,7 @@ export class TimesheetBlockerService {
     private readonly blockerRepository: Repository<TimesheetBlocker>,
     @InjectRepository(ManagerMapping)
     private readonly managerMappingRepository: Repository<ManagerMapping>,
+    private readonly notificationsService: NotificationsService,
   ) { }
 
   async create(data: Partial<TimesheetBlocker>, isAdmin: boolean = false): Promise<TimesheetBlocker> {
@@ -22,6 +24,29 @@ export class TimesheetBlockerService {
       const blocker = this.blockerRepository.create(data);
       const saved = await this.blockerRepository.save(blocker);
       this.logger.log(`Successfully created timesheet blocker ID: ${saved.id} for employee: ${data.employeeId}`);
+
+      if (saved.employeeId) {
+        try {
+          const fromStr = saved.blockedFrom
+            ? dayjs(saved.blockedFrom).format('DD MMM YYYY')
+            : 'specified dates';
+          const toStr = saved.blockedTo
+            ? dayjs(saved.blockedTo).format('DD MMM YYYY')
+            : '';
+          const dateRange = toStr ? `${fromStr} to ${toStr}` : fromStr;
+          const reasonSuffix = saved.reason?.trim() ? `\nReason: ${saved.reason.trim()}` : '';
+
+          await this.notificationsService.createNotification({
+            employeeId: saved.employeeId.trim(),
+            title: 'Timesheet Blocked',
+            message: `Your timesheet has been blocked for ${dateRange}.${reasonSuffix}\nPlease contact your manager or admin for assistance.`,
+            type: 'TIMESHEET_BLOCKED',
+          });
+        } catch (notifErr: any) {
+          this.logger.warn(`Could not dispatch timesheet blocker notification: ${notifErr?.message || notifErr}`);
+        }
+      }
+
       return saved;
     } catch (error) {
       this.logger.error(`Failed to create timesheet blocker for employee ${data.employeeId}: ${error.message}`, error.stack);
@@ -84,8 +109,30 @@ export class TimesheetBlockerService {
         }
       }
 
+      const empId = blocker.employeeId;
+      const fromStr = blocker.blockedFrom
+        ? dayjs(blocker.blockedFrom).format('DD MMM YYYY')
+        : '';
+      const toStr = blocker.blockedTo
+        ? dayjs(blocker.blockedTo).format('DD MMM YYYY')
+        : '';
+      const dateRange = toStr ? `${fromStr} to ${toStr}` : fromStr;
+
       await this.blockerRepository.delete(id);
       this.logger.log(`Successfully removed timesheet blocker ID: ${id}`);
+
+      if (empId) {
+        try {
+          await this.notificationsService.createNotification({
+            employeeId: empId.trim(),
+            title: 'Timesheet Unblocked',
+            message: `Your timesheet block for ${dateRange} has been removed. You can now log your hours.`,
+            type: 'TIMESHEET_UNBLOCKED',
+          });
+        } catch (notifErr: any) {
+          this.logger.warn(`Could not dispatch timesheet unblock notification: ${notifErr?.message || notifErr}`);
+        }
+      }
     } catch (error) {
       this.logger.error(`Failed to remove timesheet blocker ${id}: ${error.message}`, error.stack);
       if (error instanceof HttpException) throw error;

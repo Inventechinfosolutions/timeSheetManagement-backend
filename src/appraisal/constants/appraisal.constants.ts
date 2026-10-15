@@ -67,15 +67,15 @@ export interface AppraisalNoticeContext {
 export const buildSubmissionNotice = (
   context: AppraisalNoticeContext,
 ): AppraisalNoticeContent => ({
-  title: `Quarterly review submitted (${context.quarter} ${context.financialYear})`,
-  message: `${context.employeeName} submitted the ${context.quarter} review for ${context.financialYear}.`,
+  title: `Appraisal submitted (${context.quarter} ${context.financialYear})`,
+  message: `${context.employeeName} submitted the appraisal for ${context.quarter} ${context.financialYear}.`,
 });
 
 export const buildReviewCompletedNotice = (
   context: Pick<AppraisalNoticeContext, 'quarter' | 'financialYear'>,
 ): AppraisalNoticeContent => ({
-  title: `Quarterly review completed (${context.quarter} ${context.financialYear})`,
-  message: `Your ${context.quarter} ${context.financialYear} quarterly review is complete. You can log in and view your review.`,
+  title: `Appraisal review completed (${context.quarter} ${context.financialYear})`,
+  message: `Your ${context.quarter} ${context.financialYear} appraisal review is complete. You can log in and view your ratings and feedback.`,
 });
 
 const NOTICE_DATE_LOCALE = 'en-GB';
@@ -115,29 +115,43 @@ export const formatAppraisalNoticeDateTime = (value: Date | string | null | unde
 export const buildDeadlineReminderNotice = (
   context: AppraisalNoticeContext & { deadlineDate: Date | string | null },
 ): AppraisalNoticeContent => ({
-  title: `Quarterly review still open (${context.quarter} ${context.financialYear})`,
-  message: `Your ${context.quarter} ${context.financialYear} review is still not submitted. Please submit it before ${formatAppraisalNoticeDate(context.deadlineDate)}.`,
+  title: `Appraisal deadline reminder (${context.quarter} ${context.financialYear})`,
+  message: `Your ${context.quarter} ${context.financialYear} appraisal is still not submitted. Please submit it before ${formatAppraisalNoticeDate(context.deadlineDate)}.`,
 });
 
 export const buildAssignmentNotice = (
   context: AppraisalNoticeContext & { deadlineDate: Date | string | null },
 ): AppraisalNoticeContent => ({
-  title: `Quarterly review assigned (${context.quarter} ${context.financialYear})`,
-  message: `A ${context.quarter} review for ${context.financialYear} has been assigned to you.\nPlease fill in all the details and submit it before ${formatAppraisalNoticeDate(context.deadlineDate)}.`,
+  title: `Appraisal assigned (${context.quarter} ${context.financialYear})`,
+  message: `A ${context.quarter} appraisal for ${context.financialYear} has been assigned to you.\nPlease fill in all the details and submit it before ${formatAppraisalNoticeDate(context.deadlineDate)}.`,
+});
+
+export const buildReassignmentNotice = (
+  context: AppraisalNoticeContext & { deadlineDate: Date | string | null },
+): AppraisalNoticeContent => ({
+  title: `Appraisal re-assigned (${context.quarter} ${context.financialYear})`,
+  message: `Your ${context.quarter} appraisal for ${context.financialYear} has been re-assigned with a new deadline: ${formatAppraisalNoticeDate(context.deadlineDate)}.\nPlease update and submit your appraisal before the deadline.`,
 });
 
 export const buildEmployeeSubmissionNotice = (
   context: Pick<AppraisalNoticeContext, 'quarter' | 'financialYear'>,
 ): AppraisalNoticeContent => ({
-  title: `Quarterly review submitted (${context.quarter} ${context.financialYear})`,
-  message: `Your ${context.quarter} ${context.financialYear} review has been submitted.`,
+  title: `Appraisal submitted (${context.quarter} ${context.financialYear})`,
+  message: `Your ${context.quarter} ${context.financialYear} appraisal has been submitted successfully.`,
 });
 
 export const buildEditRequestNotice = (
   context: AppraisalNoticeContext,
 ): AppraisalNoticeContent => ({
-  title: `Edit access requested (${context.quarter} ${context.financialYear})`,
-  message: `${context.employeeName} requested edit access for the ${context.quarter} ${context.financialYear} review.`,
+  title: `Appraisal edit access requested (${context.quarter} ${context.financialYear})`,
+  message: `${context.employeeName} requested edit access for the ${context.quarter} ${context.financialYear} appraisal.`,
+});
+
+export const buildEmployeeEditRequestSentNotice = (
+  context: Pick<AppraisalNoticeContext, 'quarter' | 'financialYear'>,
+): AppraisalNoticeContent => ({
+  title: `Appraisal edit request sent (${context.quarter} ${context.financialYear})`,
+  message: `Your request for edit access to the ${context.quarter} ${context.financialYear} appraisal has been submitted to your manager.`,
 });
 
 export const buildEditGrantedNotice = (
@@ -145,6 +159,6 @@ export const buildEditGrantedNotice = (
     editAllowedUntil: Date | string | null;
   },
 ): AppraisalNoticeContent => ({
-  title: `Edit access approved (${context.quarter} ${context.financialYear})`,
-  message: `You can edit your ${context.quarter} ${context.financialYear} review until ${formatAppraisalNoticeDateTime(context.editAllowedUntil)}.`,
+  title: `Appraisal edit access approved (${context.quarter} ${context.financialYear})`,
+  message: `You can edit your ${context.quarter} ${context.financialYear} appraisal until ${formatAppraisalNoticeDateTime(context.editAllowedUntil)}.`,
 });

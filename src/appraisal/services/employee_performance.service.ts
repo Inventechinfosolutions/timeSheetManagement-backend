@@ -466,6 +466,12 @@ export class EmployeePerformanceService {
         quarter: saved.quarter,
         financialYear: saved.financialYear,
       });
+      await this.noticeService.notifyEmployeeOfEditRequestSent({
+        employeeId: saved.employeeId,
+        employeeName: enriched[0].employeeName || saved.employeeId,
+        quarter: saved.quarter,
+        financialYear: saved.financialYear,
+      });
       return enriched[0];
     } catch (error) {
       const caught = this.caughtError(error);

@@ -1209,7 +1209,7 @@ export class QuarterlyReviewService {
 
     // 3. Send notification to employee
     try {
-      await this.noticeService.notifyEmployeeOfAssignment({
+      await this.noticeService.notifyEmployeeOfReassignment({
         employeeId: review.employeeId,
         employeeName: review.employeeName || review.employeeId,
         quarter: review.quarter,
@@ -1217,7 +1217,7 @@ export class QuarterlyReviewService {
         deadlineDate: review.deadlineDate,
       });
     } catch (err) {
-      this.logger.warn(`Could not dispatch assignment notice on reassign: ${err}`);
+      this.logger.warn(`Could not dispatch reassignment notice on reassign: ${err}`);
     }
 
     this.logger.log(

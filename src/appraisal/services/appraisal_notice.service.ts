@@ -13,7 +13,9 @@ import {
   buildDeadlineReminderNotice,
   buildEditGrantedNotice,
   buildEditRequestNotice,
+  buildEmployeeEditRequestSentNotice,
   buildEmployeeSubmissionNotice,
+  buildReassignmentNotice,
   buildReviewCompletedNotice,
   buildSubmissionNotice,
 } from '../constants/appraisal.constants';
@@ -76,6 +78,21 @@ export class AppraisalNoticeService {
     );
   }
 
+  async notifyEmployeeOfReassignment(
+    input: AppraisalNoticeInput & { deadlineDate: Date | string | null },
+  ): Promise<void> {
+    const employee = await this.employeeDetailsRepository.findOne({
+      where: { employeeId: input.employeeId },
+    });
+    await this.deliver(
+      input.employeeId,
+      employee?.email,
+      employee?.fullName || input.employeeName,
+      buildReassignmentNotice(input),
+      AppraisalNoticeType.QUARTER_REASSIGNED,
+    );
+  }
+
   async notifyEmployeeOfSubmission(input: AppraisalNoticeInput): Promise<void> {
     const employee = await this.employeeDetailsRepository.findOne({
       where: { employeeId: input.employeeId },
@@ -95,6 +112,19 @@ export class AppraisalNoticeService {
 
   async notifyManagerOfEditRequest(input: AppraisalNoticeInput): Promise<void> {
     await this.notifyManager(input, buildEditRequestNotice(input), AppraisalNoticeType.EDIT_REQUESTED);
+  }
+
+  async notifyEmployeeOfEditRequestSent(input: AppraisalNoticeInput): Promise<void> {
+    const employee = await this.employeeDetailsRepository.findOne({
+      where: { employeeId: input.employeeId },
+    });
+    await this.deliver(
+      input.employeeId,
+      employee?.email,
+      employee?.fullName || input.employeeName,
+      buildEmployeeEditRequestSentNotice(input),
+      AppraisalNoticeType.EDIT_REQUEST_SENT,
+    );
   }
 
   async notifyEmployeeOfEditGrant(
@@ -117,10 +147,14 @@ export class AppraisalNoticeService {
     content: AppraisalNoticeContent,
     type: AppraisalNoticeType,
   ): Promise<void> {
+    const trimmedEmpId = input.employeeId?.trim();
     const mapping = await this.managerMappingRepository.findOne({
-      where: { employeeId: input.employeeId },
+      where: [
+        { employeeId: trimmedEmpId, status: 'ACTIVE' as any },
+        { employeeId: trimmedEmpId },
+      ],
     });
-    const managerId = mapping?.managerId;
+    const managerId = mapping?.managerId?.trim();
     if (!managerId) {
       this.logger.warn(`No reporting manager mapped for ${input.employeeId}`);
       return;
@@ -161,16 +195,21 @@ export class AppraisalNoticeService {
     content: AppraisalNoticeContent,
     type: AppraisalNoticeType,
   ): Promise<void> {
+    const cleanId = recipientEmployeeId?.trim();
+    if (!cleanId) {
+      this.logger.warn('Skipping deliver notice: recipientEmployeeId is empty');
+      return;
+    }
     try {
       await this.notificationRepository.save({
-        employeeId: recipientEmployeeId,
+        employeeId: cleanId,
         title: content.title,
         message: content.message,
         type,
       });
     } catch (error) {
       this.logger.error(
-        `In-app notice failed for ${recipientEmployeeId}: ${error.message}`,
+        `In-app notice failed for ${cleanId}: ${error.message}`,
         error.stack,
       );
     }
