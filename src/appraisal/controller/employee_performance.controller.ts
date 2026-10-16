@@ -12,6 +12,7 @@ import {
   HttpCode,
   UseInterceptors,
   UploadedFile,
+  Res,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { BufferedFile } from '../../common/s3-client/file.model';
@@ -196,6 +197,32 @@ export class EmployeePerformanceController {
   @ApiOperation({ summary: 'Filter performance records by parameters' })
   async getByParams(@Query() params: QueryEmployeePerformanceDto) {
     return await this.performanceService.getByParams(params);
+  }
+
+  /**
+   * GET: Download an attachment from MinIO
+   * GET /api/employee-performance/attachments/download?objectKey=
+   */
+  @Get('attachments/download')
+  @ApiOperation({ summary: 'Download a performance attachment' })
+  async downloadAttachment(
+    @Query('objectKey') objectKey: string,
+    @Res() res: any,
+  ) {
+    return await this.performanceService.streamAttachment(objectKey, res, false);
+  }
+
+  /**
+   * GET: Preview/view an attachment inline from MinIO
+   * GET /api/employee-performance/attachments/view?objectKey=
+   */
+  @Get('attachments/view')
+  @ApiOperation({ summary: 'View/preview a performance attachment inline' })
+  async viewAttachment(
+    @Query('objectKey') objectKey: string,
+    @Res() res: any,
+  ) {
+    return await this.performanceService.streamAttachment(objectKey, res, true);
   }
 
   /**

@@ -6,6 +6,7 @@ const UNSUBMITTED_STATUSES: readonly string[] = [
   QuarterlyReviewStatus.ASSIGNED,
   QuarterlyReviewStatus.PENDING,
   QuarterlyReviewStatus.IN_PROGRESS,
+  QuarterlyReviewStatus.EDIT_GRANTED,
   QuarterlyReviewStatus.ALLOWED_TO_EDIT,
   QuarterlyReviewStatus.APPROVED_FOR_EDITING,
   QuarterlyReviewStatus.DEADLINE_REMINDER,
@@ -23,9 +24,14 @@ export const dateOnlyValue = (value: Date | string | null | undefined): string |
     return null;
   }
   if (typeof value === 'string') {
-    const match = /^(\d{4}-\d{2}-\d{2})/.exec(value.trim());
-    if (match) {
-      return match[1];
+    const trimmed = value.trim();
+    const ymd = /^(\d{4})-(\d{2})-(\d{2})/.exec(trimmed);
+    if (ymd) {
+      return `${ymd[1]}-${ymd[2]}-${ymd[3]}`;
+    }
+    const dmy = /^(\d{2})[-/](\d{2})[-/](\d{4})/.exec(trimmed);
+    if (dmy) {
+      return `${dmy[3]}-${dmy[2]}-${dmy[1]}`;
     }
   }
   const date = value instanceof Date ? value : new Date(value);
@@ -66,8 +72,19 @@ export const isOneDayBeforeDeadline = (
   if (diffDays === 1) {
     return true;
   }
-  const deadlineDateObj = deadline instanceof Date ? deadline : new Date(deadline);
-  if (!Number.isNaN(deadlineDateObj.getTime())) {
+  let deadlineDateObj: Date | null = null;
+  if (deadline instanceof Date) {
+    deadlineDateObj = deadline;
+  } else if (typeof deadline === 'string') {
+    const trimmed = deadline.trim();
+    const dmy = /^(\d{2})[-/](\d{2})[-/](\d{4})/.exec(trimmed);
+    if (dmy) {
+      deadlineDateObj = new Date(`${dmy[3]}-${dmy[2]}-${dmy[1]}`);
+    } else {
+      deadlineDateObj = new Date(trimmed);
+    }
+  }
+  if (deadlineDateObj && !Number.isNaN(deadlineDateObj.getTime())) {
     const diffHours = (deadlineDateObj.getTime() - now.getTime()) / (60 * 60 * 1000);
     if (diffHours > 0 && diffHours <= 24) {
       return true;

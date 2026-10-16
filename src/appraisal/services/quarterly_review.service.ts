@@ -42,6 +42,7 @@ import {
   quarterNotAssignableMessage,
   APPRAISAL_EDIT_WINDOW_HOURS,
   appraisalWindowMs,
+  SUBMITTABLE_PERFORMANCE_STATUSES,
 } from '../constants/appraisal.constants';
 import { isLockedReviewStatus, isOneDayBeforeDeadline, reviewAccessFlags, shouldCloseRenewedAccess } from '../utils/review-access';
 import { MasterFinancialYearService } from '../../master/service/master-financialyear.service';
@@ -924,6 +925,20 @@ export class QuarterlyReviewService {
 
     const updated = await this.reviewRepository.save(review);
 
+    if (definedUpdate.deadlineDate && updated.deadlineDate && isOneDayBeforeDeadline(updated.deadlineDate, new Date())) {
+      try {
+        await this.noticeService.notifyOneDayDeadlineReminder({
+          employeeId: updated.employeeId,
+          employeeName: updated.employeeName || updated.employeeId,
+          quarter: updated.quarter,
+          financialYear: updated.financialYear,
+          deadlineDate: updated.deadlineDate,
+        });
+      } catch (noticeErr) {
+        this.logger.warn(`Could not dispatch 1-day reminder notice on update: ${noticeErr}`);
+      }
+    }
+
     if (hasEvaluationScores) {
       await this.markPerformanceCompleted(updated);
       await this.annualService.syncEmployeeAnnualRating(updated.employeeId, updated.financialYear);
@@ -1072,7 +1087,24 @@ export class QuarterlyReviewService {
     for (const review of reviews) {
       const perfKey = `${review.employeeId}-${review.quarter}-${review.financialYear}`;
       const rawPerf = perfMap.get(perfKey) || null;
-      const status = rawPerf?.status || review.status;
+      const status = (rawPerf?.status || review.status) as EmployeePerformanceStatus;
+
+      // Dispatch 1-day reminder if appraisal deadline is due tomorrow
+      if (SUBMITTABLE_PERFORMANCE_STATUSES.includes(status)) {
+        const effectiveDeadline = rawPerf?.editAllowedUntil || review.deadlineDate;
+        if (effectiveDeadline && isOneDayBeforeDeadline(effectiveDeadline, now)) {
+          void this.noticeService.notifyOneDayDeadlineReminder({
+            employeeId: review.employeeId,
+            employeeName: review.employeeName || review.employeeId,
+            quarter: review.quarter,
+            financialYear: review.financialYear,
+            deadlineDate: effectiveDeadline,
+          }).catch((err) => {
+            this.logger.warn(`Could not dispatch 1-day reminder notice on enrich: ${err.message}`);
+          });
+        }
+      }
+
       if (!shouldCloseRenewedAccess(review.reassignCount || 0, review.deadlineDate, status, now)) {
         continue;
       }

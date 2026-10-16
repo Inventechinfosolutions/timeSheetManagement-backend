@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
@@ -8,6 +8,7 @@ import { EmployeePerformanceStatus } from '../enums/employee_performance.enums';
 import { QuarterlyReviewStatus } from '../enums/quarterly_review.enums';
 import { AppraisalNoticeService } from './appraisal_notice.service';
 import { deadlineHasArrived, isLockedReviewStatus, isOneDayBeforeDeadline } from '../utils/review-access';
+import { SUBMITTABLE_PERFORMANCE_STATUSES } from '../constants/appraisal.constants';
 
 const OPEN_REVIEW_STATUSES: QuarterlyReviewStatus[] = [
   QuarterlyReviewStatus.ASSIGNED,
@@ -22,14 +23,7 @@ const OPEN_REVIEW_STATUSES: QuarterlyReviewStatus[] = [
   QuarterlyReviewStatus.ONE_DAY_DEADLINE_REMINDER,
 ];
 
-const OPEN_PERFORMANCE_STATUSES: EmployeePerformanceStatus[] = [
-  EmployeePerformanceStatus.NOT_STARTED,
-  EmployeePerformanceStatus.DRAFT,
-  EmployeePerformanceStatus.PENDING,
-  EmployeePerformanceStatus.IN_PROGRESS,
-  EmployeePerformanceStatus.DEADLINE_REMINDER,
-  EmployeePerformanceStatus.ONE_DAY_DEADLINE_REMINDER,
-];
+const OPEN_PERFORMANCE_STATUSES: readonly EmployeePerformanceStatus[] = SUBMITTABLE_PERFORMANCE_STATUSES;
 
 const EDIT_WINDOW_STATUSES: QuarterlyReviewStatus[] = [
   QuarterlyReviewStatus.ALLOWED_TO_EDIT,
@@ -40,7 +34,7 @@ const EDIT_WINDOW_STATUSES: QuarterlyReviewStatus[] = [
 const GRACE_PERIOD_MS = 0;
 
 @Injectable()
-export class AppraisalDeadlineCronService {
+export class AppraisalDeadlineCronService implements OnModuleInit {
   private readonly logger = new Logger(AppraisalDeadlineCronService.name);
 
   constructor(
@@ -51,7 +45,16 @@ export class AppraisalDeadlineCronService {
     private readonly noticeService: AppraisalNoticeService,
   ) {}
 
-  @Cron('0 * * * *')
+  async onModuleInit(): Promise<void> {
+    this.logger.log('Running startup appraisal deadline & 1-day reminder check...');
+    try {
+      await this.remindOrCloseOpenReviews();
+    } catch (err) {
+      this.logger.warn(`Startup appraisal deadline check failed: ${err.message}`);
+    }
+  }
+
+  @Cron('*/2 * * * *')
   async remindOrCloseOpenReviews(): Promise<{ locked: number; reminded: number; oneDayReminded: number }> {
     this.logger.log('Starting appraisal deadline & 1-day reminder check...');
     const now = Date.now();
@@ -77,29 +80,32 @@ export class AppraisalDeadlineCronService {
         },
       });
 
+      const isPerfOpen = perf && SUBMITTABLE_PERFORMANCE_STATUSES.includes(perf.status);
       const isSubmitted =
-        perf?.status === EmployeePerformanceStatus.SUBMITTED ||
+        !isPerfOpen &&
+        (perf?.status === EmployeePerformanceStatus.SUBMITTED ||
         perf?.status === EmployeePerformanceStatus.RE_SUBMITTED ||
         perf?.status === EmployeePerformanceStatus.COMPLETED ||
         perf?.status === EmployeePerformanceStatus.REVIEWED ||
         review.status === QuarterlyReviewStatus.SUBMITTED ||
         review.status === QuarterlyReviewStatus.RE_SUBMITTED ||
         review.status === QuarterlyReviewStatus.COMPLETED ||
-        review.status === QuarterlyReviewStatus.REVIEWED;
+        review.status === QuarterlyReviewStatus.REVIEWED);
 
       if (isSubmitted) {
         continue;
       }
 
       // 1.1 Check if only 1 day is left to submit appraisal
-      if (isOneDayBeforeDeadline(review.deadlineDate, new Date(now))) {
+      const effectiveDeadline = perf?.editAllowedUntil || review.deadlineDate;
+      if (isOneDayBeforeDeadline(effectiveDeadline, new Date(now))) {
         try {
           await this.noticeService.notifyOneDayDeadlineReminder({
             employeeId: review.employeeId,
             employeeName: review.employeeName || review.employeeId,
             quarter: review.quarter,
             financialYear: review.financialYear,
-            deadlineDate: review.deadlineDate,
+            deadlineDate: effectiveDeadline,
           });
           oneDayReminded += 1;
           this.logger.log(
@@ -160,6 +166,22 @@ export class AppraisalDeadlineCronService {
         },
       });
 
+      const effectiveDeadline = row.editAllowedUntil || review?.deadlineDate;
+      if (effectiveDeadline && isOneDayBeforeDeadline(effectiveDeadline, new Date(now))) {
+        try {
+          await this.noticeService.notifyOneDayDeadlineReminder({
+            employeeId: row.employeeId,
+            employeeName: review?.employeeName || row.employeeId,
+            quarter: row.quarter,
+            financialYear: row.financialYear,
+            deadlineDate: effectiveDeadline,
+          });
+          oneDayReminded += 1;
+        } catch (noticeErr) {
+          this.logger.warn(`Could not send 1-day reminder for open performance: ${noticeErr}`);
+        }
+      }
+
       if (!review?.deadlineDate) {
         continue;
       }
@@ -195,6 +217,21 @@ export class AppraisalDeadlineCronService {
 
       if (!perf?.editAllowedUntil) {
         continue;
+      }
+
+      if (isOneDayBeforeDeadline(perf.editAllowedUntil, new Date(now))) {
+        try {
+          await this.noticeService.notifyOneDayDeadlineReminder({
+            employeeId: review.employeeId,
+            employeeName: review.employeeName || review.employeeId,
+            quarter: review.quarter,
+            financialYear: review.financialYear,
+            deadlineDate: perf.editAllowedUntil,
+          });
+          oneDayReminded += 1;
+        } catch (noticeErr) {
+          this.logger.warn(`Could not send 1-day reminder notice for edit-granted review: ${noticeErr}`);
+        }
       }
 
       const editUntilTime = new Date(perf.editAllowedUntil).getTime();

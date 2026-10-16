@@ -6,6 +6,7 @@ import {
   HttpException,
   HttpStatus,
 } from '@nestjs/common';
+import { Readable } from 'stream';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In } from 'typeorm';
 import { EmployeePerformance } from '../entities/employee_performance.entity';
@@ -39,6 +40,7 @@ import {
 import {
   deadlineHasArrived,
   isLockedReviewStatus,
+  isOneDayBeforeDeadline,
   reviewAccessFlags,
   shouldCloseRenewedAccess,
 } from '../utils/review-access';
@@ -160,6 +162,30 @@ export class EmployeePerformanceService {
         );
       } else {
         await this.linkPerformanceToReview(saved.employeeId, saved.quarter, saved.financialYear, saved.id);
+      }
+
+      const reviewForDraft = await this.reviewRepository.findOne({
+        where: {
+          employeeId: saved.employeeId,
+          quarter: saved.quarter,
+          financialYear: saved.financialYear,
+        },
+      });
+      const effectiveDraftDeadline = saved.editAllowedUntil || reviewForDraft?.deadlineDate;
+      if (
+        effectiveDraftDeadline &&
+        SUBMITTABLE_PERFORMANCE_STATUSES.includes(saved.status) &&
+        isOneDayBeforeDeadline(effectiveDraftDeadline, new Date())
+      ) {
+        void this.noticeService.notifyOneDayDeadlineReminder({
+          employeeId: saved.employeeId,
+          employeeName: reviewForDraft?.employeeName || saved.employeeId,
+          quarter: saved.quarter,
+          financialYear: saved.financialYear,
+          deadlineDate: effectiveDraftDeadline,
+        }).catch((err) => {
+          this.logger.warn(`Could not dispatch 1-day reminder notice on draft save: ${err.message}`);
+        });
       }
 
       const enriched = await this.enrichPerformancesWithEmployeeDetails([saved]);
@@ -567,6 +593,21 @@ export class EmployeePerformanceService {
           financialYear: saved.financialYear,
           editAllowedUntil: saved.editAllowedUntil,
         });
+
+        const effectiveDeadline = saved.editAllowedUntil || review?.deadlineDate;
+        if (effectiveDeadline && isOneDayBeforeDeadline(effectiveDeadline, new Date())) {
+          try {
+            await this.noticeService.notifyOneDayDeadlineReminder({
+              employeeId: saved.employeeId,
+              employeeName: enriched[0].employeeName || saved.employeeId,
+              quarter: saved.quarter,
+              financialYear: saved.financialYear,
+              deadlineDate: effectiveDeadline,
+            });
+          } catch (noticeErr) {
+            this.logger.warn(`Could not dispatch 1-day reminder notice on edit grant: ${noticeErr}`);
+          }
+        }
       }
       return enriched[0];
     } catch (error) {
@@ -892,6 +933,46 @@ export class EmployeePerformanceService {
   }
 
   /**
+   * Stream one stored attachment from MinIO for preview or download
+   */
+  async streamAttachment(objectKey: string, res: any, inline = false): Promise<void> {
+    if (!objectKey) {
+      throw new BadRequestException('Object key is required.');
+    }
+    try {
+      const metaData = await this.documentUploaderService.getMetaData(objectKey);
+      const dataStream = await this.documentUploaderService.downloadFile(objectKey);
+
+      const disposition = inline ? 'inline' : 'attachment';
+      const fileName = metaData?.filename || 'attachment';
+
+      res.set({
+        'Content-Type': metaData?.mimetype || 'application/octet-stream',
+        'Content-Disposition': `${disposition}; filename="${fileName}"`,
+        'Content-Length': dataStream.ContentLength || undefined,
+      });
+
+      if (dataStream.Body instanceof Readable) {
+        dataStream.Body.pipe(res);
+      } else if (dataStream.Body) {
+        const buffer = await (dataStream.Body as any).transformToByteArray();
+        res.send(Buffer.from(buffer));
+      } else {
+        throw new NotFoundException('File content not found.');
+      }
+    } catch (error) {
+      this.logger.error(`Error streaming attachment ${objectKey}: ${error.message}`, error.stack);
+      if (error instanceof HttpException) {
+        throw error;
+      }
+      throw new HttpException(
+        error.message || 'Failed to stream attachment',
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
+  }
+
+  /**
    * Delete a performance record
    */
   async remove(id: number): Promise<{ success: boolean; message: string }> {
@@ -1095,6 +1176,24 @@ export class EmployeePerformanceService {
       ) {
         await this.closeRenewedAccess(review, record);
       }
+
+      const effectiveDeadline = record.editAllowedUntil || review?.deadlineDate;
+      if (
+        effectiveDeadline &&
+        SUBMITTABLE_PERFORMANCE_STATUSES.includes(record.status) &&
+        isOneDayBeforeDeadline(effectiveDeadline, now)
+      ) {
+        void this.noticeService.notifyOneDayDeadlineReminder({
+          employeeId: record.employeeId,
+          employeeName: record.employeeName || record.employeeId,
+          quarter: record.quarter,
+          financialYear: record.financialYear,
+          deadlineDate: effectiveDeadline,
+        }).catch((err) => {
+          this.logger.warn(`Could not dispatch 1-day reminder notice on attachReviewAssignment: ${err.message}`);
+        });
+      }
+
       const access = review
         ? reviewAccessFlags({
           status: record.status,

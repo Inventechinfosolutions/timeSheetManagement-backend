@@ -82,12 +82,25 @@ export const buildReviewCompletedNotice = (
 
 const NOTICE_DATE_LOCALE = 'en-GB';
 
-export const formatAppraisalNoticeDate = (value: Date | string | null | undefined): string => {
-  if (!value) {
-    return 'not set';
+const parseNoticeDate = (value: Date | string | null | undefined): Date | null => {
+  if (!value) return null;
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value;
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    const dmy = /^(\d{2})[-/](\d{2})[-/](\d{4})/.exec(trimmed);
+    if (dmy) {
+      const d = new Date(`${dmy[3]}-${dmy[2]}-${dmy[1]}`);
+      return Number.isNaN(d.getTime()) ? null : d;
+    }
+    const parsed = new Date(trimmed);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
   }
-  const date = value instanceof Date ? value : new Date(value);
-  if (Number.isNaN(date.getTime())) {
+  return null;
+};
+
+export const formatAppraisalNoticeDate = (value: Date | string | null | undefined): string => {
+  const date = parseNoticeDate(value);
+  if (!date) {
     return 'not set';
   }
   return date.toLocaleDateString(NOTICE_DATE_LOCALE, {
@@ -98,11 +111,8 @@ export const formatAppraisalNoticeDate = (value: Date | string | null | undefine
 };
 
 export const formatAppraisalNoticeDateTime = (value: Date | string | null | undefined): string => {
-  if (!value) {
-    return 'not set';
-  }
-  const date = value instanceof Date ? value : new Date(value);
-  if (Number.isNaN(date.getTime())) {
+  const date = parseNoticeDate(value);
+  if (!date) {
     return 'not set';
   }
   return date.toLocaleString(NOTICE_DATE_LOCALE, {
