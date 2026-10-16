@@ -699,22 +699,38 @@ export class QuarterlyReviewService {
         });
       }
 
-      if (params?.name?.trim() || params?.department?.trim()) {
-        const empQb = this.employeeDetailsRepository.createQueryBuilder('emp');
-        if (params.name?.trim()) {
-          empQb.andWhere('emp.fullName LIKE :name', { name: `%${params.name.trim()}%` });
-        }
-        if (params.department?.trim()) {
-          empQb.andWhere('emp.department LIKE :department', { department: `%${params.department.trim()}%` });
-        }
+      if (params?.department?.trim()) {
+        const dept = params.department.trim();
+        const empDeptQb = this.employeeDetailsRepository.createQueryBuilder('emp');
+        empDeptQb.andWhere('emp.department LIKE :department', { department: `%${dept}%` });
+        const matchedDeptEmployees = await empDeptQb.select('emp.employeeId', 'employeeId').getRawMany();
+        const matchedDeptIds = matchedDeptEmployees.map((e) => e.employeeId).filter(Boolean);
 
-        const matchedEmployees = await empQb.select('emp.employeeId', 'employeeId').getRawMany();
-        const matchedIds = matchedEmployees.map((e) => e.employeeId).filter(Boolean);
-
-        if (matchedIds.length === 0) {
-          return { data: [], total: 0, page: params?.page, limit: params?.limit };
+        if (matchedDeptIds.length > 0) {
+          qb.andWhere(
+            '(review.department LIKE :deptParam OR review.employeeId IN (:...matchedDeptIds))',
+            { deptParam: `%${dept}%`, matchedDeptIds },
+          );
+        } else {
+          qb.andWhere('review.department LIKE :deptParam', { deptParam: `%${dept}%` });
         }
-        qb.andWhere('review.employeeId IN (:...matchedIds)', { matchedIds });
+      }
+
+      if (params?.name?.trim()) {
+        const name = params.name.trim();
+        const empNameQb = this.employeeDetailsRepository.createQueryBuilder('emp');
+        empNameQb.andWhere('emp.fullName LIKE :name', { name: `%${name}%` });
+        const matchedNameEmployees = await empNameQb.select('emp.employeeId', 'employeeId').getRawMany();
+        const matchedNameIds = matchedNameEmployees.map((e) => e.employeeId).filter(Boolean);
+
+        if (matchedNameIds.length > 0) {
+          qb.andWhere(
+            '(review.employeeName LIKE :nameParam OR review.employeeId IN (:...matchedNameIds))',
+            { nameParam: `%${name}%`, matchedNameIds },
+          );
+        } else {
+          qb.andWhere('review.employeeName LIKE :nameParam', { nameParam: `%${name}%` });
+        }
       }
 
       if (params?.financialYear?.trim()) {
@@ -1069,6 +1085,21 @@ export class QuarterlyReviewService {
 
     const employeeIds = Array.from(new Set(reviews.map((r) => r.employeeId).filter(Boolean)));
 
+    // Fetch matching employee details for department / name / designation fallback
+    const empDetails = employeeIds.length
+      ? await this.employeeDetailsRepository.find({
+          where: { employeeId: In(employeeIds) },
+        })
+      : [];
+    const empMap = new Map<string, { fullName?: string; department?: string; designation?: string }>();
+    empDetails.forEach((e) => {
+      empMap.set(e.employeeId, {
+        fullName: e.fullName,
+        department: e.department,
+        designation: e.designation,
+      });
+    });
+
     // Fetch matching self-assessments
     const perfRecords = await this.performanceRepository.find({
       where: { employeeId: In(employeeIds) },
@@ -1158,8 +1189,16 @@ export class QuarterlyReviewService {
         !this.isEvaluationFinished(r.status) &&
         deadline.getTime() < today.getTime();
 
+      const empInfo = empMap.get(r.employeeId);
+      const department = r.department || empInfo?.department || null;
+      const employeeName = r.employeeName || empInfo?.fullName || r.employeeId;
+      const designation = r.designation || empInfo?.designation || null;
+
       return {
         ...r,
+        department,
+        employeeName,
+        designation,
         performanceDetails: perf,
         canRequestEdit,
         remainingRequestHours,
