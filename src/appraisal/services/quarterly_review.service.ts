@@ -1277,6 +1277,7 @@ export class QuarterlyReviewService {
           quarter: review.quarter,
           financialYear: review.financialYear,
           deadlineDate: review.deadlineDate,
+          force: true,
         });
       } catch (noticeErr) {
         this.logger.warn(`Could not dispatch 1-day reminder notice on reassign: ${noticeErr}`);

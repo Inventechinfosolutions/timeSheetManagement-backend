@@ -603,10 +603,23 @@ export class EmployeePerformanceService {
               quarter: saved.quarter,
               financialYear: saved.financialYear,
               deadlineDate: effectiveDeadline,
+              force: true,
             });
           } catch (noticeErr) {
             this.logger.warn(`Could not dispatch 1-day reminder notice on edit grant: ${noticeErr}`);
           }
+        }
+      } else {
+        try {
+          await this.noticeService.notifyEmployeeOfEditReject({
+            employeeId: saved.employeeId,
+            employeeName: enriched[0].employeeName || saved.employeeId,
+            quarter: saved.quarter,
+            financialYear: saved.financialYear,
+            reason: dto.responseNote,
+          });
+        } catch (noticeErr) {
+          this.logger.warn(`Could not dispatch edit reject notice: ${noticeErr}`);
         }
       }
       return enriched[0];

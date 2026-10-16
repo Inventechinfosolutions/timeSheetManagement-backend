@@ -58,6 +58,9 @@ export class AppraisalDeadlineCronService implements OnModuleInit {
   async remindOrCloseOpenReviews(): Promise<{ locked: number; reminded: number; oneDayReminded: number }> {
     this.logger.log('Starting appraisal deadline & 1-day reminder check...');
     const now = Date.now();
+    const previousDate = new Date(now);
+    previousDate.setDate(previousDate.getDate() - 1);
+
     let locked = 0;
     let reminded = 0;
     let oneDayReminded = 0;
@@ -116,8 +119,8 @@ export class AppraisalDeadlineCronService implements OnModuleInit {
         }
       }
 
-      // 1.2 Check if deadline has arrived
-      if (!deadlineHasArrived(review.deadlineDate, new Date(now))) {
+      // 1.2 Check if deadline has arrived (compare with previous date, not today)
+      if (!deadlineHasArrived(review.deadlineDate, previousDate)) {
         continue;
       }
 
@@ -136,19 +139,17 @@ export class AppraisalDeadlineCronService implements OnModuleInit {
         `Review #${review.id} for ${review.employeeId} (${review.quarter} ${review.financialYear}) set to LOCKED because the deadline day has arrived.`,
       );
 
-      if (!renewed) {
-        reminded += 1;
-        try {
-          await this.noticeService.notifyDeadlineReminder({
-            employeeId: review.employeeId,
-            employeeName: review.employeeName || review.employeeId,
-            quarter: review.quarter,
-            financialYear: review.financialYear,
-            deadlineDate: review.deadlineDate,
-          });
-        } catch (noticeErr) {
-          this.logger.warn(`Could not send reminder notice: ${noticeErr}`);
-        }
+      reminded += 1;
+      try {
+        await this.noticeService.notifyDeadlineReminder({
+          employeeId: review.employeeId,
+          employeeName: review.employeeName || review.employeeId,
+          quarter: review.quarter,
+          financialYear: review.financialYear,
+          deadlineDate: review.deadlineDate,
+        });
+      } catch (noticeErr) {
+        this.logger.warn(`Could not send reminder notice: ${noticeErr}`);
       }
     }
 
@@ -186,7 +187,8 @@ export class AppraisalDeadlineCronService implements OnModuleInit {
         continue;
       }
 
-      if (deadlineHasArrived(review.deadlineDate)) {
+      // Lock if deadline has arrived (compare with previous date, not today)
+      if (deadlineHasArrived(review.deadlineDate, previousDate)) {
         if (!isLockedReviewStatus(row.status)) {
           row.status = EmployeePerformanceStatus.LOCKED;
           row.lastModifiedDate = new Date();
@@ -197,6 +199,19 @@ export class AppraisalDeadlineCronService implements OnModuleInit {
           review.status = QuarterlyReviewStatus.LOCKED;
           await this.reviewRepository.save(review);
           locked += 1;
+
+          reminded += 1;
+          try {
+            await this.noticeService.notifyDeadlineReminder({
+              employeeId: row.employeeId,
+              employeeName: review?.employeeName || row.employeeId,
+              quarter: row.quarter,
+              financialYear: row.financialYear,
+              deadlineDate: review.deadlineDate,
+            });
+          } catch (noticeErr) {
+            this.logger.warn(`Could not send reminder notice in section 2: ${noticeErr}`);
+          }
         }
       }
     }

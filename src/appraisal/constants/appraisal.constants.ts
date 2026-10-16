@@ -181,3 +181,14 @@ export const buildEditGrantedNotice = (
   title: `Appraisal edit access approved (${context.quarter} ${context.financialYear})`,
   message: `You can edit your ${context.quarter} ${context.financialYear} appraisal until ${formatAppraisalNoticeDateTime(context.editAllowedUntil)}.`,
 });
+
+export const buildEditRejectedNotice = (
+  context: Pick<AppraisalNoticeContext, 'quarter' | 'financialYear'> & {
+    reason?: string | null;
+  },
+): AppraisalNoticeContent => ({
+  title: `Appraisal edit request rejected (${context.quarter} ${context.financialYear})`,
+  message: context.reason?.trim()
+    ? `Your request for edit access to the ${context.quarter} ${context.financialYear} appraisal was rejected by your manager.\nReason: ${context.reason.trim()}`
+    : `Your request for edit access to the ${context.quarter} ${context.financialYear} appraisal was rejected by your manager.`,
+});

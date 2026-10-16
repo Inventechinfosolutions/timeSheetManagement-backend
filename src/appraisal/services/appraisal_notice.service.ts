@@ -12,6 +12,7 @@ import {
   buildAssignmentNotice,
   buildDeadlineReminderNotice,
   buildEditGrantedNotice,
+  buildEditRejectedNotice,
   buildEditRequestNotice,
   buildEmployeeEditRequestSentNotice,
   buildEmployeeSubmissionNotice,
@@ -19,6 +20,7 @@ import {
   buildReassignmentNotice,
   buildReviewCompletedNotice,
   buildSubmissionNotice,
+  formatAppraisalNoticeDate,
 } from '../constants/appraisal.constants';
 
 export interface AppraisalNoticeInput {
@@ -43,20 +45,23 @@ export class AppraisalNoticeService {
   ) {}
 
   async notifyDeadlineReminder(
-    input: AppraisalNoticeInput & { deadlineDate: Date | string | null },
+    input: AppraisalNoticeInput & { deadlineDate: Date | string | null; force?: boolean },
   ): Promise<void> {
+    const formattedDeadline = formatAppraisalNoticeDate(input.deadlineDate);
     const marker = `${input.quarter} ${input.financialYear}`;
-    const sent = await this.notificationRepository.find({
-      where: { employeeId: input.employeeId, type: AppraisalNoticeType.DEADLINE_REMINDER },
-    });
-    if (sent.some((row) => row.message.includes(marker))) {
-      return;
+    if (!input.force) {
+      const sent = await this.notificationRepository.find({
+        where: { employeeId: input.employeeId.trim(), type: AppraisalNoticeType.DEADLINE_REMINDER },
+      });
+      if (sent.some((row) => row.message.includes(marker) && (formattedDeadline === 'not set' || row.message.includes(formattedDeadline)))) {
+        return;
+      }
     }
     const employee = await this.employeeDetailsRepository.findOne({
-      where: { employeeId: input.employeeId },
+      where: { employeeId: input.employeeId.trim() },
     });
     await this.deliver(
-      input.employeeId,
+      input.employeeId.trim(),
       employee?.email,
       employee?.fullName || input.employeeName,
       buildDeadlineReminderNotice(input),
@@ -65,17 +70,20 @@ export class AppraisalNoticeService {
   }
 
   async notifyOneDayDeadlineReminder(
-    input: AppraisalNoticeInput & { deadlineDate: Date | string | null },
+    input: AppraisalNoticeInput & { deadlineDate: Date | string | null; force?: boolean },
   ): Promise<void> {
+    const formattedDeadline = formatAppraisalNoticeDate(input.deadlineDate);
     const marker = `${input.quarter} ${input.financialYear}`;
-    const sent = await this.notificationRepository.find({
-      where: {
-        employeeId: input.employeeId.trim(),
-        type: AppraisalNoticeType.ONE_DAY_DEADLINE_REMINDER,
-      },
-    });
-    if (sent.some((row) => row.message.includes(marker))) {
-      return;
+    if (!input.force) {
+      const sent = await this.notificationRepository.find({
+        where: {
+          employeeId: input.employeeId.trim(),
+          type: AppraisalNoticeType.ONE_DAY_DEADLINE_REMINDER,
+        },
+      });
+      if (sent.some((row) => row.message.includes(marker) && (formattedDeadline === 'not set' || row.message.includes(formattedDeadline)))) {
+        return;
+      }
     }
     const employee = await this.employeeDetailsRepository.findOne({
       where: { employeeId: input.employeeId.trim() },
@@ -165,6 +173,21 @@ export class AppraisalNoticeService {
       employee?.fullName || input.employeeName,
       buildEditGrantedNotice(input),
       AppraisalNoticeType.EDIT_GRANTED,
+    );
+  }
+
+  async notifyEmployeeOfEditReject(
+    input: AppraisalNoticeInput & { reason?: string | null },
+  ): Promise<void> {
+    const employee = await this.employeeDetailsRepository.findOne({
+      where: { employeeId: input.employeeId.trim() },
+    });
+    await this.deliver(
+      input.employeeId.trim(),
+      employee?.email,
+      employee?.fullName || input.employeeName,
+      buildEditRejectedNotice(input),
+      AppraisalNoticeType.EDIT_REJECTED,
     );
   }
 
