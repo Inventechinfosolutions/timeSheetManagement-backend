@@ -77,7 +77,7 @@ export const buildReviewCompletedNotice = (
   context: Pick<AppraisalNoticeContext, 'quarter' | 'financialYear'>,
 ): AppraisalNoticeContent => ({
   title: `Appraisal review completed (${context.quarter} ${context.financialYear})`,
-  message: `Your ${context.quarter} ${context.financialYear} appraisal review is complete. You can log in and view your ratings and feedback.`,
+  message: `Your ${context.quarter} ${context.financialYear} appraisal review is complete. You can view your ratings and feedback.`,
 });
 
 const NOTICE_DATE_LOCALE = 'en-GB';
@@ -128,7 +128,7 @@ export const buildDeadlineReminderNotice = (
   context: AppraisalNoticeContext & { deadlineDate: Date | string | null },
 ): AppraisalNoticeContent => ({
   title: `Appraisal deadline reminder (${context.quarter} ${context.financialYear})`,
-  message: `Your ${context.quarter} ${context.financialYear} appraisal is still not submitted. Please submit it before ${formatAppraisalNoticeDate(context.deadlineDate)}.`,
+  message: `The deadline for your ${context.quarter} ${context.financialYear} appraisal has passed. Please request access to make changes to your review.`,
 });
 
 export const buildOneDayDeadlineReminderNotice = (
