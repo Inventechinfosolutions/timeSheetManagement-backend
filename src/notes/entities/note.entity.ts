@@ -5,12 +5,18 @@ import {
   ManyToOne,
   OneToMany,
   JoinColumn,
+  Index,
 } from 'typeorm';
 import { BaseEntity } from '../../common/entities/base.entity';
 import { NoteType } from '../enums/note-type.enum';
 import { DocumentDetailsDto } from '../../common/document-uploader/dto/documentdetails.dto';
 
 @Entity('notes')
+@Index('IDX_NOTES_PARENT_ID', ['parentId'])
+@Index('IDX_NOTES_TYPE_ARCHIVED_PARENT', ['type', 'isArchived', 'parentId'])
+@Index('IDX_NOTES_EMPLOYEE_ID', ['employeeId'])
+@Index('IDX_NOTES_USER_ID', ['userId'])
+@Index('IDX_NOTES_IS_PINNED_UPDATED_AT', ['isPinned', 'updatedAt'])
 export class Note extends BaseEntity {
   @PrimaryGeneratedColumn()
   id: number;
