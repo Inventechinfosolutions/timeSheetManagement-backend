@@ -21,6 +21,7 @@ import { MailService } from '../../common/mail/mail.service';
 import { DocumentUploaderService } from '../../common/document-uploader/services/document-uploader.service';
 import { EntityType, ReferenceType } from '../../common/document-uploader/models/documentmetainfo.model';
 import { getNoteEmailTemplate, stripAttachmentUiFromHtml } from '../../common/mail/email-templates';
+import { cleanDescriptionSnippet } from '../../notes/utils/clean-description.util';
 
 export function parseNotePermissions(
   val?: any,
@@ -577,7 +578,7 @@ export class InboxService {
               title: note.title,
               description:
                 item.hasDescription !== false
-                  ? stripAttachmentUiFromHtml(note.description || '')
+                  ? cleanDescriptionSnippet(note.description || '', 200)
                   : '',
               type: note.type,
               projectName: note.projectName,

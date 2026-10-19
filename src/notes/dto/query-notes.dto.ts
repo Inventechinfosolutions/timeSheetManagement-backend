@@ -32,4 +32,9 @@ export class QueryNotesDto {
   @Transform(({ value }) => value === 'true' || value === true)
   @IsBoolean()
   isArchived?: boolean;
+
+  @IsOptional()
+  @Transform(({ value }) => value === 'true' || value === true)
+  @IsBoolean()
+  full?: boolean;
 }

@@ -31,6 +31,7 @@ import axios from 'axios';
 import FormData from 'form-data';
 import dayjs from 'dayjs';
 import PDFDocument from 'pdfkit';
+import { cleanDescriptionSnippet } from '../utils/clean-description.util';
 
 interface UserContext {
   userId: string | null;
@@ -265,6 +266,29 @@ export class NotesService {
       const total = data.length;
 
       await this.attachStoredFiles(data);
+
+      if (!query.full) {
+        for (const note of data) {
+          
+          if (note.description) {
+            note.description = cleanDescriptionSnippet(note.description, 300);
+          }
+          if (note.subNotes && note.subNotes.length > 0) {
+            for (const sub of note.subNotes) {
+              if (sub.description) {
+                sub.description = cleanDescriptionSnippet(sub.description, 300);
+              }
+              if (sub.subNotes && sub.subNotes.length > 0) {
+                for (const nested of sub.subNotes) {
+                  if (nested.description) {
+                    nested.description = cleanDescriptionSnippet(nested.description, 300);
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
 
       return { data, total };
     } catch (error) {
