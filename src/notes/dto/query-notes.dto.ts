@@ -1,5 +1,5 @@
-import { IsEnum, IsOptional, IsString, IsBoolean, IsDateString } from 'class-validator';
-import { Transform } from 'class-transformer';
+import { IsEnum, IsOptional, IsString, IsBoolean, IsDateString, IsInt, Min } from 'class-validator';
+import { Transform, Type } from 'class-transformer';
 import { NoteType } from '../enums/note-type.enum';
 
 export class QueryNotesDto {
@@ -32,4 +32,22 @@ export class QueryNotesDto {
   @Transform(({ value }) => value === 'true' || value === true)
   @IsBoolean()
   isArchived?: boolean;
+
+  @IsOptional()
+  @Transform(({ value }) => value === 'true' || value === true)
+  @IsBoolean()
+  full?: boolean;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  page?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  limit?: number;
 }
+

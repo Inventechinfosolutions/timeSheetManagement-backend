@@ -31,6 +31,7 @@ import axios from 'axios';
 import FormData from 'form-data';
 import dayjs from 'dayjs';
 import PDFDocument from 'pdfkit';
+import { cleanDescriptionSnippet } from '../utils/clean-description.util';
 
 interface UserContext {
   userId: string | null;
@@ -124,9 +125,17 @@ export class NotesService {
   /**
    * Retrieve all root notes with nested sub-notes and attachments according to query filters.
    */
-  async findAll(query: QueryNotesDto, user: any): Promise<{ data: Note[]; total: number }> {
+  async findAll(
+    query: QueryNotesDto,
+    user: any,
+  ): Promise<{ data: Note[]; total: number; page: number; limit: number; totalPages: number }> {
     try {
       const { userId, employeeId } = this.extractUserInfo(user);
+
+      // Pagination with default limit 5
+      const page = query.page && Number(query.page) > 0 ? Number(query.page) : 1;
+      const limit = query.limit !== undefined && query.limit !== null ? Number(query.limit) : 5;
+      const skip = (page - 1) * limit;
 
       const qb = this.noteRepo
         .createQueryBuilder('note')
@@ -257,16 +266,68 @@ export class NotesService {
       }
 
       qb.orderBy('note.isPinned', 'DESC')
-        .addOrderBy('note.updatedAt', 'DESC')
-        .addOrderBy('subNote.orderIndex', 'ASC')
-        .addOrderBy('subNote.createdAt', 'ASC');
+        .addOrderBy('note.updatedAt', 'DESC');
 
-      const data = await qb.getMany();
-      const total = data.length;
+      if (limit > 0) {
+        qb.skip(skip).take(limit);
+      }
+
+      const [data, total] = await qb.getManyAndCount();
+
+      // Ensure sub-notes and nested sub-notes are ordered consistently
+      for (const note of data) {
+        if (note.subNotes && note.subNotes.length > 0) {
+          note.subNotes.sort((a, b) => {
+            const orderDiff = (a.orderIndex ?? 0) - (b.orderIndex ?? 0);
+            if (orderDiff !== 0) return orderDiff;
+            return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+          });
+          for (const sub of note.subNotes) {
+            if (sub.subNotes && sub.subNotes.length > 0) {
+              sub.subNotes.sort((a, b) => {
+                const orderDiff = (a.orderIndex ?? 0) - (b.orderIndex ?? 0);
+                if (orderDiff !== 0) return orderDiff;
+                return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+              });
+            }
+          }
+        }
+      }
 
       await this.attachStoredFiles(data);
 
-      return { data, total };
+      if (!query.full) {
+        for (const note of data) {
+          
+          if (note.description) {
+            note.description = cleanDescriptionSnippet(note.description, 300);
+          }
+          if (note.subNotes && note.subNotes.length > 0) {
+            for (const sub of note.subNotes) {
+              if (sub.description) {
+                sub.description = cleanDescriptionSnippet(sub.description, 300);
+              }
+              if (sub.subNotes && sub.subNotes.length > 0) {
+                for (const nested of sub.subNotes) {
+                  if (nested.description) {
+                    nested.description = cleanDescriptionSnippet(nested.description, 300);
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+
+      const totalPages = limit > 0 && total > 0 ? Math.ceil(total / limit) : (total > 0 ? 1 : 0);
+
+      return {
+        data,
+        total,
+        page: limit > 0 ? page : 1,
+        limit: limit > 0 ? limit : total,
+        totalPages,
+      };
     } catch (error) {
       this.logger.error(`Failed to fetch notes: ${error.message}`, error.stack);
       throw new InternalServerErrorException('Failed to fetch notes');

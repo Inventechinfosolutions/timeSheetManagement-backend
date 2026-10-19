@@ -1,6 +1,7 @@
 import { NestFactory } from '@nestjs/core';
 import { Logger, ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import compression from 'compression';
 import cookieParser from 'cookie-parser';
 import express from 'express';
 import { json, urlencoded } from 'express';
@@ -9,6 +10,9 @@ import { AppModule } from './app.module';
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
   const configService = app.get(ConfigService);
+
+  // Enable gzip compression for all HTTP responses
+  app.use(compression());
 
   // Increase body parser limits to allow large note content
   app.use(express.json({ limit: '100mb' }));
