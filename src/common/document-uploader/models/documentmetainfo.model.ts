@@ -1,5 +1,5 @@
 import { BaseEntity } from 'src/common/core/models/base.entity';
-import { Column, Entity, PrimaryGeneratedColumn } from 'typeorm';
+import { Column, Entity, PrimaryGeneratedColumn, Index } from 'typeorm';
 
 export enum ReferenceType {
   PRODUCT_IMG = 'PRODUCT_IMG',
@@ -23,6 +23,7 @@ export enum EntityType {
 }
 
 @Entity('object_store')
+@Index('IDX_OBJECT_STORE_ENTITY', ['entityType', 'entityId'])
 export class DocumentMetaInfo extends BaseEntity {
   @PrimaryGeneratedColumn('uuid')
   id: string;
