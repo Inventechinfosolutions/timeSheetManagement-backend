@@ -195,7 +195,11 @@ export class QuarterlyReviewService {
         employeeName: emp?.fullName || createDto.employeeId,
         department: emp?.department || null,
         designation: emp?.designation || null,
-        assignedBy: createDto.assignedBy || ReviewAssignedBy.MANAGER,
+        assignedBy:
+          createDto.assignedBy ||
+          (assignerId?.toLowerCase() === 'admin'
+            ? ReviewAssignedBy.ADMIN
+            : ReviewAssignedBy.MANAGER),
         assignerId,
         managerName,
         assignedDate: createDto.assignedDate

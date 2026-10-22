@@ -1157,6 +1157,8 @@ export class EmployeePerformanceService {
         'quarter',
         'financialYear',
         'assignerId',
+        'assignedBy',
+        'managerName',
         'assignedDate',
         'deadlineDate',
         'description',
@@ -1221,7 +1223,14 @@ export class EmployeePerformanceService {
         : null;
       withAccess.push({
         ...record,
-        assignedBy: review ? nameById.get(review.assignerId) || null : null,
+        assignedBy: review
+          ? nameById.get(review.assignerId) ||
+            (review.assignerId?.toLowerCase() === 'admin' ? 'Admin' : null) ||
+            (review.assignedBy?.toLowerCase() === 'admin' ? 'Admin' : null) ||
+            review.managerName ||
+            review.assignerId ||
+            null
+          : null,
         assignedDate: review?.assignedDate ?? null,
         deadlineDate: review?.deadlineDate ?? null,
         description: review?.description ?? null,
