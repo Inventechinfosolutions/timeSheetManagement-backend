@@ -358,7 +358,7 @@ export class NotesService {
         throw new NotFoundException(`Note with ID ${id} not found`);
       }
 
-      await this.populateAttachments([note]);
+      await this.attachStoredFiles([note]);
 
       if (user) {
         const { userId, employeeId } = this.extractUserInfo(user);
@@ -1835,21 +1835,20 @@ if (!doclingUrl) {
    */
   private async linkAttachmentKeys(noteId: number, keys?: string[]): Promise<void> {
     if (!keys || keys.length === 0) return;
+    const validKeys = keys.filter(Boolean);
+    if (validKeys.length === 0) return;
     try {
-      for (const key of keys) {
-        if (!key) continue;
-        await this.documentRepo
-          .createQueryBuilder()
-          .update(DocumentMetaInfo)
-          .set({
-            refId: noteId,
-            entityId: noteId,
-            refType: ReferenceType.NOTE_ATTACHMENT,
-            entityType: EntityType.NOTE,
-          })
-          .where('(id = :key OR s3Key = :key)', { key })
-          .execute();
-      }
+      await this.documentRepo
+        .createQueryBuilder()
+        .update(DocumentMetaInfo)
+        .set({
+          refId: noteId,
+          entityId: noteId,
+          refType: ReferenceType.NOTE_ATTACHMENT,
+          entityType: EntityType.NOTE,
+        })
+        .where('(id IN (:...validKeys) OR s3Key IN (:...validKeys))', { validKeys })
+        .execute();
     } catch (err: any) {
       this.logger.warn(
         `Failed to link pre-uploaded attachments to note ${noteId}: ${err.message}`,
