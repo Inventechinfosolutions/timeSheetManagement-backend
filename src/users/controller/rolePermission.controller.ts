@@ -23,7 +23,7 @@ import { Pagination } from 'nestjs-typeorm-paginate';
 import { RolePermissionDto } from '../dto/rolePermission.dto';
 import { RolePermissionService } from '../service/rolePermission.service';
 
-@Controller('api/role-permission')
+@Controller('role-permission')
 @UseInterceptors(ClassSerializerInterceptor)
 @ApiBearerAuth()
 @ApiTags('role-permissions')

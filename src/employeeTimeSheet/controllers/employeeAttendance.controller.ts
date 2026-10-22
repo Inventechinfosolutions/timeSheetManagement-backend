@@ -247,26 +247,6 @@ export class EmployeeAttendanceController {
     }
   }
 
-  @Get(':id')
-  @ApiOperation({ summary: 'Get a single employee attendance record by ID' })
-  @ApiResponse({
-    status: 200,
-    description: 'The attendance record with the specified ID.',
-  })
-  @ApiResponse({
-    status: 404,
-    description: 'Not Found. The attendance record does not exist.',
-  })
-  async findOne(@Param('id', ParseIntPipe) id: number) {
-    try {
-      this.logger.log(`Fetching attendance record with ID: ${id}`);
-      return await this.employeeAttendanceService.findOne(id);
-    } catch (error) {
-      this.logger.error(`Error fetching attendance record ${id}: ${error.message}`, error.stack);
-      throw error;
-    }
-  }
-
   @UseGuards(JwtAuthGuard, ReceptionistReadOnlyGuard)
   @Get('check-entry-block')
   @ApiOperation({ summary: 'Check if an attendance entry is blocked' })
@@ -285,6 +265,26 @@ export class EmployeeAttendanceController {
       return await this.employeeAttendanceService.checkEntryBlock(employeeId, date);
     } catch (error) {
       this.logger.error(`Error checking entry block: ${error.message}`, error.stack);
+      throw error;
+    }
+  }
+
+  @Get(':id')
+  @ApiOperation({ summary: 'Get a single employee attendance record by ID' })
+  @ApiResponse({
+    status: 200,
+    description: 'The attendance record with the specified ID.',
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Not Found. The attendance record does not exist.',
+  })
+  async findOne(@Param('id', ParseIntPipe) id: number) {
+    try {
+      this.logger.log(`Fetching attendance record with ID: ${id}`);
+      return await this.employeeAttendanceService.findOne(id);
+    } catch (error) {
+      this.logger.error(`Error fetching attendance record ${id}: ${error.message}`, error.stack);
       throw error;
     }
   }

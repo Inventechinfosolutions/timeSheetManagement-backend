@@ -591,6 +591,14 @@ export class InboxService {
         });
       }
 
+      if (query?.page !== undefined || query?.limit !== undefined || query?.pageSize !== undefined) {
+        const page = query.page && Number(query.page) > 0 ? Number(query.page) : 1;
+        const rawLimit = query.limit !== undefined && query.limit !== null ? query.limit : query.pageSize;
+        const limit = rawLimit !== undefined && rawLimit !== null ? Number(rawLimit) : 5;
+        const start = (page - 1) * limit;
+        return results.slice(start, start + limit);
+      }
+
       return results;
     } catch (error: any) {
       this.logger.error(`Failed to get user inbox: ${error.message}`, error.stack);
