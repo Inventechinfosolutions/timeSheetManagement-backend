@@ -751,17 +751,37 @@ export class QuarterlyReviewService {
 
       if (params?.assignerId?.trim()) {
         const assignerId = params.assignerId.trim();
+        const managerDetail = await this.employeeDetailsRepository.findOne({
+          where: { employeeId: assignerId },
+        });
+        const managerDept = managerDetail?.department?.trim();
+
         const teamMappings = await this.managerMappingRepository.find({
           where: { managerId: assignerId },
         });
         const teamEmployeeIds = teamMappings.map((m) => m.employeeId).filter(Boolean);
-        if (teamEmployeeIds.length > 0) {
-          qb.andWhere(
-            '(review.assignerId = :assignerId OR review.employeeId IN (:...teamEmployeeIds))',
-            { assignerId, teamEmployeeIds },
-          );
+
+        if (managerDept) {
+          if (teamEmployeeIds.length > 0) {
+            qb.andWhere(
+              '(review.department LIKE :managerDept OR review.assignerId = :assignerId OR review.employeeId IN (:...teamEmployeeIds))',
+              { managerDept: `%${managerDept}%`, assignerId, teamEmployeeIds },
+            );
+          } else {
+            qb.andWhere(
+              '(review.department LIKE :managerDept OR review.assignerId = :assignerId)',
+              { managerDept: `%${managerDept}%`, assignerId },
+            );
+          }
         } else {
-          qb.andWhere('review.assignerId = :assignerId', { assignerId });
+          if (teamEmployeeIds.length > 0) {
+            qb.andWhere(
+              '(review.assignerId = :assignerId OR review.employeeId IN (:...teamEmployeeIds))',
+              { assignerId, teamEmployeeIds },
+            );
+          } else {
+            qb.andWhere('review.assignerId = :assignerId', { assignerId });
+          }
         }
       }
 
@@ -1087,7 +1107,12 @@ export class QuarterlyReviewService {
   ): Promise<EnrichedQuarterlyReview[]> {
     if (!reviews.length) return [];
 
-    const employeeIds = Array.from(new Set(reviews.map((r) => r.employeeId).filter(Boolean)));
+    const employeeIds = Array.from(
+      new Set([
+        ...reviews.map((r) => r.employeeId),
+        ...reviews.map((r) => r.assignerId),
+      ].filter(Boolean)),
+    );
 
     // Fetch matching employee details for department / name / designation fallback
     const empDetails = employeeIds.length
@@ -1194,15 +1219,21 @@ export class QuarterlyReviewService {
         deadline.getTime() < today.getTime();
 
       const empInfo = empMap.get(r.employeeId);
+      const assignerInfo = empMap.get(r.assignerId);
       const department = r.department || empInfo?.department || null;
       const employeeName = r.employeeName || empInfo?.fullName || r.employeeId;
       const designation = r.designation || empInfo?.designation || null;
+      const managerName =
+        r.managerName && r.managerName !== r.assignerId && r.managerName !== 'Reporting Manager'
+          ? r.managerName
+          : assignerInfo?.fullName || (r.assignedBy === ReviewAssignedBy.ADMIN ? 'Admin' : r.managerName || r.assignerId);
 
       return {
         ...r,
         department,
         employeeName,
         designation,
+        managerName,
         performanceDetails: perf,
         canRequestEdit,
         remainingRequestHours,
