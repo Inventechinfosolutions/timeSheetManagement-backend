@@ -1,5 +1,6 @@
 import { Module, forwardRef } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { MulterModule } from '@nestjs/platform-express';
 import { Note } from './entities/note.entity';
 import { NoteRecipient, MasterNotePermission } from './entities/note-recipient.entity';
 import { NotesService } from './services/notes.service';
@@ -15,6 +16,12 @@ import { Inbox } from '../inbox/entities/inbox.entity';
     TypeOrmModule.forFeature([Note, DocumentMetaInfo, NoteRecipient, MasterNotePermission, Inbox]),
     DocumentUploaderModule,
     forwardRef(() => InboxModule),
+    MulterModule.register({
+      limits: {
+        fieldSize: 100 * 1024 * 1024, // 100 MB for non-file fields (e.g. description)
+        fileSize: 100 * 1024 * 1024,  // 100 MB for file attachments
+      },
+    }),
   ],
   controllers: [NotesController],
   providers: [NotesService, NotePermissionGuard],

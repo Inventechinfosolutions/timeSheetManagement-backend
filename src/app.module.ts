@@ -33,6 +33,7 @@ import * as redisStore from 'cache-manager-redis-store';
 import * as fs from 'fs';
 import * as path from 'path';
 import { CachingUtil } from './common/utils/caching.util';
+import { MulterModule } from '@nestjs/platform-express';
 
 function getEnvFiles(): string[] {
   if (!process.env.PROFILE) {
@@ -56,6 +57,12 @@ function getEnvFiles(): string[] {
     ConfigModule.forRoot({
       isGlobal: true,
       envFilePath: getEnvFiles(),
+    }),
+    MulterModule.register({
+      limits: {
+        fieldSize: 100 * 1024 * 1024, // 100 MB for non-file fields
+        fileSize: 100 * 1024 * 1024,  // 100 MB for file attachments
+      },
     }),
     DatabaseModule,
     UsersModule,
