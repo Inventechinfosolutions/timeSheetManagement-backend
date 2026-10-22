@@ -128,13 +128,14 @@ export class NotesService {
   async findAll(
     query: QueryNotesDto,
     user: any,
-  ): Promise<{ data: Note[]; total: number; page: number; limit: number; totalPages: number }> {
+  ): Promise<{ data: Note[]; total: number; page: number; limit: number; totalPages: number; pageSize: number; currentPage: number }> {
     try {
       const { userId, employeeId } = this.extractUserInfo(user);
 
       // Pagination with default limit 5
       const page = query.page && Number(query.page) > 0 ? Number(query.page) : 1;
-      const limit = query.limit !== undefined && query.limit !== null ? Number(query.limit) : 5;
+      const rawLimit = query.limit !== undefined && query.limit !== null ? query.limit : query.pageSize;
+      const limit = rawLimit !== undefined && rawLimit !== null ? Number(rawLimit) : 5;
       const skip = (page - 1) * limit;
 
       const qb = this.noteRepo
@@ -320,13 +321,17 @@ export class NotesService {
       }
 
       const totalPages = limit > 0 && total > 0 ? Math.ceil(total / limit) : (total > 0 ? 1 : 0);
+      const resolvedPage = limit > 0 ? page : 1;
+      const resolvedLimit = limit > 0 ? limit : total;
 
       return {
         data,
         total,
-        page: limit > 0 ? page : 1,
-        limit: limit > 0 ? limit : total,
+        page: resolvedPage,
+        limit: resolvedLimit,
         totalPages,
+        pageSize: resolvedLimit,
+        currentPage: resolvedPage,
       };
     } catch (error) {
       this.logger.error(`Failed to fetch notes: ${error.message}`, error.stack);

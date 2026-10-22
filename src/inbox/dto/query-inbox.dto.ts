@@ -23,4 +23,20 @@ export class QueryInboxDto {
   @IsOptional()
   @IsEnum(InboxFolder)
   folder?: InboxFolder;
+
+  @ApiPropertyOptional({ description: 'Page number for pagination (starts at 1)', default: 1 })
+  @IsOptional()
+  @Type(() => Number)
+  page?: number;
+
+  @ApiPropertyOptional({ description: 'Number of items per page (default: 5)', default: 5 })
+  @IsOptional()
+  @Type(() => Number)
+  limit?: number;
+
+  @ApiPropertyOptional({ description: 'Alias for limit (items per page, default: 5)', default: 5 })
+  @IsOptional()
+  @Type(() => Number)
+  pageSize?: number;
 }
+
