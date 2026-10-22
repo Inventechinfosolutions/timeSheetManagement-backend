@@ -195,6 +195,7 @@ export class NotesController {
   @ApiQuery({ name: 'page', type: Number, required: false, description: 'Page number for pagination (starts at 1)', default: 1 })
   @ApiQuery({ name: 'limit', type: Number, required: false, description: 'Number of notes per page (default: 5)', default: 5 })
   @ApiQuery({ name: 'full', type: Boolean, required: false, description: 'Include full untruncated note description' })
+  @ApiQuery({ name: 'includeSubNotes', type: Boolean, required: false, description: 'Include nested child sub-notes (true/false, default: false for fast listing)' })
   async findAll(@Query() query: QueryNotesDto, @Req() req: any) {
     return await this.notesService.findAll(query, req.user);
   }
