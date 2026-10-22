@@ -30,12 +30,13 @@ import { UpdateNoteDto } from '../dto/update-note.dto';
 import { CreateSubNoteDto } from '../dto/create-sub-note.dto';
 import { QueryNotesDto } from '../dto/query-notes.dto';
 import { NO_CACHE_HEADERS } from '../../common/utils/no-cache-headers';
-import { ApiOperation, ApiTags } from '@nestjs/swagger';
+import { ApiOperation, ApiTags, ApiResponse,ApiQuery } from '@nestjs/swagger';
 import { Response } from 'express';
 import { Readable } from 'stream';
 
 import { Inject, forwardRef } from '@nestjs/common';
 import { InboxService } from '../../inbox/services/inbox.service';
+import { NoteType } from '../enums';
 
 @ApiTags('Notes')
 @Controller('notes')
@@ -175,7 +176,25 @@ export class NotesController {
   // =========================================================================
 
   @Get()
-  @ApiOperation({ summary: 'Get all notes matching filter query' })
+  @ApiOperation({
+    summary: 'Get all notes matching filter query with pagination (default: 5 items per page)',
+    description:
+      'Retrieve paginated root notes (with sub-notes). Default limit is 5 per page. Accepts page, limit (or pageSize), type, isArchived, search, etc.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Returns paginated notes { data, total, page, limit, totalPages }',
+  })
+  @ApiQuery({ name: 'type', enum: NoteType, required: false, description: 'Filter by note type (PROJECT, PERSONAL)' })
+  @ApiQuery({ name: 'isArchived', type: Boolean, required: false, description: 'Filter by archived status (true/false, default: false)' })
+  @ApiQuery({ name: 'search', type: String, required: false, description: 'Search term for title, project name, or creator' })
+  @ApiQuery({ name: 'projectName', type: String, required: false, description: 'Filter by project name' })
+  @ApiQuery({ name: 'isPinned', type: Boolean, required: false, description: 'Filter by pinned status (true/false)' })
+  @ApiQuery({ name: 'fromDate', type: String, required: false, description: 'Filter notes created on or after date (YYYY-MM-DD)' })
+  @ApiQuery({ name: 'toDate', type: String, required: false, description: 'Filter notes created on or before date (YYYY-MM-DD)' })
+  @ApiQuery({ name: 'page', type: Number, required: false, description: 'Page number for pagination (starts at 1)', default: 1 })
+  @ApiQuery({ name: 'limit', type: Number, required: false, description: 'Number of notes per page (default: 5)', default: 5 })
+  @ApiQuery({ name: 'full', type: Boolean, required: false, description: 'Include full untruncated note description' })
   async findAll(@Query() query: QueryNotesDto, @Req() req: any) {
     return await this.notesService.findAll(query, req.user);
   }
