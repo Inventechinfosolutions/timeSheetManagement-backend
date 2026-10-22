@@ -142,63 +142,64 @@ export class NotesService {
         .createQueryBuilder('note')
         .leftJoinAndSelect('note.subNotes', 'subNote')
         .leftJoinAndSelect('subNote.subNotes', 'nestedSubNote')
-        .select([
-          'note.id',
-          'note.title',
-          'note.description',
-          'note.type',
-          'note.projectName',
-          'note.parentId',
-          'note.userId',
-          'note.employeeId',
-          'note.color',
-          'note.isPinned',
-          'note.isArchived',
-          'note.autoSave',
-          'note.isVertical',
-          'note.orderIndex',
-          'note.createdAt',
-          'note.updatedAt',
-          'note.createdBy',
-          'note.updatedBy',
-          'subNote.id',
-          'subNote.title',
-          'subNote.description',
-          'subNote.type',
-          'subNote.projectName',
-          'subNote.parentId',
-          'subNote.userId',
-          'subNote.employeeId',
-          'subNote.color',
-          'subNote.isPinned',
-          'subNote.isArchived',
-          'subNote.autoSave',
-          'subNote.isVertical',
-          'subNote.orderIndex',
-          'subNote.createdAt',
-          'subNote.updatedAt',
-          'subNote.createdBy',
-          'subNote.updatedBy',
-          'nestedSubNote.id',
-          'nestedSubNote.title',
-          'nestedSubNote.description',
-          'nestedSubNote.type',
-          'nestedSubNote.projectName',
-          'nestedSubNote.parentId',
-          'nestedSubNote.userId',
-          'nestedSubNote.employeeId',
-          'nestedSubNote.color',
-          'nestedSubNote.isPinned',
-          'nestedSubNote.isArchived',
-          'nestedSubNote.autoSave',
-          'nestedSubNote.isVertical',
-          'nestedSubNote.orderIndex',
-          'nestedSubNote.createdAt',
-          'nestedSubNote.updatedAt',
-          'nestedSubNote.createdBy',
-          'nestedSubNote.updatedBy',
-        ])
-        .where('note.parentId IS NULL');
+      const selectFields = [
+        'note.id',
+        'note.title',
+        'note.description',
+        'note.type',
+        'note.projectName',
+        'note.parentId',
+        'note.userId',
+        'note.employeeId',
+        'note.color',
+        'note.isPinned',
+        'note.isArchived',
+        'note.autoSave',
+        'note.isVertical',
+        'note.orderIndex',
+        'note.createdAt',
+        'note.updatedAt',
+        'note.createdBy',
+        'note.updatedBy',
+        'subNote.id',
+        'subNote.title',
+        'subNote.description',
+        'subNote.type',
+        'subNote.projectName',
+        'subNote.parentId',
+        'subNote.userId',
+        'subNote.employeeId',
+        'subNote.color',
+        'subNote.isPinned',
+        'subNote.isArchived',
+        'subNote.autoSave',
+        'subNote.isVertical',
+        'subNote.orderIndex',
+        'subNote.createdAt',
+        'subNote.updatedAt',
+        'subNote.createdBy',
+        'subNote.updatedBy',
+        'nestedSubNote.id',
+        'nestedSubNote.title',
+        'nestedSubNote.description',
+        'nestedSubNote.type',
+        'nestedSubNote.projectName',
+        'nestedSubNote.parentId',
+        'nestedSubNote.userId',
+        'nestedSubNote.employeeId',
+        'nestedSubNote.color',
+        'nestedSubNote.isPinned',
+        'nestedSubNote.isArchived',
+        'nestedSubNote.autoSave',
+        'nestedSubNote.isVertical',
+        'nestedSubNote.orderIndex',
+        'nestedSubNote.createdAt',
+        'nestedSubNote.updatedAt',
+        'nestedSubNote.createdBy',
+        'nestedSubNote.updatedBy',
+      ];
+
+      qb.select(selectFields).where('note.parentId IS NULL');
 
       if (userId || employeeId) {
         qb.andWhere(
@@ -299,7 +300,6 @@ export class NotesService {
 
       if (!query.full) {
         for (const note of data) {
-          
           if (note.description) {
             note.description = cleanDescriptionSnippet(note.description, 300);
           }
@@ -319,6 +319,28 @@ export class NotesService {
           }
         }
       }
+
+      // Ensure sub-notes and nested sub-notes are ordered consistently
+      for (const note of data) {
+        if (note.subNotes && note.subNotes.length > 0) {
+          note.subNotes.sort((a, b) => {
+            const orderDiff = (a.orderIndex ?? 0) - (b.orderIndex ?? 0);
+            if (orderDiff !== 0) return orderDiff;
+            return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+          });
+          for (const sub of note.subNotes) {
+            if (sub.subNotes && sub.subNotes.length > 0) {
+              sub.subNotes.sort((a, b) => {
+                const orderDiff = (a.orderIndex ?? 0) - (b.orderIndex ?? 0);
+                if (orderDiff !== 0) return orderDiff;
+                return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+              });
+            }
+          }
+        }
+      }
+
+      await this.attachStoredFiles(data);
 
       const totalPages = limit > 0 && total > 0 ? Math.ceil(total / limit) : (total > 0 ? 1 : 0);
       const resolvedPage = limit > 0 ? page : 1;
@@ -358,7 +380,7 @@ export class NotesService {
         throw new NotFoundException(`Note with ID ${id} not found`);
       }
 
-      await this.populateAttachments([note]);
+      await this.attachStoredFiles([note]);
 
       if (user) {
         const { userId, employeeId } = this.extractUserInfo(user);
@@ -1835,21 +1857,20 @@ if (!doclingUrl) {
    */
   private async linkAttachmentKeys(noteId: number, keys?: string[]): Promise<void> {
     if (!keys || keys.length === 0) return;
+    const validKeys = keys.filter(Boolean);
+    if (validKeys.length === 0) return;
     try {
-      for (const key of keys) {
-        if (!key) continue;
-        await this.documentRepo
-          .createQueryBuilder()
-          .update(DocumentMetaInfo)
-          .set({
-            refId: noteId,
-            entityId: noteId,
-            refType: ReferenceType.NOTE_ATTACHMENT,
-            entityType: EntityType.NOTE,
-          })
-          .where('(id = :key OR s3Key = :key)', { key })
-          .execute();
-      }
+      await this.documentRepo
+        .createQueryBuilder()
+        .update(DocumentMetaInfo)
+        .set({
+          refId: noteId,
+          entityId: noteId,
+          refType: ReferenceType.NOTE_ATTACHMENT,
+          entityType: EntityType.NOTE,
+        })
+        .where('(id IN (:...validKeys) OR s3Key IN (:...validKeys))', { validKeys })
+        .execute();
     } catch (err: any) {
       this.logger.warn(
         `Failed to link pre-uploaded attachments to note ${noteId}: ${err.message}`,
