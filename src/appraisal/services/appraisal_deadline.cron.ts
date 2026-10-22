@@ -19,8 +19,6 @@ const OPEN_REVIEW_STATUSES: QuarterlyReviewStatus[] = [
   QuarterlyReviewStatus.EDIT_GRANTED,
   QuarterlyReviewStatus.ALLOWED_TO_EDIT,
   QuarterlyReviewStatus.APPROVED_FOR_EDITING,
-  QuarterlyReviewStatus.DEADLINE_REMINDER,
-  QuarterlyReviewStatus.ONE_DAY_DEADLINE_REMINDER,
 ];
 
 const OPEN_PERFORMANCE_STATUSES: readonly EmployeePerformanceStatus[] = SUBMITTABLE_PERFORMANCE_STATUSES;

@@ -69,6 +69,9 @@ export class QuarterlyReview extends BaseEntity {
   @Column({ type: 'varchar', length: 100, nullable: false })
   assignerId: string; // ID of the reviewer/manager assigning the review
 
+  @Column({ type: 'varchar', length: 100, nullable: true })
+  managerId: string | null;
+
   @Column({ type: 'varchar', length: 150, nullable: true })
   managerName: string | null;
 
@@ -82,10 +85,16 @@ export class QuarterlyReview extends BaseEntity {
 
   // Evaluation Metrics (1 to 5 scale, Nullable until reviewed)
   @Column({ type: 'decimal', precision: 3, scale: 1, nullable: true })
+  overallPerformanceRating: number | null;
+
+  @Column({ type: 'decimal', precision: 3, scale: 1, nullable: true })
   productivity: number | null;
 
   @Column({ type: 'decimal', precision: 3, scale: 1, nullable: true })
   qualityOfWork: number | null;
+
+  @Column({ type: 'decimal', precision: 3, scale: 1, nullable: true })
+  technicalJobSkills: number | null;
 
   @Column({ type: 'decimal', precision: 3, scale: 1, nullable: true })
   ownershipResponsibility: number | null;
@@ -99,9 +108,11 @@ export class QuarterlyReview extends BaseEntity {
   @Column({ type: 'decimal', precision: 3, scale: 1, nullable: true })
   innovationProblemSolving: number | null;
 
-  // Rating Management (FR-06). The manager types this score. It is not calculated from the six parameters.
   @Column({ type: 'decimal', precision: 3, scale: 2, nullable: true })
   finalRating: number | null;
+
+  @Column({ type: 'decimal', precision: 3, scale: 1, nullable: true })
+  finalPerformanceRating: number | null;
 
   @Column({ type: 'varchar', length: 100, nullable: true })
   ratingDescription: string | null; // 'Outstanding', 'Exceeds Expectations', etc.
@@ -124,6 +135,28 @@ export class QuarterlyReview extends BaseEntity {
 
   @Column({ type: 'text', nullable: true })
   additionalRemarks: string | null;
+
+  // Section 5: Final Review & Submission Fields
+  @Column({ type: 'text', nullable: true })
+  goalsForNextReviewPeriod: string | null;
+
+  @Column({ type: 'text', nullable: true })
+  trainingDevelopmentRecommendations: string | null;
+
+  @Column({ type: 'varchar', length: 150, nullable: true })
+  careerGrowthRecommendation: string | null;
+
+  @Column({ type: 'varchar', length: 100, nullable: true })
+  reviewOutcome: string | null;
+
+  @Column({ type: 'varchar', length: 150, nullable: true })
+  performanceAction: string | null;
+
+  @Column({ type: 'text', nullable: true })
+  finalManagerComments: string | null;
+
+  @Column({ type: 'boolean', default: false })
+  managerConfirmation: boolean;
 
   // Linked employee self-assessment submission
   @Column({ type: 'int', nullable: true })

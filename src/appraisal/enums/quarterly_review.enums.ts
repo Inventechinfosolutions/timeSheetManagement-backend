@@ -16,6 +16,7 @@ export enum QuarterlyReviewStatus {
   DRAFT = 'DRAFT',
   PENDING = 'PENDING',
   IN_PROGRESS = 'IN_PROGRESS',
+  EVALUATION_IN_PROGRESS = 'EVALUATION_IN_PROGRESS',
   SUBMITTED = 'SUBMITTED',
   UNDER_REVIEW = 'UNDER_REVIEW',
   REVIEWED = 'REVIEWED',
@@ -31,8 +32,6 @@ export enum QuarterlyReviewStatus {
   NOT_UPDATED = 'NOT_UPDATED',
   LOCKED = 'LOCKED',
   ALLOWED_TO_EDIT = 'ALLOWED_TO_EDIT',
-  DEADLINE_REMINDER = 'DEADLINE_REMINDER',
-  ONE_DAY_DEADLINE_REMINDER = 'ONE_DAY_DEADLINE_REMINDER',
 }
 export const QuaterlyReviewStatus = QuarterlyReviewStatus;
 export type QuaterlyReviewStatus = QuarterlyReviewStatus;
@@ -99,9 +98,33 @@ export enum RatingScaleEnum {
 }
 
 export const RATING_DESCRIPTIONS: Record<number, string> = {
-  1: 'Unsatisfactory',
-  2: 'Needs Improvement',
+  1: 'Needs Improvement',
+  2: 'Developing',
   3: 'Meets Expectations',
   4: 'Exceeds Expectations',
   5: 'Outstanding',
 };
+
+export enum CareerGrowthRecommendationEnum {
+  NO_IMMEDIATE_RECOMMENDATION = 'No Immediate Recommendation',
+  ROLE_GROWTH_CONSIDERATION = 'Role Growth Consideration',
+  TECHNICAL_SKILL_DEVELOPMENT = 'Technical Skill Development',
+  LEADERSHIP_DEVELOPMENT = 'Leadership Development',
+  READY_FOR_ADDITIONAL_RESPONSIBILITIES = 'Ready for Additional Responsibilities',
+}
+
+export enum ReviewOutcomeEnum {
+  NEEDS_IMPROVEMENT = 'Needs Improvement',
+  DEVELOPING = 'Developing',
+  MEETS_EXPECTATIONS = 'Meets Expectations',
+  EXCEEDS_EXPECTATIONS = 'Exceeds Expectations',
+  OUTSTANDING = 'Outstanding',
+}
+
+export enum PerformanceActionEnum {
+  NO_ACTION_REQUIRED = 'No Action Required',
+  CONTINUE_CURRENT_DEVELOPMENT = 'Continue Current Development',
+  ADDITIONAL_TRAINING_REQUIRED = 'Additional Training Required',
+  PERFORMANCE_MONITORING_REQUIRED = 'Performance Monitoring Required',
+  PERFORMANCE_IMPROVEMENT_PLAN_RECOMMENDED = 'Performance Improvement Plan Recommended',
+}

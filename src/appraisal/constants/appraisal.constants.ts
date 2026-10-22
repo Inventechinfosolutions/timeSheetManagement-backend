@@ -45,8 +45,6 @@ export const SUBMITTABLE_PERFORMANCE_STATUSES: readonly EmployeePerformanceStatu
   EmployeePerformanceStatus.EDIT_GRANTED,
   EmployeePerformanceStatus.APPROVED_FOR_EDITING,
   EmployeePerformanceStatus.ALLOWED_TO_EDIT,
-  EmployeePerformanceStatus.DEADLINE_REMINDER,
-  EmployeePerformanceStatus.ONE_DAY_DEADLINE_REMINDER,
 ];
 
 export const DRAFT_ON_SAVE_STATUSES: readonly EmployeePerformanceStatus[] = [

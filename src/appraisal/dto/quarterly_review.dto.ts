@@ -6,6 +6,7 @@ import {
   IsOptional,
   IsInt,
   IsNumber,
+  IsBoolean,
   Min,
   Max,
 } from 'class-validator';
@@ -94,6 +95,14 @@ export class CreateQuarterlyReviewDto {
   assignerId?: string;
 
   @ApiPropertyOptional({
+    example: 'MGR-005',
+    description: 'Reporting manager ID of the employee',
+  })
+  @IsOptional()
+  @IsString()
+  managerId?: string;
+
+  @ApiPropertyOptional({
     enum: QuarterlyReviewStatus,
     default: QuarterlyReviewStatus.NOT_STARTED,
   })
@@ -103,79 +112,95 @@ export class CreateQuarterlyReviewDto {
 }
 
 export class ManagerEvaluationDto {
-  @ApiProperty({
+  @ApiPropertyOptional({
     example: 'MGR-005',
     description: 'Manager ID submitting the evaluation',
   })
-  @IsNotEmpty()
+  @IsOptional()
   @IsString()
-  managerId!: string;
+  managerId?: string;
 
   // Evaluation Parameters (1-5 Scale)
-  @ApiProperty({ example: 4, description: 'Productivity rating (1-5)' })
-  @IsNotEmpty()
+  @ApiPropertyOptional({ example: 4, description: 'Productivity rating (1-5)' })
+  @IsOptional()
   @Type(() => Number)
   @IsNumber()
   @Min(1)
   @Max(5)
-  productivity!: number;
+  productivity?: number;
 
-  @ApiProperty({ example: 4, description: 'Quality of Work rating (1-5)' })
-  @IsNotEmpty()
+  @ApiPropertyOptional({ example: 4, description: 'Quality of Work rating (1-5)' })
+  @IsOptional()
   @Type(() => Number)
   @IsNumber()
   @Min(1)
   @Max(5)
-  qualityOfWork!: number;
+  qualityOfWork?: number;
 
-  @ApiProperty({ example: 5, description: 'Ownership & Responsibility rating (1-5)' })
-  @IsNotEmpty()
+  @ApiPropertyOptional({ example: 5, description: 'Ownership & Responsibility rating (1-5)' })
+  @IsOptional()
   @Type(() => Number)
   @IsNumber()
   @Min(1)
   @Max(5)
-  ownership!: number;
+  ownership?: number;
 
-  @ApiProperty({ example: 4, description: 'Communication rating (1-5)' })
-  @IsNotEmpty()
+  @ApiPropertyOptional({ example: 5, description: 'Ownership & Responsibility rating (1-5)' })
+  @IsOptional()
   @Type(() => Number)
   @IsNumber()
   @Min(1)
   @Max(5)
-  communication!: number;
+  ownershipResponsibility?: number;
 
-  @ApiProperty({ example: 5, description: 'Team Collaboration rating (1-5)' })
-  @IsNotEmpty()
+  @ApiPropertyOptional({ example: 4, description: 'Communication rating (1-5)' })
+  @IsOptional()
   @Type(() => Number)
   @IsNumber()
   @Min(1)
   @Max(5)
-  teamCollaboration!: number;
+  communication?: number;
 
-  @ApiProperty({ example: 4, description: 'Innovation & Problem Solving rating (1-5)' })
-  @IsNotEmpty()
+  @ApiPropertyOptional({ example: 5, description: 'Team Collaboration rating (1-5)' })
+  @IsOptional()
   @Type(() => Number)
   @IsNumber()
   @Min(1)
   @Max(5)
-  innovation!: number;
+  teamCollaboration?: number;
+
+  @ApiPropertyOptional({ example: 4, description: 'Innovation & Problem Solving rating (1-5)' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(1)
+  @Max(5)
+  innovation?: number;
+
+  @ApiPropertyOptional({ example: 4, description: 'Innovation & Problem Solving rating (1-5)' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(1)
+  @Max(5)
+  innovationProblemSolving?: number;
 
   // FR-05 Text Area Remarks
-  @ApiProperty({
+  @ApiPropertyOptional({
     example: 'Consistently delivers clean modular code and demonstrates high ownership.',
     description: 'Performance Strengths (Text Area)',
   })
-  @IsNotEmpty()
+  @IsOptional()
   @IsString()
-  performanceStrengths!: string;
+  performanceStrengths?: string;
 
-  @ApiProperty({
+  @ApiPropertyOptional({
     example: 'Could take more initiative in cross-department design syncs.',
     description: 'Areas of Improvement (Text Area)',
   })
-  @IsNotEmpty()
+  @IsOptional()
   @IsString()
-  areasOfImprovement!: string;
+  areasOfImprovement?: string;
 
   @ApiPropertyOptional({
     example: 'Strong performer throughout the quarter. Recommended for leadership training.',
@@ -184,6 +209,80 @@ export class ManagerEvaluationDto {
   @IsOptional()
   @IsString()
   additionalRemarks?: string;
+
+  // Optional overall and technical ratings
+  @ApiPropertyOptional({ example: 4, description: 'Overall performance rating (1-5)' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(1)
+  @Max(5)
+  overallPerformanceRating?: number;
+
+  @ApiPropertyOptional({ example: 4, description: 'Technical / Job Skills rating (1-5)' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(1)
+  @Max(5)
+  technicalJobSkills?: number;
+
+  // Section 5: Final Review & Submission Fields
+  @ApiPropertyOptional({ description: 'Goals for Next Review Period' })
+  @IsOptional()
+  @IsString()
+  goalsForNextReviewPeriod?: string;
+
+  @ApiPropertyOptional({ description: 'Training / Development Recommendations' })
+  @IsOptional()
+  @IsString()
+  trainingDevelopmentRecommendations?: string;
+
+  @ApiPropertyOptional({ description: 'Career Growth Recommendation' })
+  @IsOptional()
+  @IsString()
+  careerGrowthRecommendation?: string;
+
+  @ApiPropertyOptional({ description: 'Review Outcome' })
+  @IsOptional()
+  @IsString()
+  reviewOutcome?: string;
+
+  @ApiPropertyOptional({ description: 'Performance Action' })
+  @IsOptional()
+  @IsString()
+  performanceAction?: string;
+
+  @ApiPropertyOptional({ description: 'Final Manager Comments' })
+  @IsOptional()
+  @IsString()
+  finalManagerComments?: string;
+
+  @ApiPropertyOptional({ description: 'Manager Confirmation Checkbox' })
+  @IsOptional()
+  @IsBoolean()
+  managerConfirmation?: boolean;
+
+  @ApiPropertyOptional({ description: 'Flag to save as draft instead of finalizing' })
+  @IsOptional()
+  @IsBoolean()
+  isDraft?: boolean;
+
+  @ApiPropertyOptional({ example: 4, description: 'Final performance rating chosen by manager (1-5)' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(1)
+  @Max(5)
+  finalRating?: number;
+
+  @ApiPropertyOptional({ example: 4, description: 'Final Performance Rating (1-5)' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(1)
+  @Max(5)
+  finalPerformanceRating?: number;
 
   // Optional Override
   @ApiPropertyOptional({ example: 5, description: 'Manager override rating (1-5)' })
@@ -204,6 +303,12 @@ export class ManagerEvaluationDto {
 }
 
 export class UpdateQuarterlyReviewDto extends PartialType(CreateQuarterlyReviewDto) {
+  @ApiPropertyOptional({ example: 4, description: 'Overall performance rating (1-5)' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  overallPerformanceRating?: number;
+
   @ApiPropertyOptional({ example: 4, description: 'Productivity rating (1-5)' })
   @IsOptional()
   @Type(() => Number)
@@ -215,6 +320,12 @@ export class UpdateQuarterlyReviewDto extends PartialType(CreateQuarterlyReviewD
   @Type(() => Number)
   @IsNumber()
   qualityOfWork?: number;
+
+  @ApiPropertyOptional({ example: 4, description: 'Technical / Job Skills rating (1-5)' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  technicalJobSkills?: number;
 
   @ApiPropertyOptional({ example: 5, description: 'Ownership rating (1-5)' })
   @IsOptional()
@@ -254,6 +365,41 @@ export class UpdateQuarterlyReviewDto extends PartialType(CreateQuarterlyReviewD
   @IsOptional()
   @IsString()
   additionalRemarks?: string;
+
+  @ApiPropertyOptional({ description: 'Goals for Next Review Period' })
+  @IsOptional()
+  @IsString()
+  goalsForNextReviewPeriod?: string;
+
+  @ApiPropertyOptional({ description: 'Training / Development Recommendations' })
+  @IsOptional()
+  @IsString()
+  trainingDevelopmentRecommendations?: string;
+
+  @ApiPropertyOptional({ description: 'Career Growth Recommendation' })
+  @IsOptional()
+  @IsString()
+  careerGrowthRecommendation?: string;
+
+  @ApiPropertyOptional({ description: 'Review Outcome' })
+  @IsOptional()
+  @IsString()
+  reviewOutcome?: string;
+
+  @ApiPropertyOptional({ description: 'Performance Action' })
+  @IsOptional()
+  @IsString()
+  performanceAction?: string;
+
+  @ApiPropertyOptional({ description: 'Final Manager Comments' })
+  @IsOptional()
+  @IsString()
+  finalManagerComments?: string;
+
+  @ApiPropertyOptional({ description: 'Manager Confirmation' })
+  @IsOptional()
+  @IsBoolean()
+  managerConfirmation?: boolean;
 
   @ApiPropertyOptional({ example: 4.5, description: 'Manager-entered average score from 1 to 5' })
   @IsOptional()

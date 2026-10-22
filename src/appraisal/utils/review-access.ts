@@ -9,8 +9,6 @@ const UNSUBMITTED_STATUSES: readonly string[] = [
   QuarterlyReviewStatus.EDIT_GRANTED,
   QuarterlyReviewStatus.ALLOWED_TO_EDIT,
   QuarterlyReviewStatus.APPROVED_FOR_EDITING,
-  QuarterlyReviewStatus.DEADLINE_REMINDER,
-  QuarterlyReviewStatus.ONE_DAY_DEADLINE_REMINDER,
 ];
 
 const FINISHED_STATUSES: readonly string[] = [
