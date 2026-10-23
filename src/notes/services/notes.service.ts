@@ -205,7 +205,6 @@ export class NotesService {
         qb.select([
           'note.id',
           'note.title',
-          'note.description',
           'note.type',
           'note.projectName',
           'note.parentId',
@@ -222,6 +221,9 @@ export class NotesService {
           'note.createdBy',
           'note.updatedBy',
         ]);
+        if (query.full) {
+          qb.addSelect('note.description');
+        }
       }
 
       qb.where('note.parentId IS NULL');
@@ -321,45 +323,95 @@ export class NotesService {
 
       const [data, total] = await qb.getManyAndCount();
 
-      // Ensure consistent subNotes property and ordering if requested
-      for (const note of data) {
-        if (!shouldIncludeSubNotes) {
+      const rootIds = data.map((n) => n.id).filter(Boolean);
+
+      if (!shouldIncludeSubNotes) {
+        // Fast DB counts for sub-notes and attachments without heavy joins or MinIO calls
+        let childCountMap = new Map<number, number>();
+        let attachCountMap = new Map<number, number>();
+
+        if (rootIds.length > 0) {
+          try {
+            const childCounts = await this.noteRepo
+              .createQueryBuilder('sub')
+              .select('sub.parentId', 'parentId')
+              .addSelect('COUNT(sub.id)', 'count')
+              .where('sub.parentId IN (:...rootIds)', { rootIds })
+              .groupBy('sub.parentId')
+              .getRawMany();
+
+            for (const row of childCounts) {
+              childCountMap.set(Number(row.parentId), Number(row.count));
+            }
+          } catch (e: any) {
+            this.logger.warn(`Failed to count sub-notes: ${e.message}`);
+          }
+
+          try {
+            const attachCounts = await this.documentRepo
+              .createQueryBuilder('doc')
+              .select('doc.entityId', 'entityId')
+              .addSelect('COUNT(doc.id)', 'count')
+              .where('doc.entityType = :entityType', { entityType: EntityType.NOTE })
+              .andWhere('doc.entityId IN (:...rootIds)', { rootIds })
+              .groupBy('doc.entityId')
+              .getRawMany();
+
+            for (const row of attachCounts) {
+              attachCountMap.set(Number(row.entityId), Number(row.count));
+            }
+          } catch (e: any) {
+            this.logger.warn(`Failed to count attachments: ${e.message}`);
+          }
+        }
+
+        for (const note of data) {
+          (note as any).subNotesCount = childCountMap.get(note.id) || 0;
+          (note as any).attachmentsCount = attachCountMap.get(note.id) || 0;
           note.subNotes = [];
-        } else if (note.subNotes && note.subNotes.length > 0) {
-          note.subNotes.sort((a, b) => {
-            const orderDiff = (a.orderIndex ?? 0) - (b.orderIndex ?? 0);
-            if (orderDiff !== 0) return orderDiff;
-            return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
-          });
-          for (const sub of note.subNotes) {
-            if (sub.subNotes && sub.subNotes.length > 0) {
-              sub.subNotes.sort((a, b) => {
-                const orderDiff = (a.orderIndex ?? 0) - (b.orderIndex ?? 0);
-                if (orderDiff !== 0) return orderDiff;
-                return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
-              });
+          note.attachments = [];
+          if (!query.full) {
+            note.description = ''; // Description loaded on-demand on click View/Edit via GET /notes/:id
+          }
+        }
+      } else {
+        // Full sub-notes requested
+        for (const note of data) {
+          if (note.subNotes && note.subNotes.length > 0) {
+            note.subNotes.sort((a, b) => {
+              const orderDiff = (a.orderIndex ?? 0) - (b.orderIndex ?? 0);
+              if (orderDiff !== 0) return orderDiff;
+              return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+            });
+            for (const sub of note.subNotes) {
+              if (sub.subNotes && sub.subNotes.length > 0) {
+                sub.subNotes.sort((a, b) => {
+                  const orderDiff = (a.orderIndex ?? 0) - (b.orderIndex ?? 0);
+                  if (orderDiff !== 0) return orderDiff;
+                  return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+                });
+              }
             }
           }
         }
-      }
 
-      // Attach stored files (only once)
-      await this.attachStoredFiles(data);
+        await this.attachStoredFiles(data);
 
-      if (!query.full) {
-        for (const note of data) {
-          if (note.description) {
-            note.description = cleanDescriptionSnippet(note.description, 300);
-          }
-          if (shouldIncludeSubNotes && note.subNotes && note.subNotes.length > 0) {
-            for (const sub of note.subNotes) {
-              if (sub.description) {
-                sub.description = cleanDescriptionSnippet(sub.description, 300);
-              }
-              if (sub.subNotes && sub.subNotes.length > 0) {
-                for (const nested of sub.subNotes) {
-                  if (nested.description) {
-                    nested.description = cleanDescriptionSnippet(nested.description, 300);
+        if (!query.full) {
+          for (const note of data) {
+            if (note.description) {
+              note.description = cleanDescriptionSnippet(note.description, 300);
+            }
+            if (note.subNotes && note.subNotes.length > 0) {
+              for (const sub of note.subNotes) {
+                if (sub.description) {
+                  sub.description = cleanDescriptionSnippet(sub.description, 300);
+                }
+                if (sub.subNotes && sub.subNotes.length > 0) {
+                  for (const nested of sub.subNotes) {
+                    if (nested.description) {
+                      nested.description = cleanDescriptionSnippet(nested.description, 300);
+                    }
                   }
                 }
               }
