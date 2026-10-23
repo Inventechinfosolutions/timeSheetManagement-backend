@@ -113,9 +113,20 @@ export class EmployeePerformanceService {
         },
       });
 
-      let nextStatus = asDraft
+      const requestedStatus = dto.status;
+      const hasStep1Data = Boolean(
+        (dto.overview || dto.responsibilitiesHandled || '').trim() ||
+        (dto.projects && dto.projects.length > 0)
+      );
+
+      let nextStatus = asDraft && hasStep1Data
         ? EmployeePerformanceStatus.DRAFT
         : EmployeePerformanceStatus.NOT_STARTED;
+
+      if (requestedStatus) {
+        nextStatus = requestedStatus;
+      }
+
       if (record) {
         record = await this.lockIfGrantExpired(record);
 
@@ -127,11 +138,20 @@ export class EmployeePerformanceService {
         await this.assertEmployeeCanChange(record);
         const keepStatus =
           record.status === EmployeePerformanceStatus.EDIT_GRANTED;
-        nextStatus = keepStatus
-          ? record.status
-          : asDraft || DRAFT_ON_SAVE_STATUSES.includes(record.status)
+        if (keepStatus) {
+          nextStatus = record.status;
+        } else if (requestedStatus) {
+          nextStatus = requestedStatus;
+        } else if (record.status === EmployeePerformanceStatus.NOT_STARTED) {
+          nextStatus = (asDraft && hasStep1Data)
             ? EmployeePerformanceStatus.DRAFT
-            : record.status;
+            : EmployeePerformanceStatus.NOT_STARTED;
+        } else if (asDraft || DRAFT_ON_SAVE_STATUSES.includes(record.status)) {
+          nextStatus = EmployeePerformanceStatus.DRAFT;
+        } else {
+          nextStatus = record.status;
+        }
+
         const draftFields = { ...dto };
         if (draftFields.attachments == null) {
           delete draftFields.attachments;
@@ -160,6 +180,14 @@ export class EmployeePerformanceService {
           saved.quarter,
           saved.financialYear,
           QuarterlyReviewStatus.DRAFT,
+          saved.id,
+        );
+      } else if (saved.status === EmployeePerformanceStatus.NOT_STARTED) {
+        await this.setReviewStatus(
+          saved.employeeId,
+          saved.quarter,
+          saved.financialYear,
+          QuarterlyReviewStatus.ASSIGNED,
           saved.id,
         );
       } else {
@@ -943,6 +971,7 @@ export class EmployeePerformanceService {
     }
 
     const fields = { ...updateDto };
+    const requestedStatus = updateDto.status;
     delete fields.status;
     if (fields.attachments == null) {
       delete fields.attachments;
@@ -950,15 +979,48 @@ export class EmployeePerformanceService {
     if (fields.projects == null) {
       delete fields.projects;
     }
-    const nextStatus = DRAFT_ON_SAVE_STATUSES.includes(record.status)
-      ? EmployeePerformanceStatus.DRAFT
-      : record.status;
+
+    const hasStep1Data = Boolean(
+      (fields.overview || fields.responsibilitiesHandled || '').trim() ||
+      (fields.projects && fields.projects.length > 0)
+    );
+
+    let nextStatus = record.status;
+    if (requestedStatus) {
+      nextStatus = requestedStatus;
+    } else if (record.status === EmployeePerformanceStatus.NOT_STARTED) {
+      nextStatus = hasStep1Data
+        ? EmployeePerformanceStatus.DRAFT
+        : EmployeePerformanceStatus.NOT_STARTED;
+    } else if (DRAFT_ON_SAVE_STATUSES.includes(record.status)) {
+      nextStatus = EmployeePerformanceStatus.DRAFT;
+    }
+
     Object.assign(record, fields, {
       status: nextStatus,
       lastModifiedDate: new Date(),
     });
 
     const updated = await this.performanceRepository.save(record);
+
+    if (nextStatus === EmployeePerformanceStatus.DRAFT) {
+      await this.setReviewStatus(
+        updated.employeeId,
+        updated.quarter,
+        updated.financialYear,
+        QuarterlyReviewStatus.DRAFT,
+        updated.id,
+      );
+    } else if (nextStatus === EmployeePerformanceStatus.NOT_STARTED) {
+      await this.setReviewStatus(
+        updated.employeeId,
+        updated.quarter,
+        updated.financialYear,
+        QuarterlyReviewStatus.ASSIGNED,
+        updated.id,
+      );
+    }
+
     const enrichedList = await this.enrichPerformancesWithEmployeeDetails([updated]);
     return enrichedList[0];
   }
