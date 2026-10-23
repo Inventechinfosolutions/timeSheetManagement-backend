@@ -4,6 +4,7 @@ import {
   IsString,
   IsDateString,
   IsOptional,
+  IsBoolean,
   IsInt,
   Min,
   Max,
@@ -43,19 +44,69 @@ export class PerformanceProjectAttachmentDto {
 
 export class PerformanceProjectDto {
   @ApiProperty({ example: 'Timesheet Workflow' })
-  @IsString()
   @IsNotEmpty()
-  title: string;
+  @IsString()
+  projectName: string;
 
   @ApiProperty({ example: 'Delivered the appraisal flow' })
   @IsString()
   @IsNotEmpty()
   description: string;
 
-  @ApiProperty({ example: 'Resolved the quarter window' })
+  @ApiPropertyOptional({ example: 'Resolved the quarter window' })
+  @IsOptional()
   @IsString()
-  @IsNotEmpty()
-  challenge: string;
+  challenge?: string;
+
+  @ApiPropertyOptional({ example: 'Frontend Developer' })
+  @IsOptional()
+  @IsString()
+  projectRole?: string;
+
+  @ApiPropertyOptional({ example: 'Individual Contributor' })
+  @IsOptional()
+  @IsString()
+  responsibilityType?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  keyResponsibilities?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  challengesFaced?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  solutionsImplemented?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  keyAchievementsOutcomes?: string;
+
+  @ApiPropertyOptional({ type: [String] })
+  @IsOptional()
+  @IsArray()
+  technologiesUsed?: string[];
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  leadershipQualities?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  clientReviewFeedback?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsBoolean()
+  isDraft?: boolean;
 
   @IsOptional()
   @IsArray()
@@ -342,3 +393,4 @@ export class QueryEmployeePerformanceDto {
 }
 
 export class SearchEmployeePerformanceDto extends QueryEmployeePerformanceDto { }
+

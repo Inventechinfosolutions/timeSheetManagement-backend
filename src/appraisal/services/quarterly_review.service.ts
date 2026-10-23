@@ -769,7 +769,7 @@ export class QuarterlyReviewService {
       'Performance Action': r.performanceAction,
       'Final Manager Comments': r.finalManagerComments,
       'Key Accomplishments': r.performanceDetails?.keyAccomplishments || '',
-      'Major Projects': (r.performanceDetails?.projects || []).map((project) => project.title).filter(Boolean).join(', '),
+      'Major Projects': (r.performanceDetails?.projects || []).map((project) => project.projectName).filter(Boolean).join(', '),
     }));
   }
 

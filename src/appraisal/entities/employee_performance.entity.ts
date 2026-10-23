@@ -15,9 +15,19 @@ export interface PerformanceAttachment {
 }
 
 export interface PerformanceProject {
-  title: string;
+  projectName: string;
   description: string;
-  challenge: string;
+  challenge?: string;
+  projectRole?: string;
+  responsibilityType?: string;
+  keyResponsibilities?: string;
+  challengesFaced?: string;
+  solutionsImplemented?: string;
+  keyAchievementsOutcomes?: string;
+  technologiesUsed?: string[];
+  leadershipQualities?: string;
+  clientReviewFeedback?: string;
+  isDraft?: boolean;
   attachments?: Array<{
     fileName: string;
     fileUrl?: string;
@@ -159,3 +169,4 @@ export class EmployeePerformance extends BaseEntity {
 // Backward compatibility alias
 export const MasterEmployeePerformance = EmployeePerformance;
 export type MasterEmployeePerformance = EmployeePerformance;
+

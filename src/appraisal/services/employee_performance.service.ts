@@ -274,7 +274,7 @@ export class EmployeePerformanceService {
 
       // Validate Section requirements
       const savedProjects = (record.projects || []).filter(
-        (project) => project.title?.trim() && project.description?.trim() && project.challenge?.trim(),
+        (project) => project.projectName?.trim() && project.description?.trim(),
       );
       if (savedProjects.length === 0) {
         throw new BadRequestException('Add at least one project before submission.');

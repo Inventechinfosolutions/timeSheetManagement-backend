@@ -1,4 +1,4 @@
-export enum ReviewEmployeeType {
+﻿export enum ReviewEmployeeType {
   EMPLOYEE = 'EMPLOYEE',
   INTERN = 'INTERN',
   MANAGER = 'MANAGER',
@@ -36,7 +36,7 @@ export enum QuarterlyReviewStatus {
 export const QuaterlyReviewStatus = QuarterlyReviewStatus;
 export type QuaterlyReviewStatus = QuarterlyReviewStatus;
 
-export { QuaterlyEnum, QuarterlyEnum } from '../../master/enums/quaterly.enums';
+export { QuaterlyEnum, QuarterlyEnum, ProjectRoleEnum, ResponsibilityTypeEnum } from '../../master/enums/quaterly.enums';
 
 export enum PerformanceStrengthsEnum {
   TECHNICAL_EXCELLENCE = 'TECHNICAL_EXCELLENCE',
