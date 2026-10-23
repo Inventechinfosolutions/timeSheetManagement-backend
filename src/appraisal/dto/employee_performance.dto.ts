@@ -4,10 +4,12 @@ import {
   IsString,
   IsDateString,
   IsOptional,
+  IsBoolean,
   IsInt,
   Min,
   Max,
   IsArray,
+  ArrayMinSize,
   ValidateNested,
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional, PartialType } from '@nestjs/swagger';
@@ -43,19 +45,69 @@ export class PerformanceProjectAttachmentDto {
 
 export class PerformanceProjectDto {
   @ApiProperty({ example: 'Timesheet Workflow' })
-  @IsString()
   @IsNotEmpty()
-  title: string;
+  @IsString()
+  projectName: string;
 
   @ApiProperty({ example: 'Delivered the appraisal flow' })
   @IsString()
   @IsNotEmpty()
   description: string;
 
-  @ApiProperty({ example: 'Resolved the quarter window' })
+  @ApiPropertyOptional({ example: 'Resolved the quarter window' })
+  @IsOptional()
   @IsString()
+  challenge?: string;
+
+  @ApiProperty({ example: 'Frontend Developer' })
   @IsNotEmpty()
-  challenge: string;
+  @IsString()
+  projectRole: string;
+
+  @ApiProperty({ example: 'Individual Contributor' })
+  @IsNotEmpty()
+  @IsString()
+  responsibilityType: string;
+
+  @ApiProperty({ example: 'Project responsibilities' })
+  @IsNotEmpty()
+  @IsString()
+  keyResponsibilities: string;
+
+  @ApiProperty({ example: 'Challenges faced' })
+  @IsNotEmpty()
+  @IsString()
+  challengesFaced: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  solutionsImplemented?: string;
+
+  @ApiProperty({ example: 'Key achievements' })
+  @IsNotEmpty()
+  @IsString()
+  keyAchievementsOutcomes: string;
+
+  @ApiProperty({ type: [String] })
+  @IsArray()
+  @ArrayMinSize(1)
+  technologiesUsed: string[];
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  leadershipQualities?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  clientReviewFeedback?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsBoolean()
+  isDraft?: boolean;
 
   @IsOptional()
   @IsArray()
@@ -105,10 +157,10 @@ export class CreateEmployeePerformanceDto {
   keyAccomplishments?: string;
 
   // --- Section C: Challenges (Stepper 3) ---
-  @ApiPropertyOptional({ example: 'Database locking during peak hours', description: 'Challenges faced' })
-  @IsOptional()
+  @ApiProperty({ example: 'Challenges faced' })
+  @IsNotEmpty()
   @IsString()
-  challengesFaced?: string;
+  challengesFaced: string;
 
   // --- Section D: Learning & Development (Stepper 4) ---
   @ApiPropertyOptional({ example: 'NestJS CQRS, Docker containerization', description: 'Skills acquired' })
@@ -342,3 +394,4 @@ export class QueryEmployeePerformanceDto {
 }
 
 export class SearchEmployeePerformanceDto extends QueryEmployeePerformanceDto { }
+
