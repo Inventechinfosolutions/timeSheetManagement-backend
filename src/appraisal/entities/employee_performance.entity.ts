@@ -5,6 +5,7 @@ import {
   EmployeePerformanceStatus,
   RateCompanyEnvironmentEnum,
 } from '../enums/employee_performance.enums';
+import { AppraisalAuditEntry } from '../interfaces/appraisal_audit.interface';
 export interface PerformanceAttachment {
   fileName: string;
   fileUrl: string;
@@ -150,6 +151,9 @@ export class EmployeePerformance extends BaseEntity {
     nullable: true,
   })
   rateCompanyEnvironment: RateCompanyEnvironmentEnum;
+
+  @Column({ type: 'json', nullable: true })
+  auditHistory: AppraisalAuditEntry[] | null;
 }
 
 // Backward compatibility alias

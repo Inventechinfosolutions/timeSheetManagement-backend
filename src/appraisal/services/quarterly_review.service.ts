@@ -50,6 +50,8 @@ import { UsersService } from '../../users/service/user.service';
 import { User } from '../../users/entities/user.entity';
 import { UserType } from '../../users/enums/user-type.enum';
 import { RevealedEvaluationDto } from '../dto/reveal_rating.dto';
+import { createAuditEntry, appendAuditEntry } from '../utils/audit-history.helper';
+import { AppraisalAuditEntry } from '../interfaces/appraisal_audit.interface';
 
 export interface EnrichedQuarterlyReview extends QuarterlyReview {
   performanceDetails?: (EmployeePerformance & {
@@ -218,8 +220,24 @@ export class QuarterlyReviewService {
         saved.quarter,
         saved.financialYear,
       );
+      const initAuditEntry = createAuditEntry({
+        employeeId: saved.employeeId,
+        managerId: saved.managerId,
+        quarter: saved.quarter,
+        financialYear: saved.financialYear,
+        createdBy: saved.assignerId || 'ADMIN',
+        createdDate: saved.assignedDate,
+        assignedDate: saved.assignedDate,
+        deadlineDate: saved.deadlineDate,
+        status: QuarterlyReviewStatus.ASSIGNED,
+        lastModifiedBy: saved.assignerId || 'ADMIN',
+        details: 'Review cycle assigned to employee',
+      });
+      saved.auditHistory = appendAuditEntry(saved.auditHistory, initAuditEntry);
       saved.performanceId = performance.id;
       await this.reviewRepository.save(saved);
+      performance.auditHistory = appendAuditEntry(performance.auditHistory, initAuditEntry);
+      await this.performanceRepository.save(performance);
       await this.noticeService.notifyEmployeeOfAssignment({
         employeeId: saved.employeeId,
         employeeName: saved.employeeName || saved.employeeId,
@@ -335,7 +353,24 @@ export class QuarterlyReviewService {
 
       if (evalDto.isDraft) {
         review.status = QuarterlyReviewStatus.EVALUATION_IN_PROGRESS;
+        const draftEntry = createAuditEntry({
+          employeeId: review.employeeId,
+          managerId: review.managerId || review.assignerId,
+          quarter: review.quarter,
+          financialYear: review.financialYear,
+          createdBy: review.assignerId || 'ADMIN',
+          createdDate: review.assignedDate,
+          assignedDate: review.assignedDate,
+          deadlineDate: review.deadlineDate,
+          submittedDate: review.submittedDate,
+          submittedBy: review.submittedDate ? review.employeeId : null,
+          status: QuarterlyReviewStatus.EVALUATION_IN_PROGRESS,
+          lastModifiedBy: review.managerId || review.assignerId || 'MANAGER',
+          details: 'Manager saved evaluation draft',
+        });
+        review.auditHistory = appendAuditEntry(review.auditHistory, draftEntry);
         const saved = await this.reviewRepository.save(review);
+        await this.syncPerformanceAudit(saved, draftEntry);
         await this.markPerformanceEvaluationInProgress(saved);
         const enrichedList = await this.enrichReviewsWithDetails([saved]);
         return enrichedList[0];
@@ -344,7 +379,25 @@ export class QuarterlyReviewService {
       review.status = QuarterlyReviewStatus.COMPLETED;
       review.reviewedDate = new Date();
 
+      const compEntry = createAuditEntry({
+        employeeId: review.employeeId,
+        managerId: review.managerId || review.assignerId,
+        quarter: review.quarter,
+        financialYear: review.financialYear,
+        createdBy: review.assignerId || 'ADMIN',
+        createdDate: review.assignedDate,
+        assignedDate: review.assignedDate,
+        deadlineDate: review.deadlineDate,
+        submittedDate: review.reviewedDate,
+        submittedBy: review.managerId || review.assignerId || 'MANAGER',
+        status: QuarterlyReviewStatus.COMPLETED,
+        lastModifiedBy: review.managerId || review.assignerId || 'MANAGER',
+        details: `Manager finalized evaluation with score: ${review.finalRating ?? 'N/A'}${review.ratingDescription ? ` (${review.ratingDescription})` : ''}`,
+      });
+      review.auditHistory = appendAuditEntry(review.auditHistory, compEntry);
+
       const saved = await this.reviewRepository.save(review);
+      await this.syncPerformanceAudit(saved, compEntry);
       await this.markPerformanceCompleted(saved);
       await this.annualService.syncEmployeeAnnualRating(saved.employeeId, saved.financialYear);
 
@@ -1009,6 +1062,29 @@ export class QuarterlyReviewService {
       review.reviewedDate = new Date();
     }
 
+    if (hasEvaluationScores || definedUpdate.deadlineDate) {
+      const updateEntry = createAuditEntry({
+        employeeId: review.employeeId,
+        managerId: review.managerId || review.assignerId,
+        quarter: review.quarter,
+        financialYear: review.financialYear,
+        createdBy: review.assignerId || 'ADMIN',
+        createdDate: review.assignedDate,
+        assignedDate: review.assignedDate,
+        deadlineDate: review.deadlineDate,
+        submittedDate: review.reviewedDate || review.submittedDate,
+        submittedBy: hasEvaluationScores
+          ? (review.managerId || review.assignerId || 'MANAGER')
+          : (review.submittedDate ? review.employeeId : null),
+        status: review.status,
+        lastModifiedBy: review.managerId || review.assignerId || 'ADMIN',
+        details: hasEvaluationScores
+          ? `Review evaluated with rating: ${review.finalRating}`
+          : `Review deadline updated to ${definedUpdate.deadlineDate}`,
+      });
+      review.auditHistory = appendAuditEntry(review.auditHistory, updateEntry);
+    }
+
     const updated = await this.reviewRepository.save(review);
 
     if (definedUpdate.deadlineDate && updated.deadlineDate && isOneDayBeforeDeadline(updated.deadlineDate, new Date())) {
@@ -1137,6 +1213,24 @@ export class QuarterlyReviewService {
     }
     performance.status = EmployeePerformanceStatus.EVALUATION_IN_PROGRESS;
     await this.performanceRepository.save(performance);
+  }
+
+  private async syncPerformanceAudit(review: QuarterlyReview, entry: AppraisalAuditEntry): Promise<void> {
+    try {
+      const performance = await this.performanceRepository.findOne({
+        where: {
+          employeeId: review.employeeId,
+          quarter: review.quarter,
+          financialYear: review.financialYear,
+        },
+      });
+      if (performance) {
+        performance.auditHistory = appendAuditEntry(performance.auditHistory, entry);
+        await this.performanceRepository.save(performance);
+      }
+    } catch (err) {
+      this.logger.warn(`Could not sync performance audit entry: ${err instanceof Error ? err.message : err}`);
+    }
   }
 
   private async ensureAssignedPerformance(
@@ -1371,6 +1465,24 @@ export class QuarterlyReviewService {
       const note = `[Re-assigned on ${todayDateStr}]: ${dto.reason.trim()}`;
       review.description = review.description ? `${review.description}\n${note}` : note;
     }
+    const reassignEntry = createAuditEntry({
+      employeeId: review.employeeId,
+      managerId: review.managerId || review.assignerId,
+      quarter: review.quarter,
+      financialYear: review.financialYear,
+      createdBy: review.assignerId || 'ADMIN',
+      createdDate: review.assignedDate,
+      assignedDate: review.assignedDate,
+      deadlineDate: review.deadlineDate,
+      submittedDate: review.submittedDate,
+      submittedBy: review.submittedDate ? review.employeeId : null,
+      status: review.status,
+      lastModifiedBy: user?.loginId || review.assignerId || 'MANAGER',
+      details: dto.reason?.trim()
+        ? `Review re-assigned with new deadline ${newDeadlineStr}. Reason: ${dto.reason.trim()}`
+        : `Review re-assigned with new deadline ${newDeadlineStr}`,
+    });
+    review.auditHistory = appendAuditEntry(review.auditHistory, reassignEntry);
     const savedReview = await this.reviewRepository.save(review);
 
     // 2. Update matching EmployeePerformance
@@ -1388,6 +1500,7 @@ export class QuarterlyReviewService {
       if (user?.loginId) {
         performance.lastModifiedBy = user.loginId;
       }
+      performance.auditHistory = appendAuditEntry(performance.auditHistory, reassignEntry);
       await this.performanceRepository.save(performance);
     }
 

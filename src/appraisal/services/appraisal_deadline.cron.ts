@@ -9,6 +9,7 @@ import { QuarterlyReviewStatus } from '../enums/quarterly_review.enums';
 import { AppraisalNoticeService } from './appraisal_notice.service';
 import { deadlineHasArrived, isLockedReviewStatus, isOneDayBeforeDeadline } from '../utils/review-access';
 import { SUBMITTABLE_PERFORMANCE_STATUSES } from '../constants/appraisal.constants';
+import { createAuditEntry, appendAuditEntry } from '../utils/audit-history.helper';
 
 const OPEN_REVIEW_STATUSES: QuarterlyReviewStatus[] = [
   QuarterlyReviewStatus.ASSIGNED,
@@ -88,10 +89,12 @@ export class AppraisalDeadlineCronService implements OnModuleInit {
         perf?.status === EmployeePerformanceStatus.RE_SUBMITTED ||
         perf?.status === EmployeePerformanceStatus.COMPLETED ||
         perf?.status === EmployeePerformanceStatus.REVIEWED ||
+        perf?.status === EmployeePerformanceStatus.EVALUATION_IN_PROGRESS ||
         review.status === QuarterlyReviewStatus.SUBMITTED ||
         review.status === QuarterlyReviewStatus.RE_SUBMITTED ||
         review.status === QuarterlyReviewStatus.COMPLETED ||
-        review.status === QuarterlyReviewStatus.REVIEWED);
+        review.status === QuarterlyReviewStatus.REVIEWED ||
+        review.status === QuarterlyReviewStatus.EVALUATION_IN_PROGRESS);
 
       if (isSubmitted) {
         continue;
@@ -123,12 +126,29 @@ export class AppraisalDeadlineCronService implements OnModuleInit {
       }
 
       const renewed = (review.reassignCount || 0) >= 1;
+      const lockEntry = createAuditEntry({
+        employeeId: review.employeeId,
+        managerId: review.managerId || review.assignerId,
+        quarter: review.quarter,
+        financialYear: review.financialYear,
+        createdBy: review.assignerId || 'ADMIN',
+        createdDate: review.assignedDate,
+        assignedDate: review.assignedDate,
+        deadlineDate: review.deadlineDate,
+        submittedDate: review.submittedDate,
+        submittedBy: review.submittedDate ? review.employeeId : null,
+        status: QuarterlyReviewStatus.LOCKED,
+        lastModifiedBy: 'SYSTEM',
+        details: 'Review locked automatically due to deadline passing',
+      });
       review.status = QuarterlyReviewStatus.LOCKED;
+      review.auditHistory = appendAuditEntry(review.auditHistory, lockEntry);
       await this.reviewRepository.save(review);
 
       if (perf && !isLockedReviewStatus(perf.status)) {
         perf.status = EmployeePerformanceStatus.LOCKED;
         perf.lastModifiedDate = new Date();
+        perf.auditHistory = appendAuditEntry(perf.auditHistory, lockEntry);
         await this.performanceRepository.save(perf);
       }
 

@@ -35,6 +35,7 @@ export const LOCKED_PERFORMANCE_STATUSES: readonly EmployeePerformanceStatus[] =
   EmployeePerformanceStatus.LOCKED,
   EmployeePerformanceStatus.REVIEWED,
   EmployeePerformanceStatus.PERFORMANCE_RECEIVED,
+  EmployeePerformanceStatus.EVALUATION_IN_PROGRESS,
 ];
 
 export const SUBMITTABLE_PERFORMANCE_STATUSES: readonly EmployeePerformanceStatus[] = [

@@ -44,6 +44,8 @@ import {
   reviewAccessFlags,
   shouldCloseRenewedAccess,
 } from '../utils/review-access';
+import { createAuditEntry, appendAuditEntry } from '../utils/audit-history.helper';
+import { AppraisalAuditEntry } from '../interfaces/appraisal_audit.interface';
 
 export interface PerformanceListMeta {
   totalItems: number;
@@ -171,6 +173,28 @@ export class EmployeePerformanceService {
           financialYear: saved.financialYear,
         },
       });
+
+      const draftAuditEntry = createAuditEntry({
+        employeeId: saved.employeeId,
+        managerId: reviewForDraft?.managerId || null,
+        quarter: saved.quarter,
+        financialYear: saved.financialYear,
+        createdBy: reviewForDraft?.assignerId || 'ADMIN',
+        createdDate: reviewForDraft?.assignedDate,
+        assignedDate: reviewForDraft?.assignedDate,
+        deadlineDate: reviewForDraft?.deadlineDate,
+        submittedDate: saved.submittedAt || reviewForDraft?.submittedDate,
+        submittedBy: (saved.submittedAt || reviewForDraft?.submittedDate) ? saved.employeeId : null,
+        status: saved.status,
+        lastModifiedBy: dto.employeeId,
+        details: 'Employee saved self-assessment draft',
+      });
+      saved.auditHistory = appendAuditEntry(saved.auditHistory, draftAuditEntry);
+      await this.performanceRepository.save(saved);
+      if (reviewForDraft) {
+        reviewForDraft.auditHistory = appendAuditEntry(reviewForDraft.auditHistory, draftAuditEntry);
+        await this.reviewRepository.save(reviewForDraft);
+      }
       const effectiveDraftDeadline = saved.editAllowedUntil || reviewForDraft?.deadlineDate;
       if (
         effectiveDraftDeadline &&
@@ -294,11 +318,32 @@ export class EmployeePerformanceService {
         },
       });
 
+      const submitEntry = createAuditEntry({
+        employeeId: saved.employeeId,
+        managerId: review?.managerId || null,
+        quarter: saved.quarter,
+        financialYear: saved.financialYear,
+        createdBy: review?.assignerId || 'ADMIN',
+        createdDate: review?.assignedDate,
+        assignedDate: review?.assignedDate,
+        deadlineDate: review?.deadlineDate,
+        submittedDate: submittedAt,
+        submittedBy: dto.employeeId,
+        status: saved.status,
+        lastModifiedBy: dto.employeeId,
+        details: resubmitting
+          ? 'Employee re-submitted self-assessment after editing'
+          : 'Employee submitted self-assessment',
+      });
+      saved.auditHistory = appendAuditEntry(saved.auditHistory, submitEntry);
+      await this.performanceRepository.save(saved);
+
       const reviewStatus = QuarterlyReviewStatus.PERFORMANCE_RECEIVED;
       if (review) {
         review.submittedDate = submittedAt;
         review.performanceId = saved.id;
         review.status = reviewStatus;
+        review.auditHistory = appendAuditEntry(review.auditHistory, submitEntry);
         await this.reviewRepository.save(review);
       } else {
         // Auto-create QuarterlyReview master if it wasn't pre-assigned
@@ -321,6 +366,7 @@ export class EmployeePerformanceService {
           performanceId: saved.id,
           assignerId: mapping?.managerId || 'MANAGER',
           managerName: mapping?.managerName || 'Reporting Manager',
+          auditHistory: [submitEntry],
         });
         await this.reviewRepository.save(review);
       }
@@ -478,6 +524,28 @@ export class EmployeePerformanceService {
       }
 
       const saved = await this.performanceRepository.save(record);
+      const editEntry = createAuditEntry({
+        employeeId: saved.employeeId,
+        managerId: review?.managerId || null,
+        quarter: saved.quarter,
+        financialYear: saved.financialYear,
+        createdBy: review?.assignerId || 'ADMIN',
+        createdDate: review?.assignedDate,
+        assignedDate: review?.assignedDate,
+        deadlineDate: review?.deadlineDate,
+        submittedDate: saved.submittedAt || review?.submittedDate,
+        submittedBy: (saved.submittedAt || review?.submittedDate) ? saved.employeeId : null,
+        status: EmployeePerformanceStatus.REQUESTED_FOR_EDIT,
+        lastModifiedBy: saved.employeeId,
+        details: dto.reason ? `Employee requested edit permission. Reason: ${dto.reason}` : 'Employee requested edit permission',
+      });
+      saved.auditHistory = appendAuditEntry(saved.auditHistory, editEntry);
+      await this.performanceRepository.save(saved);
+      if (review) {
+        review.auditHistory = appendAuditEntry(review.auditHistory, editEntry);
+        await this.reviewRepository.save(review);
+      }
+
       await this.setReviewStatus(
         saved.employeeId,
         saved.quarter,
@@ -559,6 +627,31 @@ export class EmployeePerformanceService {
       }
 
       const saved = await this.performanceRepository.save(record);
+      const isApproved = dto.approved;
+      const respondEntry = createAuditEntry({
+        employeeId: saved.employeeId,
+        managerId: review?.managerId || null,
+        quarter: saved.quarter,
+        financialYear: saved.financialYear,
+        createdBy: review?.assignerId || 'ADMIN',
+        createdDate: review?.assignedDate,
+        assignedDate: review?.assignedDate,
+        deadlineDate: review?.deadlineDate,
+        submittedDate: saved.submittedAt || review?.submittedDate,
+        submittedBy: (saved.submittedAt || review?.submittedDate) ? saved.employeeId : null,
+        status: saved.status,
+        lastModifiedBy: review?.managerId || review?.assignerId || 'MANAGER',
+        details: isApproved
+          ? `Manager approved edit request${saved.editAllowedUntil ? ` until ${saved.editAllowedUntil.toISOString()}` : ''}`
+          : `Manager rejected edit request. Reason: ${dto.responseNote || 'Request declined'}`,
+      });
+      saved.auditHistory = appendAuditEntry(saved.auditHistory, respondEntry);
+      await this.performanceRepository.save(saved);
+      if (review) {
+        review.auditHistory = appendAuditEntry(review.auditHistory, respondEntry);
+        await this.reviewRepository.save(review);
+      }
+
       if (saved.status === EmployeePerformanceStatus.EDIT_GRANTED) {
         await this.setReviewStatus(
           saved.employeeId,

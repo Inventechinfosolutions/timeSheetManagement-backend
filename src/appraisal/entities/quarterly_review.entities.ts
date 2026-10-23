@@ -6,6 +6,7 @@ import {
   QuarterlyReviewStatus,
   QuaterlyEnum,
 } from '../enums/quarterly_review.enums';
+import { AppraisalAuditEntry } from '../interfaces/appraisal_audit.interface';
 
 @Entity('quaterly_review')
 @Unique(['employeeId', 'quarter', 'financialYear'])
@@ -164,6 +165,9 @@ export class QuarterlyReview extends BaseEntity {
 
   @Column({ type: 'int', default: 0, nullable: false })
   reassignCount: number;
+
+  @Column({ type: 'json', nullable: true })
+  auditHistory: AppraisalAuditEntry[] | null;
 }
 
 // Aliases
