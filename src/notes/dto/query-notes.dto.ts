@@ -59,6 +59,16 @@ export class QueryNotesDto {
   @IsBoolean()
   full?: boolean;
 
+  @ApiPropertyOptional({ description: 'Include nested child sub-notes (true/false, default: false for fast listing)' })
+  @IsOptional()
+  @Transform(({ value }) => {
+    if (value === 'true' || value === true || value === 1 || value === '1') return true;
+    if (value === 'false' || value === false || value === 0 || value === '0') return false;
+    return value;
+  })
+  @IsBoolean()
+  includeSubNotes?: boolean;
+
   @ApiPropertyOptional({ description: 'Page number for pagination (starts at 1)', default: 1 })
   @IsOptional()
   @Type(() => Number)
