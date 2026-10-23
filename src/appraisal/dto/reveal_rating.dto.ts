@@ -31,6 +31,12 @@ export class RevealedEvaluationDto {
   @ApiProperty()
   innovationProblemSolving: number;
 
+  @ApiProperty({ required: false })
+  technicalJobSkills?: number;
+
+  @ApiProperty({ required: false })
+  overallPerformanceRating?: number;
+
   @ApiProperty()
   performanceStrengths: string;
 
@@ -40,6 +46,31 @@ export class RevealedEvaluationDto {
   @ApiProperty()
   additionalRemarks: string;
 
+  @ApiProperty({ required: false })
+  goalsForNextReviewPeriod?: string;
+
+  @ApiProperty({ required: false })
+  trainingDevelopmentRecommendations?: string;
+
+  @ApiProperty({ required: false })
+  careerGrowthRecommendation?: string;
+
+  @ApiProperty({ required: false })
+  reviewOutcome?: string;
+
+  @ApiProperty({ required: false })
+  performanceAction?: string;
+
+  @ApiProperty({ required: false })
+  finalPerformanceRating?: number;
+
+  @ApiProperty({ required: false })
+  finalManagerComments?: string;
+
+  @ApiProperty({ required: false })
+  managerConfirmation?: boolean;
+
   @ApiProperty()
   passwordVerified: boolean;
 }
+

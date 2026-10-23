@@ -652,9 +652,24 @@ export class QuarterlyReviewService {
       communication: Number(review.communication),
       teamCollaboration: Number(review.teamCollaboration),
       innovationProblemSolving: Number(review.innovationProblemSolving),
+      technicalJobSkills: review.technicalJobSkills != null ? Number(review.technicalJobSkills) : 0,
+      overallPerformanceRating: review.overallPerformanceRating != null ? Number(review.overallPerformanceRating) : 0,
       performanceStrengths: review.performanceStrengths || '',
       areasOfImprovement: review.areasOfImprovement || '',
       additionalRemarks: review.additionalRemarks || '',
+      goalsForNextReviewPeriod: review.goalsForNextReviewPeriod || '',
+      trainingDevelopmentRecommendations: review.trainingDevelopmentRecommendations || '',
+      careerGrowthRecommendation: review.careerGrowthRecommendation || '',
+      reviewOutcome: review.reviewOutcome || '',
+      performanceAction: review.performanceAction || '',
+      finalPerformanceRating:
+        review.finalPerformanceRating != null
+          ? Number(review.finalPerformanceRating)
+          : review.finalRating != null
+          ? Number(review.finalRating)
+          : 0,
+      finalManagerComments: review.finalManagerComments || '',
+      managerConfirmation: Boolean(review.managerConfirmation),
       passwordVerified: true,
     };
     return revealed;
