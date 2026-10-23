@@ -9,6 +9,7 @@ import {
   Min,
   Max,
   IsArray,
+  ArrayMinSize,
   ValidateNested,
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional, PartialType } from '@nestjs/swagger';
@@ -58,40 +59,40 @@ export class PerformanceProjectDto {
   @IsString()
   challenge?: string;
 
-  @ApiPropertyOptional({ example: 'Frontend Developer' })
-  @IsOptional()
+  @ApiProperty({ example: 'Frontend Developer' })
+  @IsNotEmpty()
   @IsString()
-  projectRole?: string;
+  projectRole: string;
 
-  @ApiPropertyOptional({ example: 'Individual Contributor' })
-  @IsOptional()
+  @ApiProperty({ example: 'Individual Contributor' })
+  @IsNotEmpty()
   @IsString()
-  responsibilityType?: string;
+  responsibilityType: string;
 
-  @ApiPropertyOptional()
-  @IsOptional()
+  @ApiProperty({ example: 'Project responsibilities' })
+  @IsNotEmpty()
   @IsString()
-  keyResponsibilities?: string;
+  keyResponsibilities: string;
 
-  @ApiPropertyOptional()
-  @IsOptional()
+  @ApiProperty({ example: 'Challenges faced' })
+  @IsNotEmpty()
   @IsString()
-  challengesFaced?: string;
+  challengesFaced: string;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
   solutionsImplemented?: string;
 
-  @ApiPropertyOptional()
-  @IsOptional()
+  @ApiProperty({ example: 'Key achievements' })
+  @IsNotEmpty()
   @IsString()
-  keyAchievementsOutcomes?: string;
+  keyAchievementsOutcomes: string;
 
-  @ApiPropertyOptional({ type: [String] })
-  @IsOptional()
+  @ApiProperty({ type: [String] })
   @IsArray()
-  technologiesUsed?: string[];
+  @ArrayMinSize(1)
+  technologiesUsed: string[];
 
   @ApiPropertyOptional()
   @IsOptional()
@@ -156,10 +157,10 @@ export class CreateEmployeePerformanceDto {
   keyAccomplishments?: string;
 
   // --- Section C: Challenges (Stepper 3) ---
-  @ApiPropertyOptional({ example: 'Database locking during peak hours', description: 'Challenges faced' })
-  @IsOptional()
+  @ApiProperty({ example: 'Challenges faced' })
+  @IsNotEmpty()
   @IsString()
-  challengesFaced?: string;
+  challengesFaced: string;
 
   // --- Section D: Learning & Development (Stepper 4) ---
   @ApiPropertyOptional({ example: 'NestJS CQRS, Docker containerization', description: 'Skills acquired' })
