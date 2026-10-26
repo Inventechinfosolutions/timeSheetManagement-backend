@@ -157,10 +157,10 @@ export class CreateEmployeePerformanceDto {
   keyAccomplishments?: string;
 
   // --- Section C: Challenges (Stepper 3) ---
-  @ApiProperty({ example: 'Challenges faced' })
-  @IsNotEmpty()
+  @ApiPropertyOptional({ example: 'Challenges faced' })
+  @IsOptional()
   @IsString()
-  challengesFaced: string;
+  challengesFaced?: string;
 
   // --- Section D: Learning & Development (Stepper 4) ---
   @ApiPropertyOptional({ example: 'NestJS CQRS, Docker containerization', description: 'Skills acquired' })
