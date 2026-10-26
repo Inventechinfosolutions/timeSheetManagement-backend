@@ -132,6 +132,24 @@ export class EmployeePerformance extends BaseEntity {
   @Column({ type: 'simple-json', nullable: true })
   teamRatings: Record<string, number>;
 
+  @Column({ type: 'text', nullable: true })
+  communicationDescription: string;
+
+  @Column({ type: 'text', nullable: true })
+  ownershipDescription: string;
+
+  @Column({ type: 'text', nullable: true })
+  collaborationDescription: string;
+
+  @Column({ type: 'text', nullable: true })
+  problemSolvingDescription: string;
+
+  @Column({ type: 'text', nullable: true })
+  leadershipDescription: string;
+
+  @Column({ type: 'text', nullable: true })
+  adaptabilityDescription: string;
+
   // --- Step 4: Continuous Learning & Goals ---
   @Column({ type: 'text', nullable: true })
   certificationsOrCourses: string;

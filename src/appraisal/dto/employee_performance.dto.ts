@@ -307,6 +307,36 @@ export class CreateEmployeePerformanceDto {
   @IsOptional()
   teamRatings?: Record<string, number>;
 
+  @ApiPropertyOptional({ description: 'Communication & Coordination description' })
+  @IsOptional()
+  @IsString()
+  communicationDescription?: string;
+
+  @ApiPropertyOptional({ description: 'Ownership description' })
+  @IsOptional()
+  @IsString()
+  ownershipDescription?: string;
+
+  @ApiPropertyOptional({ description: 'Collaboration description' })
+  @IsOptional()
+  @IsString()
+  collaborationDescription?: string;
+
+  @ApiPropertyOptional({ description: 'Problem Solving description' })
+  @IsOptional()
+  @IsString()
+  problemSolvingDescription?: string;
+
+  @ApiPropertyOptional({ description: 'Leadership description' })
+  @IsOptional()
+  @IsString()
+  leadershipDescription?: string;
+
+  @ApiPropertyOptional({ description: 'Adaptability description' })
+  @IsOptional()
+  @IsString()
+  adaptabilityDescription?: string;
+
   // --- Step 4: Continuous Learning & Goals ---
   @ApiPropertyOptional({ description: 'Certifications and courses completed' })
   @IsOptional()
