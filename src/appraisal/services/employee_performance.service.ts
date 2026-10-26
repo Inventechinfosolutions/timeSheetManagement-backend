@@ -114,18 +114,7 @@ export class EmployeePerformanceService {
       });
 
       const requestedStatus = dto.status;
-      const hasStep1Data = Boolean(
-        (dto.overview || dto.responsibilitiesHandled || '').trim() ||
-        (dto.projects && dto.projects.length > 0)
-      );
-
-      let nextStatus = asDraft && hasStep1Data
-        ? EmployeePerformanceStatus.DRAFT
-        : EmployeePerformanceStatus.NOT_STARTED;
-
-      if (requestedStatus) {
-        nextStatus = requestedStatus;
-      }
+      let nextStatus = requestedStatus || (asDraft ? EmployeePerformanceStatus.DRAFT : EmployeePerformanceStatus.NOT_STARTED);
 
       if (record) {
         record = await this.lockIfGrantExpired(record);
@@ -143,7 +132,7 @@ export class EmployeePerformanceService {
         } else if (requestedStatus) {
           nextStatus = requestedStatus;
         } else if (record.status === EmployeePerformanceStatus.NOT_STARTED) {
-          nextStatus = (asDraft && hasStep1Data)
+          nextStatus = asDraft
             ? EmployeePerformanceStatus.DRAFT
             : EmployeePerformanceStatus.NOT_STARTED;
         } else if (asDraft || DRAFT_ON_SAVE_STATUSES.includes(record.status)) {
@@ -174,26 +163,7 @@ export class EmployeePerformanceService {
       }
 
       const saved = await this.performanceRepository.save(record);
-      if (saved.status === EmployeePerformanceStatus.DRAFT) {
-        await this.setReviewStatus(
-          saved.employeeId,
-          saved.quarter,
-          saved.financialYear,
-          QuarterlyReviewStatus.DRAFT,
-          saved.id,
-        );
-      } else if (saved.status === EmployeePerformanceStatus.NOT_STARTED) {
-        await this.setReviewStatus(
-          saved.employeeId,
-          saved.quarter,
-          saved.financialYear,
-          QuarterlyReviewStatus.ASSIGNED,
-          saved.id,
-        );
-      } else {
-        await this.linkPerformanceToReview(saved.employeeId, saved.quarter, saved.financialYear, saved.id);
-      }
-
+      await this.linkPerformanceToReview(saved.employeeId, saved.quarter, saved.financialYear, saved.id);
       const reviewForDraft = await this.reviewRepository.findOne({
         where: {
           employeeId: saved.employeeId,
@@ -201,6 +171,14 @@ export class EmployeePerformanceService {
           financialYear: saved.financialYear,
         },
       });
+      if (
+        reviewForDraft &&
+        (reviewForDraft.status === QuarterlyReviewStatus.DRAFT ||
+          reviewForDraft.status === QuarterlyReviewStatus.NOT_STARTED)
+      ) {
+        reviewForDraft.status = QuarterlyReviewStatus.ASSIGNED;
+        await this.reviewRepository.save(reviewForDraft);
+      }
 
       const draftAuditEntry = createAuditEntry({
         employeeId: saved.employeeId,
@@ -980,18 +958,11 @@ export class EmployeePerformanceService {
       delete fields.projects;
     }
 
-    const hasStep1Data = Boolean(
-      (fields.overview || fields.responsibilitiesHandled || '').trim() ||
-      (fields.projects && fields.projects.length > 0)
-    );
-
     let nextStatus = record.status;
     if (requestedStatus) {
       nextStatus = requestedStatus;
     } else if (record.status === EmployeePerformanceStatus.NOT_STARTED) {
-      nextStatus = hasStep1Data
-        ? EmployeePerformanceStatus.DRAFT
-        : EmployeePerformanceStatus.NOT_STARTED;
+      nextStatus = EmployeePerformanceStatus.DRAFT;
     } else if (DRAFT_ON_SAVE_STATUSES.includes(record.status)) {
       nextStatus = EmployeePerformanceStatus.DRAFT;
     }
@@ -999,26 +970,26 @@ export class EmployeePerformanceService {
     Object.assign(record, fields, {
       status: nextStatus,
       lastModifiedDate: new Date(),
+      ...(updateDto.employeeId ? { lastModifiedBy: updateDto.employeeId } : {}),
     });
 
     const updated = await this.performanceRepository.save(record);
 
-    if (nextStatus === EmployeePerformanceStatus.DRAFT) {
-      await this.setReviewStatus(
-        updated.employeeId,
-        updated.quarter,
-        updated.financialYear,
-        QuarterlyReviewStatus.DRAFT,
-        updated.id,
-      );
-    } else if (nextStatus === EmployeePerformanceStatus.NOT_STARTED) {
-      await this.setReviewStatus(
-        updated.employeeId,
-        updated.quarter,
-        updated.financialYear,
-        QuarterlyReviewStatus.ASSIGNED,
-        updated.id,
-      );
+    await this.linkPerformanceToReview(updated.employeeId, updated.quarter, updated.financialYear, updated.id);
+    const reviewForDraft = await this.reviewRepository.findOne({
+      where: {
+        employeeId: updated.employeeId,
+        quarter: updated.quarter,
+        financialYear: updated.financialYear,
+      },
+    });
+    if (
+      reviewForDraft &&
+      (reviewForDraft.status === QuarterlyReviewStatus.DRAFT ||
+        reviewForDraft.status === QuarterlyReviewStatus.NOT_STARTED)
+    ) {
+      reviewForDraft.status = QuarterlyReviewStatus.ASSIGNED;
+      await this.reviewRepository.save(reviewForDraft);
     }
 
     const enrichedList = await this.enrichPerformancesWithEmployeeDetails([updated]);
