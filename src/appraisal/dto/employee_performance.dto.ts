@@ -19,7 +19,7 @@ import {
   EmployeePerformanceStatus,
   RateCompanyEnvironmentEnum,
 } from '../enums/employee_performance.enums';
-import { PerformanceAttachment } from '../entities/employee_performance.entity';
+import { PerformanceAttachment } from '../interfaces/employee_performance.interface';
 
 export class PerformanceProjectAttachmentDto {
   @IsString()
@@ -260,6 +260,123 @@ export class CreateEmployeePerformanceDto {
   @IsOptional()
   @IsEnum(EmployeePerformanceStatus)
   status?: EmployeePerformanceStatus;
+
+  // --- Step 1: Role & Quarter Overview ---
+  @ApiPropertyOptional({ description: 'Overall performance summary' })
+  @IsOptional()
+  @IsString()
+  overallPerformanceSummary?: string;
+
+  @ApiPropertyOptional({ description: 'Key quarterly highlights' })
+  @IsOptional()
+  @IsString()
+  keyHighlights?: string;
+
+  @ApiPropertyOptional({ description: 'Major impactful contributions' })
+  @IsOptional()
+  @IsString()
+  majorContributions?: string;
+
+  @ApiPropertyOptional({ description: 'Areas for improvement next quarter' })
+  @IsOptional()
+  @IsString()
+  areasForImprovement?: string;
+
+  // --- Step 3: Teamwork & Collaboration ---
+  @ApiPropertyOptional({ description: 'Team collaboration summary' })
+  @IsOptional()
+  @IsString()
+  teamCollaborationSummary?: string;
+
+  @ApiPropertyOptional({ description: 'Cross-team contributions' })
+  @IsOptional()
+  @IsString()
+  crossTeamContributions?: string;
+
+  @ApiPropertyOptional({ description: 'Knowledge sharing and mentoring' })
+  @IsOptional()
+  @IsString()
+  knowledgeSharingMentoring?: string;
+
+  @ApiPropertyOptional({ description: 'Specific teamwork examples' })
+  @IsOptional()
+  @IsString()
+  teamworkExamples?: string;
+
+  @ApiPropertyOptional({ description: 'Teamwork dimension ratings' })
+  @IsOptional()
+  teamRatings?: Record<string, number>;
+
+  // --- Step 4: Continuous Learning & Goals ---
+  @ApiPropertyOptional({ description: 'Certifications and courses completed' })
+  @IsOptional()
+  @IsString()
+  certificationsOrCourses?: string;
+
+  @ApiPropertyOptional({ description: 'Skills targeted to improve' })
+  @IsOptional()
+  @IsString()
+  skillsToImprove?: string;
+
+  @ApiPropertyOptional({ description: 'Support or training required' })
+  @IsOptional()
+  @IsString()
+  supportOrTrainingRequired?: string;
+
+  @ApiPropertyOptional({ description: 'Next quarter learning goals' })
+  @IsOptional()
+  @IsString()
+  nextQuarterLearningGoals?: string;
+
+  // --- Step 5: Environment ---
+  @ApiPropertyOptional({ description: 'Work environment satisfaction rating (1-5)' })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(5)
+  workEnvironmentRating?: number;
+
+  @ApiPropertyOptional({ description: 'Tools and resources rating (1-5)' })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(5)
+  toolsResourcesRating?: number;
+
+  @ApiPropertyOptional({ description: 'Manager support rating (1-5)' })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(5)
+  managerSupportRating?: number;
+
+  @ApiPropertyOptional({ description: 'Challenges affecting productivity' })
+  @IsOptional()
+  @IsString()
+  challengesAffectingProductivity?: string;
+
+  // --- Step 6: Review & Final Submission ---
+  @ApiPropertyOptional({ description: 'Overall self-rating (1-5)' })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(5)
+  overallSelfRating?: number;
+
+  @ApiPropertyOptional({ description: 'Overall employee comments' })
+  @IsOptional()
+  @IsString()
+  overallEmployeeComments?: string;
+
+  @ApiPropertyOptional({ description: 'Career growth interests' })
+  @IsOptional()
+  @IsString()
+  careerGrowthInterests?: string;
+
+  @ApiPropertyOptional({ description: 'Confirmation of review accuracy' })
+  @IsOptional()
+  @IsBoolean()
+  confirmationAccepted?: boolean;
 }
 
 export class UpdateEmployeePerformanceDto extends PartialType(CreateEmployeePerformanceDto) { }

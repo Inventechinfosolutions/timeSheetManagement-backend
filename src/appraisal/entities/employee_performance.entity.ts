@@ -6,36 +6,14 @@ import {
   RateCompanyEnvironmentEnum,
 } from '../enums/employee_performance.enums';
 import { AppraisalAuditEntry } from '../interfaces/appraisal_audit.interface';
-export interface PerformanceAttachment {
-  fileName: string;
-  fileUrl: string;
-  fileSize: number;
-  fileType: string;
-  objectKey: string;
-}
-
-export interface PerformanceProject {
-  projectName: string;
-  description: string;
-  challenge?: string;
-  projectRole?: string;
-  responsibilityType?: string;
-  keyResponsibilities?: string;
-  challengesFaced?: string;
-  solutionsImplemented?: string;
-  keyAchievementsOutcomes?: string;
-  technologiesUsed?: string[];
-  leadershipQualities?: string;
-  clientReviewFeedback?: string;
-  isDraft?: boolean;
-  attachments?: Array<{
-    fileName: string;
-    fileUrl?: string;
-    fileSize?: number;
-    fileType?: string;
-    objectKey: string;
-  }>;
-}
+import {
+  PerformanceAttachment,
+  PerformanceProject,
+} from '../interfaces/employee_performance.interface';
+export {
+  PerformanceAttachment,
+  PerformanceProject,
+} from '../interfaces/employee_performance.interface';
 
 @Entity('employee_performance')
 @Unique(['employeeId', 'quarter', 'financialYear'])
@@ -124,6 +102,74 @@ export class EmployeePerformance extends BaseEntity {
   // --- Legacy Compatibility Fields (Nullable) ---
   @Column({ type: 'text', nullable: true })
   overview: string;
+
+  // --- Step 1: Role & Quarter Overview ---
+  @Column({ type: 'text', nullable: true })
+  overallPerformanceSummary: string;
+
+  @Column({ type: 'text', nullable: true })
+  keyHighlights: string;
+
+  @Column({ type: 'text', nullable: true })
+  majorContributions: string;
+
+  @Column({ type: 'text', nullable: true })
+  areasForImprovement: string;
+
+  // --- Step 3: Teamwork & Collaboration ---
+  @Column({ type: 'text', nullable: true })
+  teamCollaborationSummary: string;
+
+  @Column({ type: 'text', nullable: true })
+  crossTeamContributions: string;
+
+  @Column({ type: 'text', nullable: true })
+  knowledgeSharingMentoring: string;
+
+  @Column({ type: 'text', nullable: true })
+  teamworkExamples: string;
+
+  @Column({ type: 'simple-json', nullable: true })
+  teamRatings: Record<string, number>;
+
+  // --- Step 4: Continuous Learning & Goals ---
+  @Column({ type: 'text', nullable: true })
+  certificationsOrCourses: string;
+
+  @Column({ type: 'text', nullable: true })
+  skillsToImprove: string;
+
+  @Column({ type: 'text', nullable: true })
+  supportOrTrainingRequired: string;
+
+  @Column({ type: 'text', nullable: true })
+  nextQuarterLearningGoals: string;
+
+  // --- Step 5: Environment ---
+  @Column({ type: 'int', nullable: true })
+  workEnvironmentRating: number;
+
+  @Column({ type: 'int', nullable: true })
+  toolsResourcesRating: number;
+
+  @Column({ type: 'int', nullable: true })
+  managerSupportRating: number;
+
+  @Column({ type: 'text', nullable: true })
+  challengesAffectingProductivity: string;
+
+  // --- Step 6: Review & Final Submission ---
+  @Column({ type: 'int', nullable: true })
+  overallSelfRating: number;
+
+  @Column({ type: 'text', nullable: true })
+  overallEmployeeComments: string;
+
+  @Column({ type: 'text', nullable: true })
+  careerGrowthInterests: string;
+
+  @Column({ type: 'boolean', default: false })
+  confirmationAccepted: boolean;
 
   @Column({ type: 'int', nullable: true })
   crossDepartmentCollaboration: number;

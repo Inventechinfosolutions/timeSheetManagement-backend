@@ -28,7 +28,7 @@ import { AppraisalNoticeService } from './appraisal_notice.service';
 import { DocumentUploaderService } from '../../common/document-uploader/services/document-uploader.service';
 import { DocumentMetaInfo, EntityType, ReferenceType } from '../../common/document-uploader/models/documentmetainfo.model';
 import { BufferedFile } from '../../common/s3-client/file.model';
-import { PerformanceAttachment } from '../entities/employee_performance.entity';
+import { PerformanceAttachment } from '../interfaces/employee_performance.interface';
 import {
   APPRAISAL_EDIT_WINDOW_HOURS,
   EDIT_REQUEST_DEFAULT_REASON,
