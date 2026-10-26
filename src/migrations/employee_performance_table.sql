@@ -6,7 +6,7 @@ CREATE TABLE IF NOT EXISTS `employee_performance` (
   `quarter` ENUM('Q1', 'Q2', 'Q3', 'Q4') NOT NULL,
   `financialYear` VARCHAR(50) DEFAULT NULL,
   `overview` TEXT NOT NULL,
-  `projectTitle` VARCHAR(255) NOT NULL,
+  `projectName` VARCHAR(255) NOT NULL,
   `projectDescription` TEXT NOT NULL,
   `challenge` TEXT NOT NULL,
 
@@ -55,11 +55,11 @@ CREATE TABLE IF NOT EXISTS `employee_performance` (
   ) NOT NULL,
 
   `rateCompanyEnvironment` ENUM(
-    'FIVE_STAR',
-    'FOUR_STAR',
-    'THREE_STAR',
-    'TWO_STAR',
-    'ONE_STAR'
+    'VERY_BAD',
+      'BAD',
+      'NEUTRAL',
+      'GOOD',
+      'EXCELLENT'
   ) NOT NULL,
 
   `status` ENUM('DRAFT', 'SUBMITTED', 'UNDER_REVIEW', 'APPROVED', 'REJECTED') NOT NULL DEFAULT 'DRAFT',
