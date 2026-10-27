@@ -36,9 +36,9 @@ export enum SuggestionsForImprovementEnum {
 }
 
 export enum RateCompanyEnvironmentEnum {
-  FIVE_STAR = 'FIVE_STAR',
-  FOUR_STAR = 'FOUR_STAR',
-  THREE_STAR = 'THREE_STAR',
-  TWO_STAR = 'TWO_STAR',
-  ONE_STAR = 'ONE_STAR',
+  VERY_BAD = 'VERY_BAD',
+  BAD = 'BAD',
+  NEUTRAL = 'NEUTRAL',
+  GOOD = 'GOOD',
+  EXCELLENT = 'EXCELLENT',
 }
