@@ -1,4 +1,4 @@
-import { IsEnum, IsOptional, IsString, IsBoolean, IsNumber } from 'class-validator';
+import { IsEnum, IsOptional, IsString, IsBoolean, IsNumber, IsArray } from 'class-validator';
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { NoteType } from '../enums/note-type.enum';
 import { NotePermission } from '../enums/note-permission.enum';
@@ -57,6 +57,11 @@ export class UpdateNoteDto {
   @IsOptional()
   @IsNumber()
   orderIndex?: number;
+
+  @ApiPropertyOptional({ type: [String], description: 'Pre-uploaded attachment keys' })
+  @IsOptional()
+  @IsArray()
+  attachmentKeys?: string[];
 
   @ApiPropertyOptional({
     description: 'Access permission granted to recipient (CanView or CanEdit)',
