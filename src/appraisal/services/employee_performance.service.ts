@@ -1072,6 +1072,49 @@ export class EmployeePerformanceService {
   }
 
   /**
+   * Remove one project from the employee performance record by index.
+   * Also deletes any MinIO attachments associated with that project.
+   */
+  async removeProject(id: number, projectIndex: number): Promise<EmployeePerformance> {
+    let record = await this.performanceRepository.findOne({ where: { id } });
+    if (!record) {
+      throw new NotFoundException(`Employee performance record with ID ${id} not found`);
+    }
+    record = await this.lockIfGrantExpired(record);
+    if (LOCKED_PERFORMANCE_STATUSES.includes(record.status)) {
+      throw new BadRequestException(
+        'Submission is locked. You cannot edit a submitted or reviewed evaluation without manager approval.',
+      );
+    }
+    const currentProjects = record.projects || [];
+    if (projectIndex < 0 || projectIndex >= currentProjects.length) {
+      throw new BadRequestException(`Invalid project index: ${projectIndex}`);
+    }
+
+    const projectToRemove = currentProjects[projectIndex];
+    if (projectToRemove?.attachments && Array.isArray(projectToRemove.attachments)) {
+      for (const att of projectToRemove.attachments) {
+        if (att.objectKey) {
+          try {
+            await this.documentUploaderService.deleteMinioDoc(att.objectKey);
+          } catch (err) {
+            this.logger.warn(`Failed to delete MinIO attachment on project removal: ${att.objectKey}`);
+          }
+        }
+      }
+    }
+
+    const nextProjects = currentProjects.filter((_, idx) => idx !== projectIndex);
+    record.projects = nextProjects;
+    record.keyAccomplishments = nextProjects.map((p) => (p.projectName || '').trim()).filter(Boolean).join('\n') || '';
+    record.deliverablesCompleted = nextProjects.map((p) => (p.description || '').trim()).filter(Boolean).join('\n') || '';
+    record.challengesFaced = nextProjects.map((p) => (p.challengesFaced || p.challenge || '').trim()).filter(Boolean).join('\n') || '';
+    record.lastModifiedDate = new Date();
+
+    return await this.performanceRepository.save(record);
+  }
+
+  /**
    * Stream one stored attachment from MinIO for preview or download
    */
   async streamAttachment(objectKey: string, res: any, inline = false): Promise<void> {

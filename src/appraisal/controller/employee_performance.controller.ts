@@ -275,6 +275,32 @@ export class EmployeePerformanceController {
   }
 
   /**
+   * DELETE: Remove one project from performance record
+   * DELETE /api/employee-performance/:id/projects/:index
+   */
+  @Delete(':id/projects/:index')
+  @ApiOperation({ summary: 'Delete a project from performance record by index' })
+  @ApiParam({ name: 'id', type: Number })
+  @ApiParam({ name: 'index', type: Number })
+  async removeProject(
+    @Param('id', ParseIntPipe) id: number,
+    @Param('index', ParseIntPipe) index: number,
+  ) {
+    return await this.performanceService.removeProject(id, index);
+  }
+
+  @Delete(':id/projects')
+  @ApiOperation({ summary: 'Delete a project from performance record by query index' })
+  @ApiParam({ name: 'id', type: Number })
+  @ApiQuery({ name: 'index', type: Number })
+  async removeProjectByQuery(
+    @Param('id', ParseIntPipe) id: number,
+    @Query('index', ParseIntPipe) index: number,
+  ) {
+    return await this.performanceService.removeProject(id, index);
+  }
+
+  /**
    * PUT: Update performance record (Guarded by Submission Lock & Edit Window)
    * PUT /api/employee-performance/:id
    */
