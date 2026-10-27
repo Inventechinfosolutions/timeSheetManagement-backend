@@ -24,6 +24,7 @@ export class DocumentUploaderService {
     image: BufferedFile,
     details: DocumentMetaInfo,
   ): Promise<{
+    id?: string;
     image_url: string;
     message: string;
     key: string;
@@ -37,6 +38,7 @@ export class DocumentUploaderService {
       `Image uploaded successfully with URL: ${uploaded_image.url}`,
     );
     return {
+      id: uploaded_image.id,
       image_url: uploaded_image.url,
       key: uploaded_image.key,
       fileName: uploaded_image.fileName,
@@ -129,8 +131,8 @@ export class DocumentUploaderService {
           docDetails.entityId = e.entityId;
           docDetails.refType = e.refType;
           docDetails.refId = e.refId;
-          docDetails.name = metadata.filename;
-          docDetails.key = metadata.id;
+          docDetails.name = metadata.filename || 'Attachment';
+          docDetails.key = metadata.id || s3Key;
           docDetails.createdAt = e.createdAt;
           docs.push(docDetails);
         } catch (error) {
@@ -178,7 +180,7 @@ export class DocumentUploaderService {
     entityType: EntityType,
     entityIds: number[],
     referenceType?: ReferenceType,
-    loadNames = false,
+    loadNames = true,
   ): Promise<Map<number, DocumentDetailsDto[]>> {
     const grouped = new Map<number, DocumentDetailsDto[]>();
     const ids = Array.from(new Set(entityIds.filter((id) => id != null)));
