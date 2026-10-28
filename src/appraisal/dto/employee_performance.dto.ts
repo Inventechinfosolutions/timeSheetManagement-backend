@@ -11,6 +11,7 @@ import {
   Max,
   IsArray,
   ArrayMinSize,
+  ValidateIf,
   ValidateNested,
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional, PartialType } from '@nestjs/swagger';
@@ -51,6 +52,7 @@ export class PerformanceProjectDto {
   projectName: string;
 
   @ApiProperty({ example: 'Delivered the appraisal flow' })
+  @ValidateIf((project) => project.isDraft !== true)
   @IsString()
   @IsNotEmpty()
   description: string;
@@ -61,21 +63,25 @@ export class PerformanceProjectDto {
   challenge?: string;
 
   @ApiProperty({ example: 'Frontend Developer' })
+  @ValidateIf((project) => project.isDraft !== true)
   @IsNotEmpty()
   @IsString()
   projectRole: string;
 
   @ApiProperty({ example: 'Individual Contributor' })
+  @ValidateIf((project) => project.isDraft !== true)
   @IsNotEmpty()
   @IsString()
   responsibilityType: string;
 
   @ApiProperty({ example: 'Project responsibilities' })
+  @ValidateIf((project) => project.isDraft !== true)
   @IsNotEmpty()
   @IsString()
   keyResponsibilities: string;
 
   @ApiProperty({ example: 'Challenges faced' })
+  @ValidateIf((project) => project.isDraft !== true)
   @IsNotEmpty()
   @IsString()
   challengesFaced: string;
@@ -86,12 +92,14 @@ export class PerformanceProjectDto {
   solutionsImplemented?: string;
 
   @ApiProperty({ example: 'Key achievements' })
+  @ValidateIf((project) => project.isDraft !== true)
   @IsNotEmpty()
   @IsString()
   keyAchievementsOutcomes: string;
 
   @ApiProperty({ type: [String] })
   @IsArray()
+  @ValidateIf((project) => project.isDraft !== true)
   @ArrayMinSize(1)
   technologiesUsed: string[];
 
