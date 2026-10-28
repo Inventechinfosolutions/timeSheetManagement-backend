@@ -21,6 +21,8 @@ import {
   SubmitReviewDto,
   RequestEditPermissionDto,
   RespondEditPermissionDto,
+  PerformanceProjectDto,
+  UpdatePerformanceProjectDto,
 } from '../dto/employee_performance.dto';
 import { EmployeePerformanceStatus } from '../enums/employee_performance.enums';
 import { QuarterlyReviewStatus } from '../enums/quarterly_review.enums';
@@ -28,7 +30,7 @@ import { AppraisalNoticeService } from './appraisal_notice.service';
 import { DocumentUploaderService } from '../../common/document-uploader/services/document-uploader.service';
 import { DocumentMetaInfo, EntityType, ReferenceType } from '../../common/document-uploader/models/documentmetainfo.model';
 import { BufferedFile } from '../../common/s3-client/file.model';
-import { PerformanceAttachment } from '../interfaces/employee_performance.interface';
+import { PerformanceAttachment, PerformanceProject, PerformanceProjectAttachment } from '../interfaces/employee_performance.interface';
 import {
   APPRAISAL_EDIT_WINDOW_HOURS,
   EDIT_REQUEST_DEFAULT_REASON,
@@ -46,6 +48,14 @@ import {
 } from '../utils/review-access';
 import { createAuditEntry, appendAuditEntry } from '../utils/audit-history.helper';
 import { AppraisalAuditEntry } from '../interfaces/appraisal_audit.interface';
+import {
+  applyPerformanceSteps,
+  clearPerformanceSteps,
+  overlayPerformanceView,
+  readPerformanceProjects,
+  savePerformanceProjects,
+  stepText,
+} from '../utils/performance-steps';
 
 export interface PerformanceListMeta {
   totalItems: number;
@@ -141,25 +151,20 @@ export class EmployeePerformanceService {
           nextStatus = record.status;
         }
 
-        const draftFields = { ...dto };
-        if (draftFields.attachments == null) {
-          delete draftFields.attachments;
-        }
-        if (draftFields.projects == null) {
-          delete draftFields.projects;
-        }
-        Object.assign(record, draftFields, {
-          status: nextStatus,
-          lastModifiedDate: new Date(),
-          lastModifiedBy: dto.employeeId,
-        });
+        applyPerformanceSteps(record, { ...dto });
+        record.status = nextStatus;
+        record.lastModifiedDate = new Date();
+        record.lastModifiedBy = dto.employeeId;
       } else {
         record = this.performanceRepository.create({
-          ...dto,
+          employeeId: dto.employeeId,
+          quarter: dto.quarter,
+          financialYear: dto.financialYear,
           status: nextStatus,
           lastModifiedDate: new Date(),
           lastModifiedBy: dto.employeeId,
         });
+        applyPerformanceSteps(record, { ...dto });
       }
 
       const saved = await this.performanceRepository.save(record);
@@ -279,29 +284,20 @@ export class EmployeePerformanceService {
       const resubmitting = record.status === EmployeePerformanceStatus.EDIT_GRANTED;
 
       // Validate Section requirements
-      const savedProjects = (record.projects || []).filter(
+      const savedProjects = readPerformanceProjects(record).filter(
         (project) => project.projectName?.trim() && project.description?.trim(),
       );
       if (savedProjects.length === 0) {
         throw new BadRequestException('Add at least one project before submission.');
       }
-      if (!record.responsibilitiesHandled?.trim()) {
-        throw new BadRequestException('Section A: Responsibilities Handled is required before submission.');
+      if (!stepText(record.stepOverview?.overallPerformanceSummary)) {
+        throw new BadRequestException('Overall performance summary is required before submission.');
       }
-      if (!record.deliverablesCompleted?.trim()) {
-        throw new BadRequestException('Section A: Deliverables Completed is required before submission.');
+      if (!stepText(record.stepLearning?.skillsAcquired)) {
+        throw new BadRequestException('Skills learned during this period is required before submission.');
       }
-      if (!record.keyAccomplishments?.trim()) {
-        throw new BadRequestException('Section B: Key Accomplishments is required before submission.');
-      }
-      if (!record.challengesFaced?.trim()) {
-        throw new BadRequestException('Section C: Challenges Faced is required before submission.');
-      }
-      if (!record.skillsAcquired?.trim()) {
-        throw new BadRequestException('Section D: Skills Acquired is required before submission.');
-      }
-      if (!record.plannedDeliverables?.trim()) {
-        throw new BadRequestException('Section E: Planned Deliverables for Next Quarter is required.');
+      if (!stepText(record.stepLearning?.nextQuarterLearningGoals)) {
+        throw new BadRequestException('Learning goals for next quarter are required before submission.');
       }
 
       const submittedAt = new Date();
@@ -865,7 +861,7 @@ export class EmployeePerformanceService {
       if (params?.q?.trim()) {
         const keyword = `%${params.q.trim()}%`;
         qb.andWhere(
-          '(ep.employeeId LIKE :keyword OR ep.projects LIKE :keyword OR ep.keyAccomplishments LIKE :keyword OR ep.financialYear LIKE :keyword OR ep.status LIKE :keyword)',
+          '(ep.employeeId LIKE :keyword OR ep.stepAchievements LIKE :keyword OR ep.financialYear LIKE :keyword OR ep.status LIKE :keyword)',
           { keyword },
         );
       }
@@ -948,9 +944,10 @@ export class EmployeePerformanceService {
       );
     }
 
-    const fields = { ...updateDto };
+    const fields = { ...updateDto } as Record<string, unknown>;
     const requestedStatus = updateDto.status;
     delete fields.status;
+    delete fields.clearSteps;
     if (fields.attachments == null) {
       delete fields.attachments;
     }
@@ -967,11 +964,15 @@ export class EmployeePerformanceService {
       nextStatus = EmployeePerformanceStatus.DRAFT;
     }
 
-    Object.assign(record, fields, {
-      status: nextStatus,
-      lastModifiedDate: new Date(),
-      ...(updateDto.employeeId ? { lastModifiedBy: updateDto.employeeId } : {}),
-    });
+    if (updateDto.clearSteps) {
+      clearPerformanceSteps(record);
+    }
+    applyPerformanceSteps(record, fields);
+    record.status = nextStatus;
+    record.lastModifiedDate = new Date();
+    if (updateDto.employeeId) {
+      record.lastModifiedBy = updateDto.employeeId;
+    }
 
     const updated = await this.performanceRepository.save(record);
 
@@ -1037,7 +1038,7 @@ export class EmployeePerformanceService {
   /**
    * Remove one stored file from MinIO and from the performance attachments list.
    */
-  async removeAttachment(id: number, objectKey: string): Promise<PerformanceAttachment[]> {
+  async removeAttachment(id: number, objectKey: string): Promise<PerformanceProjectAttachment[]> {
     let record = await this.performanceRepository.findOne({ where: { id } });
     if (!record) {
       throw new NotFoundException(`Employee performance record with ID ${id} not found`);
@@ -1051,24 +1052,20 @@ export class EmployeePerformanceService {
     if (!objectKey) {
       throw new BadRequestException('Choose an attachment to remove.');
     }
-    const current = record.attachments || [];
-    const next = current.filter((item) => item.objectKey !== objectKey);
-    const projects = (record.projects || []).map((project) => ({
+    const projects = readPerformanceProjects(record).map((project) => ({
       ...project,
       attachments: (project.attachments || []).filter((item) => item.objectKey !== objectKey),
     }));
-    const removedFromColumn = next.length !== current.length;
-    const removedFromProject = JSON.stringify(projects) !== JSON.stringify(record.projects || []);
-    if (!removedFromColumn && !removedFromProject) {
+    const removedFromProject = JSON.stringify(projects) !== JSON.stringify(readPerformanceProjects(record));
+    if (!removedFromProject) {
       await this.documentUploaderService.deleteMinioDoc(objectKey);
-      return current;
+      return projects.flatMap((project) => project.attachments || []);
     }
     await this.documentUploaderService.deleteMinioDoc(objectKey);
-    record.attachments = next;
-    record.projects = projects;
+    savePerformanceProjects(record, projects);
     record.lastModifiedDate = new Date();
     const saved = await this.performanceRepository.save(record);
-    return saved.attachments || [];
+    return readPerformanceProjects(saved).flatMap((project) => project.attachments || []);
   }
 
   /**
@@ -1086,7 +1083,7 @@ export class EmployeePerformanceService {
         'Submission is locked. You cannot edit a submitted or reviewed evaluation without manager approval.',
       );
     }
-    const currentProjects = record.projects || [];
+    const currentProjects = readPerformanceProjects(record);
     if (projectIndex < 0 || projectIndex >= currentProjects.length) {
       throw new BadRequestException(`Invalid project index: ${projectIndex}`);
     }
@@ -1105,13 +1102,65 @@ export class EmployeePerformanceService {
     }
 
     const nextProjects = currentProjects.filter((_, idx) => idx !== projectIndex);
-    record.projects = nextProjects;
-    record.keyAccomplishments = nextProjects.map((p) => (p.projectName || '').trim()).filter(Boolean).join('\n') || '';
-    record.deliverablesCompleted = nextProjects.map((p) => (p.description || '').trim()).filter(Boolean).join('\n') || '';
-    record.challengesFaced = nextProjects.map((p) => (p.challengesFaced || p.challenge || '').trim()).filter(Boolean).join('\n') || '';
+    savePerformanceProjects(record, nextProjects);
     record.lastModifiedDate = new Date();
 
     return await this.performanceRepository.save(record);
+  }
+
+  private async editablePerformance(id: number): Promise<EmployeePerformance> {
+    let record = await this.performanceRepository.findOne({ where: { id } });
+    if (!record) {
+      throw new NotFoundException(`Employee performance record with ID ${id} not found`);
+    }
+    record = await this.lockIfGrantExpired(record);
+    if (LOCKED_PERFORMANCE_STATUSES.includes(record.status)) {
+      throw new BadRequestException(
+        'Submission is locked. You cannot edit a submitted or reviewed evaluation without manager approval.',
+      );
+    }
+    return record;
+  }
+
+  private markDraftIfUntouched(record: EmployeePerformance): void {
+    if (record.status === EmployeePerformanceStatus.NOT_STARTED) {
+      record.status = EmployeePerformanceStatus.DRAFT;
+    }
+  }
+
+  async addProject(id: number, project: PerformanceProjectDto): Promise<EnrichedEmployeePerformance> {
+    const record = await this.editablePerformance(id);
+    savePerformanceProjects(record, [...readPerformanceProjects(record), project as PerformanceProject]);
+    this.markDraftIfUntouched(record);
+    record.lastModifiedDate = new Date();
+    const saved = await this.performanceRepository.save(record);
+    const [enriched] = await this.enrichPerformancesWithEmployeeDetails([saved]);
+    return enriched;
+  }
+
+  async patchProject(
+    id: number,
+    projectIndex: number,
+    patch: UpdatePerformanceProjectDto,
+  ): Promise<EnrichedEmployeePerformance> {
+    const record = await this.editablePerformance(id);
+    const currentProjects = [...readPerformanceProjects(record)];
+    if (projectIndex < 0 || projectIndex >= currentProjects.length) {
+      throw new BadRequestException(`Invalid project index: ${projectIndex}`);
+    }
+    const nextProject = { ...currentProjects[projectIndex] };
+    Object.entries(patch).forEach(([key, value]) => {
+      if (value !== undefined) {
+        (nextProject as unknown as Record<string, unknown>)[key] = value;
+      }
+    });
+    currentProjects[projectIndex] = nextProject;
+    savePerformanceProjects(record, currentProjects);
+    this.markDraftIfUntouched(record);
+    record.lastModifiedDate = new Date();
+    const saved = await this.performanceRepository.save(record);
+    const [enriched] = await this.enrichPerformancesWithEmployeeDetails([saved]);
+    return enriched;
   }
 
   /**
@@ -1391,7 +1440,7 @@ export class EmployeePerformanceService {
         })
         : null;
       withAccess.push({
-        ...record,
+        ...overlayPerformanceView(record),
         assignedBy: review
           ? nameById.get(review.assignerId) ||
             (review.assignerId?.toLowerCase() === 'admin' ? 'Admin' : null) ||
@@ -1474,7 +1523,7 @@ export class EmployeePerformanceService {
         r.status === EmployeePerformanceStatus.NOT_STARTED;
 
       return {
-        ...r,
+        ...overlayPerformanceView(r),
         employeeName: empInfo?.fullName || null,
         department: empInfo?.department || null,
         designation: empInfo?.designation || null,
