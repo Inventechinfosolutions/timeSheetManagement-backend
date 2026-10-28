@@ -13,10 +13,8 @@ import { DocumentDetailsDto } from '../../common/document-uploader/dto/documentd
 
 @Entity('notes')
 @Index('IDX_NOTES_PARENT_ID', ['parentId'])
-@Index('IDX_NOTES_TYPE_ARCHIVED_PARENT', ['type', 'isArchived', 'parentId'])
 @Index('IDX_NOTES_EMPLOYEE_ID', ['employeeId'])
 @Index('IDX_NOTES_USER_ID', ['userId'])
-@Index('IDX_NOTES_IS_PINNED_UPDATED_AT', ['isPinned', 'updatedAt'])
 export class Note extends BaseEntity {
   @PrimaryGeneratedColumn()
   id: number;

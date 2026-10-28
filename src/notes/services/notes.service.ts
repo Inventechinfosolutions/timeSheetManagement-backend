@@ -447,8 +447,6 @@ export class NotesService {
       const note = await this.noteRepo
         .createQueryBuilder('note')
         .leftJoinAndSelect('note.subNotes', 'subNote')
-        .leftJoinAndSelect('subNote.subNotes', 'nestedSubNote')
-        .leftJoinAndSelect('note.parent', 'parent')
         .where('note.id = :id', { id })
         .orderBy('subNote.orderIndex', 'ASC')
         .addOrderBy('subNote.createdAt', 'ASC')
