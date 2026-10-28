@@ -136,7 +136,7 @@ export class AnnualAppraisalService {
       const completedRatings: number[] = [];
 
       for (const r of reviews) {
-        const rawRating = r.finalRating;
+        const rawRating = r.finalRating ?? r.overallPerformanceRating;
         const rating = rawRating == null || Number.isNaN(Number(rawRating)) ? null : Number(rawRating);
         const isReviewed =
           r.status === QuarterlyReviewStatus.REVIEWED ||

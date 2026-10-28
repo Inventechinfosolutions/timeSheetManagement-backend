@@ -44,7 +44,7 @@ export class RevealedEvaluationDto {
   areasOfImprovement: string;
 
   @ApiProperty()
-  additionalRemarks: string;
+  managerComment: string;
 
   @ApiProperty({ required: false })
   goalsForNextReviewPeriod?: string;
@@ -60,12 +60,6 @@ export class RevealedEvaluationDto {
 
   @ApiProperty({ required: false })
   performanceAction?: string;
-
-  @ApiProperty({ required: false })
-  finalPerformanceRating?: number;
-
-  @ApiProperty({ required: false })
-  finalManagerComments?: string;
 
   @ApiProperty({ required: false })
   managerConfirmation?: boolean;

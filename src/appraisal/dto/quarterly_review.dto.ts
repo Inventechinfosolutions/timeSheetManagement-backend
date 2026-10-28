@@ -204,11 +204,11 @@ export class ManagerEvaluationDto {
 
   @ApiPropertyOptional({
     example: 'Strong performer throughout the quarter. Recommended for leadership training.',
-    description: 'Additional Remarks (Text Area)',
+    description: 'Manager comment',
   })
   @IsOptional()
   @IsString()
-  additionalRemarks?: string;
+  managerComment?: string;
 
   // Optional overall and technical ratings
   @ApiPropertyOptional({ example: 4, description: 'Overall performance rating (1-5)' })
@@ -253,11 +253,6 @@ export class ManagerEvaluationDto {
   @IsString()
   performanceAction?: string;
 
-  @ApiPropertyOptional({ description: 'Final Manager Comments' })
-  @IsOptional()
-  @IsString()
-  finalManagerComments?: string;
-
   @ApiPropertyOptional({ description: 'Manager Confirmation Checkbox' })
   @IsOptional()
   @IsBoolean()
@@ -275,31 +270,6 @@ export class ManagerEvaluationDto {
   @Min(1)
   @Max(5)
   finalRating?: number;
-
-  @ApiPropertyOptional({ example: 4, description: 'Final Performance Rating (1-5)' })
-  @IsOptional()
-  @Type(() => Number)
-  @IsNumber()
-  @Min(1)
-  @Max(5)
-  finalPerformanceRating?: number;
-
-  // Optional Override
-  @ApiPropertyOptional({ example: 5, description: 'Manager override rating (1-5)' })
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  @Max(5)
-  overrideFinalScore?: number;
-
-  @ApiPropertyOptional({
-    example: 'Overridden due to outstanding execution on critical production outage.',
-    description: 'Justification for score override',
-  })
-  @IsOptional()
-  @IsString()
-  overrideJustification?: string;
 }
 
 export class UpdateQuarterlyReviewDto extends PartialType(CreateQuarterlyReviewDto) {
@@ -361,10 +331,10 @@ export class UpdateQuarterlyReviewDto extends PartialType(CreateQuarterlyReviewD
   @IsString()
   areasOfImprovement?: string;
 
-  @ApiPropertyOptional({ description: 'Additional remarks' })
+  @ApiPropertyOptional({ description: 'Manager comment' })
   @IsOptional()
   @IsString()
-  additionalRemarks?: string;
+  managerComment?: string;
 
   @ApiPropertyOptional({ description: 'Goals for Next Review Period' })
   @IsOptional()
@@ -391,11 +361,6 @@ export class UpdateQuarterlyReviewDto extends PartialType(CreateQuarterlyReviewD
   @IsString()
   performanceAction?: string;
 
-  @ApiPropertyOptional({ description: 'Final Manager Comments' })
-  @IsOptional()
-  @IsString()
-  finalManagerComments?: string;
-
   @ApiPropertyOptional({ description: 'Manager Confirmation' })
   @IsOptional()
   @IsBoolean()
@@ -408,16 +373,6 @@ export class UpdateQuarterlyReviewDto extends PartialType(CreateQuarterlyReviewD
   @Min(1)
   @Max(5)
   finalRating?: number;
-
-  @ApiPropertyOptional({ description: 'Override score' })
-  @IsOptional()
-  @IsInt()
-  overrideFinalScore?: number;
-
-  @ApiPropertyOptional({ description: 'Override justification' })
-  @IsOptional()
-  @IsString()
-  overrideJustification?: string;
 }
 
 export class QueryQuarterlyReviewDto {

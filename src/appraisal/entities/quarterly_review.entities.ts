@@ -12,19 +12,19 @@ import { AppraisalAuditEntry } from '../interfaces/appraisal_audit.interface';
 @Unique(['employeeId', 'quarter', 'financialYear'])
 export class QuarterlyReview extends BaseEntity {
   @PrimaryGeneratedColumn()
-  id: number;
+  id!: number;
 
   @Column({ type: 'varchar', length: 100, nullable: false })
-  employeeId: string;
+  employeeId!: string;
 
   @Column({ type: 'varchar', length: 150, nullable: true })
-  employeeName: string | null;
+  employeeName!: string | null;
 
   @Column({ type: 'varchar', length: 100, nullable: true })
-  department: string | null;
+  department!: string | null;
 
   @Column({ type: 'varchar', length: 100, nullable: true })
-  designation: string | null;
+  designation!: string | null;
 
   @Column({
     type: 'enum',
@@ -32,32 +32,32 @@ export class QuarterlyReview extends BaseEntity {
     default: ReviewEmployeeType.EMPLOYEE,
     nullable: false,
   })
-  employeeType: ReviewEmployeeType;
+  employeeType!: ReviewEmployeeType;
 
   @Column({ type: 'varchar', length: 50, nullable: false })
-  financialYear: string; // e.g. '2025-2026'
+  financialYear!: string; // e.g. '2025-2026'
 
   @Column({
     type: 'enum',
     enum: QuaterlyEnum,
     nullable: false,
   })
-  quarter: QuaterlyEnum; // 'Q1', 'Q2', 'Q3', 'Q4'
+  quarter!: QuaterlyEnum; // 'Q1', 'Q2', 'Q3', 'Q4'
 
   @Column({ type: 'date', nullable: true })
-  assignedDate: Date | null;
+  assignedDate!: Date | null;
 
   @Column({ type: 'date', nullable: true })
-  deadlineDate: Date | null; // Due date
+  deadlineDate!: Date | null; // Due date
 
   @Column({ type: 'datetime', nullable: true })
-  submittedDate: Date | null;
+  submittedDate!: Date | null;
 
   @Column({ type: 'datetime', nullable: true })
-  reviewedDate: Date | null; // Completion timestamp
+  reviewedDate!: Date | null; // Completion timestamp
 
   @Column({ type: 'text', nullable: true })
-  description: string | null;
+  description!: string | null;
 
   @Column({
     type: 'enum',
@@ -65,16 +65,16 @@ export class QuarterlyReview extends BaseEntity {
     default: ReviewAssignedBy.MANAGER,
     nullable: false,
   })
-  assignedBy: ReviewAssignedBy;
+  assignedBy!: ReviewAssignedBy;
 
   @Column({ type: 'varchar', length: 100, nullable: false })
-  assignerId: string; // ID of the reviewer/manager assigning the review
+  assignerId!: string; // ID of the reviewer/manager assigning the review
 
   @Column({ type: 'varchar', length: 100, nullable: true })
-  managerId: string | null;
+  managerId!: string | null;
 
   @Column({ type: 'varchar', length: 150, nullable: true })
-  managerName: string | null;
+  managerName!: string | null;
 
   @Column({
     type: 'enum',
@@ -82,92 +82,80 @@ export class QuarterlyReview extends BaseEntity {
     default: QuarterlyReviewStatus.NOT_STARTED,
     nullable: false,
   })
-  status: QuarterlyReviewStatus;
+  status!: QuarterlyReviewStatus;
 
   // Evaluation Metrics (1 to 5 scale, Nullable until reviewed)
-  @Column({ type: 'decimal', precision: 3, scale: 1, nullable: true })
-  overallPerformanceRating: number | null;
+  @Column({ type: 'decimal', precision: 3, scale: 2, nullable: true })
+  overallPerformanceRating!: number | null;
 
   @Column({ type: 'decimal', precision: 3, scale: 1, nullable: true })
-  productivity: number | null;
+  productivity!: number | null;
 
   @Column({ type: 'decimal', precision: 3, scale: 1, nullable: true })
-  qualityOfWork: number | null;
+  qualityOfWork!: number | null;
 
   @Column({ type: 'decimal', precision: 3, scale: 1, nullable: true })
-  technicalJobSkills: number | null;
+  technicalJobSkills!: number | null;
 
   @Column({ type: 'decimal', precision: 3, scale: 1, nullable: true })
-  ownershipResponsibility: number | null;
+  ownershipResponsibility!: number | null;
 
   @Column({ type: 'decimal', precision: 3, scale: 1, nullable: true })
-  communication: number | null;
+  communication!: number | null;
 
   @Column({ type: 'decimal', precision: 3, scale: 1, nullable: true })
-  teamCollaboration: number | null;
+  teamCollaboration!: number | null;
 
   @Column({ type: 'decimal', precision: 3, scale: 1, nullable: true })
-  innovationProblemSolving: number | null;
+  innovationProblemSolving!: number | null;
 
   @Column({ type: 'decimal', precision: 3, scale: 2, nullable: true })
-  finalRating: number | null;
-
-  @Column({ type: 'decimal', precision: 3, scale: 1, nullable: true })
-  finalPerformanceRating: number | null;
+  finalRating!: number | null;
 
   @Column({ type: 'varchar', length: 100, nullable: true })
-  ratingDescription: string | null; // 'Outstanding', 'Exceeds Expectations', etc.
+  ratingDescription!: string | null; // 'Outstanding', 'Exceeds Expectations', etc.
 
   @Column({ type: 'int', nullable: true })
-  overrideFinalScore: number | null;
-
-  @Column({ type: 'text', nullable: true })
-  overrideJustification: string | null;
-
-  @Column({ type: 'int', nullable: true })
-  performanceIndex: number | null; // Legacy score
+  performanceIndex!: number | null; // Legacy score
 
   // Qualitative Feedback (FR-05 Manager Remarks text areas)
   @Column({ type: 'text', nullable: true })
-  performanceStrengths: string | null;
+  performanceStrengths!: string | null;
 
   @Column({ type: 'text', nullable: true })
-  areasOfImprovement: string | null;
+  areasOfImprovement!: string | null;
 
   @Column({ type: 'text', nullable: true })
-  additionalRemarks: string | null;
+  managerComment!: string | null;
 
   // Section 5: Final Review & Submission Fields
   @Column({ type: 'text', nullable: true })
-  goalsForNextReviewPeriod: string | null;
+  goalsForNextReviewPeriod!: string | null;
 
   @Column({ type: 'text', nullable: true })
-  trainingDevelopmentRecommendations: string | null;
+  trainingDevelopmentRecommendations!: string | null;
 
   @Column({ type: 'varchar', length: 150, nullable: true })
-  careerGrowthRecommendation: string | null;
+  careerGrowthRecommendation!: string | null;
 
   @Column({ type: 'varchar', length: 100, nullable: true })
-  reviewOutcome: string | null;
+  reviewOutcome!: string | null;
 
   @Column({ type: 'varchar', length: 150, nullable: true })
-  performanceAction: string | null;
-
-  @Column({ type: 'text', nullable: true })
-  finalManagerComments: string | null;
+  performanceAction!: string | null;
 
   @Column({ type: 'boolean', default: false })
-  managerConfirmation: boolean;
+  managerConfirmation!: boolean;
 
   // Linked employee self-assessment submission
   @Column({ type: 'int', nullable: true })
-  performanceId: number | null;
+  performanceId!: number | null;
 
   @Column({ type: 'int', default: 0, nullable: false })
-  reassignCount: number;
+  reassignCount!: number;
 
   @Column({ type: 'json', nullable: true })
-  auditHistory: AppraisalAuditEntry[] | null;
+  auditHistory!: AppraisalAuditEntry[] | null;
 }
 
 // Aliases

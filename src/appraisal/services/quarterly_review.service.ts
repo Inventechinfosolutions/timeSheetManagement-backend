@@ -318,29 +318,56 @@ export class QuarterlyReviewService {
         throw new NotFoundException(`Quarterly review with ID ${id} not found.`);
       }
 
-      // Calculate Average Score (1 to 5 scale) across all provided criteria
+      // Calculate Average Score (1 to 5 scale) across all provided criteria.
+      // A partial update keeps the stored scores for fields that were not sent.
+      const scoreSent = (value: number | undefined | null) => value !== undefined && value !== null;
+      const storedScore = (value: unknown): number | undefined => {
+        if (value === undefined || value === null || value === '') return undefined;
+        const parsed = Number(value);
+        return Number.isFinite(parsed) ? parsed : undefined;
+      };
+      const anyScoreSent =
+        scoreSent(evalDto.productivity) ||
+        scoreSent(evalDto.qualityOfWork) ||
+        scoreSent(evalDto.ownership) ||
+        scoreSent(evalDto.ownershipResponsibility) ||
+        scoreSent(evalDto.communication) ||
+        scoreSent(evalDto.teamCollaboration) ||
+        scoreSent(evalDto.innovation) ||
+        scoreSent(evalDto.innovationProblemSolving) ||
+        scoreSent(evalDto.technicalJobSkills) ||
+        scoreSent(evalDto.finalRating) ||
+        scoreSent(evalDto.overallPerformanceRating);
+
       const ownershipResponsibility = evalDto.ownershipResponsibility ?? evalDto.ownership;
       const innovationProblemSolving = evalDto.innovationProblemSolving ?? evalDto.innovation;
 
-      const scores = [
-        evalDto.productivity,
-        evalDto.qualityOfWork,
-        ownershipResponsibility,
-        evalDto.communication,
-        evalDto.teamCollaboration,
-        innovationProblemSolving,
-        evalDto.overallPerformanceRating,
-        evalDto.technicalJobSkills,
-      ].filter((s): s is number => s !== undefined && s !== null && s > 0);
+      if (anyScoreSent) {
+        const scores = [
+          evalDto.productivity ?? storedScore(review.productivity),
+          evalDto.qualityOfWork ?? storedScore(review.qualityOfWork),
+          ownershipResponsibility ?? storedScore(review.ownershipResponsibility),
+          evalDto.communication ?? storedScore(review.communication),
+          evalDto.teamCollaboration ?? storedScore(review.teamCollaboration),
+          innovationProblemSolving ?? storedScore(review.innovationProblemSolving),
+          evalDto.technicalJobSkills ?? storedScore(review.technicalJobSkills),
+        ].filter((s): s is number => s !== undefined && s !== null && s > 0);
 
-      const sum = scores.reduce((acc, curr) => acc + curr, 0);
-      const calculated = scores.length > 0 ? Number((sum / scores.length).toFixed(2)) : null;
-      const finalRating = evalDto.finalRating ?? evalDto.overrideFinalScore ?? calculated;
-      const ratingDescription = finalRating
-        ? RATING_DESCRIPTIONS[Math.round(Number(finalRating))] || 'Meets Expectations'
-        : 'Meets Expectations';
+        const sum = scores.reduce((acc, curr) => acc + curr, 0);
+        const calculated = scores.length > 0 ? Number((sum / scores.length).toFixed(2)) : null;
+        const finalRating = calculated ?? evalDto.finalRating ?? evalDto.overallPerformanceRating ?? null;
+        const ratingDescription = finalRating
+          ? RATING_DESCRIPTIONS[Math.round(Number(finalRating))] || 'Meets Expectations'
+          : 'Meets Expectations';
 
-      if (evalDto.overallPerformanceRating !== undefined) review.overallPerformanceRating = evalDto.overallPerformanceRating;
+        if (finalRating !== null && finalRating !== undefined) {
+          const rounded = Number(Number(finalRating).toFixed(2));
+          review.overallPerformanceRating = rounded;
+          review.finalRating = rounded;
+        }
+        review.ratingDescription = ratingDescription;
+      }
+
       if (evalDto.productivity !== undefined) review.productivity = evalDto.productivity;
       if (evalDto.qualityOfWork !== undefined) review.qualityOfWork = evalDto.qualityOfWork;
       if (evalDto.technicalJobSkills !== undefined) review.technicalJobSkills = evalDto.technicalJobSkills;
@@ -348,18 +375,10 @@ export class QuarterlyReviewService {
       if (evalDto.communication !== undefined) review.communication = evalDto.communication;
       if (evalDto.teamCollaboration !== undefined) review.teamCollaboration = evalDto.teamCollaboration;
       if (innovationProblemSolving !== undefined) review.innovationProblemSolving = innovationProblemSolving;
-      if (finalRating !== null && finalRating !== undefined) review.finalRating = Number(Number(finalRating).toFixed(2));
-      if (evalDto.finalPerformanceRating !== undefined) review.finalPerformanceRating = evalDto.finalPerformanceRating;
-      review.ratingDescription = ratingDescription;
-
-      if (evalDto.overrideFinalScore) {
-        review.overrideFinalScore = evalDto.overrideFinalScore;
-        review.overrideJustification = evalDto.overrideJustification || null;
-      }
 
       if (evalDto.performanceStrengths !== undefined) review.performanceStrengths = evalDto.performanceStrengths;
       if (evalDto.areasOfImprovement !== undefined) review.areasOfImprovement = evalDto.areasOfImprovement;
-      if (evalDto.additionalRemarks !== undefined) review.additionalRemarks = evalDto.additionalRemarks || null;
+      if (evalDto.managerComment !== undefined) review.managerComment = evalDto.managerComment || null;
 
       // Section 5: Final Review & Submission Fields
       if (evalDto.goalsForNextReviewPeriod !== undefined) review.goalsForNextReviewPeriod = evalDto.goalsForNextReviewPeriod;
@@ -367,7 +386,6 @@ export class QuarterlyReviewService {
       if (evalDto.careerGrowthRecommendation !== undefined) review.careerGrowthRecommendation = evalDto.careerGrowthRecommendation;
       if (evalDto.reviewOutcome !== undefined) review.reviewOutcome = evalDto.reviewOutcome;
       if (evalDto.performanceAction !== undefined) review.performanceAction = evalDto.performanceAction;
-      if (evalDto.finalManagerComments !== undefined) review.finalManagerComments = evalDto.finalManagerComments;
       if (evalDto.managerConfirmation !== undefined) review.managerConfirmation = evalDto.managerConfirmation;
 
       if (evalDto.isDraft) {
@@ -391,6 +409,9 @@ export class QuarterlyReviewService {
         const saved = await this.reviewRepository.save(review);
         await this.syncPerformanceAudit(saved, draftEntry);
         await this.markPerformanceEvaluationInProgress(saved);
+        if (saved.finalRating != null) {
+          await this.annualService.syncEmployeeAnnualRating(saved.employeeId, saved.financialYear);
+        }
         const enrichedList = await this.enrichReviewsWithDetails([saved]);
         return enrichedList[0];
       }
@@ -675,19 +696,12 @@ export class QuarterlyReviewService {
       overallPerformanceRating: review.overallPerformanceRating != null ? Number(review.overallPerformanceRating) : 0,
       performanceStrengths: review.performanceStrengths || '',
       areasOfImprovement: review.areasOfImprovement || '',
-      additionalRemarks: review.additionalRemarks || '',
+      managerComment: review.managerComment || '',
       goalsForNextReviewPeriod: review.goalsForNextReviewPeriod || '',
       trainingDevelopmentRecommendations: review.trainingDevelopmentRecommendations || '',
       careerGrowthRecommendation: review.careerGrowthRecommendation || '',
       reviewOutcome: review.reviewOutcome || '',
       performanceAction: review.performanceAction || '',
-      finalPerformanceRating:
-        review.finalPerformanceRating != null
-          ? Number(review.finalPerformanceRating)
-          : review.finalRating != null
-          ? Number(review.finalRating)
-          : 0,
-      finalManagerComments: review.finalManagerComments || '',
       managerConfirmation: Boolean(review.managerConfirmation),
       passwordVerified: true,
     };
@@ -780,13 +794,12 @@ export class QuarterlyReviewService {
       'Rating Description': r.ratingDescription,
       'Performance Strengths': r.performanceStrengths,
       'Areas of Improvement': r.areasOfImprovement,
-      'Additional Remarks': r.additionalRemarks,
+      'Manager Comment': r.managerComment,
       'Goals for Next Review Period': r.goalsForNextReviewPeriod,
       'Training Recommendations': r.trainingDevelopmentRecommendations,
       'Career Growth Recommendation': r.careerGrowthRecommendation,
       'Review Outcome': r.reviewOutcome,
       'Performance Action': r.performanceAction,
-      'Final Manager Comments': r.finalManagerComments,
       'Key Accomplishments': r.performanceDetails?.stepOverview?.majorContributions || '',
       'Major Projects': (r.performanceDetails?.stepAchievements?.projects || []).map((project) => project.projectName).filter(Boolean).join(', '),
     }));
@@ -1019,18 +1032,15 @@ export class QuarterlyReviewService {
       'innovationProblemSolving',
       'finalRating',
       'ratingDescription',
-      'overrideFinalScore',
-      'overrideJustification',
       'performanceIndex',
       'performanceStrengths',
       'areasOfImprovement',
-      'additionalRemarks',
+      'managerComment',
       'goalsForNextReviewPeriod',
       'trainingDevelopmentRecommendations',
       'careerGrowthRecommendation',
       'reviewOutcome',
       'performanceAction',
-      'finalManagerComments',
       'managerConfirmation',
     ] as const;
     hidden.forEach((key) => {
