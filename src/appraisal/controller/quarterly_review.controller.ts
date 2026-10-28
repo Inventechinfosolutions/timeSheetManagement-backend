@@ -43,6 +43,8 @@ import { RevealedEvaluationDto } from '../dto/reveal_rating.dto';
 import { QuarterlyReview } from '../entities/quarterly_review.entities';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { User } from '../../users/entities/user.entity';
+import { UserType } from '../../users/enums/user-type.enum';
+import { isCeoUser } from '../../users/utils/admin-access';
 
 @ApiTags('Quarterly Review')
 @Controller('quarterly-review&performance')
@@ -69,6 +71,9 @@ export class QuarterlyReviewPerformanceController {
   @ApiOperation({ summary: 'Get quarterly reviews with the matching performance row' })
   @ApiOkResponse({ description: 'Returns the review list with performance details. Manager evaluation fields are omitted for employees.' })
   async getAll(@Query() query: QueryQuarterlyReviewDto, @Req() req: { user: User }) {
+    if (isCeoUser(req.user)) {
+      query.employeeRole = UserType.MANAGER;
+    }
     return await this.reviewService.findAll(
       query,
       this.reviewService.hidesManagerEvaluation(req.user),
@@ -176,6 +181,7 @@ export class QuarterlyReviewController {
    * PUT /api/quarterly-review/:id/evaluate
    */
   @Put(':id/evaluate')
+  @UseGuards(JwtAuthGuard)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Submit Manager Evaluation (PUT /:id/evaluate)',
@@ -186,18 +192,21 @@ export class QuarterlyReviewController {
   async evaluateReview(
     @Param('id', ParseIntPipe) id: number,
     @Body() evalDto: ManagerEvaluationDto,
+    @Req() req: { user: User },
   ) {
-    return await this.reviewService.evaluateReview(id, evalDto);
+    return await this.reviewService.evaluateReview(id, evalDto, req.user);
   }
 
   @Patch(':id/evaluate')
+  @UseGuards(JwtAuthGuard)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Save or submit a manager evaluation with PATCH' })
   async patchEvaluation(
     @Param('id', ParseIntPipe) id: number,
     @Body() evalDto: ManagerEvaluationDto,
+    @Req() req: { user: User },
   ) {
-    return await this.reviewService.evaluateReview(id, evalDto);
+    return await this.reviewService.evaluateReview(id, evalDto, req.user);
   }
 
   /**
@@ -275,7 +284,7 @@ export class QuarterlyReviewController {
   @UseGuards(JwtAuthGuard)
   @ApiOperation({ summary: 'Get a quarterly review by ID' })
   async getById(@Param('id', ParseIntPipe) id: number, @Req() req: { user: User }) {
-    return await this.reviewService.findOne(id, this.reviewService.hidesManagerEvaluation(req.user));
+    return await this.reviewService.findOne(id, this.reviewService.hidesManagerEvaluation(req.user), req.user);
   }
 
   /**
@@ -283,11 +292,12 @@ export class QuarterlyReviewController {
    * POST /api/quarterly-review
    */
   @Post()
+  @UseGuards(JwtAuthGuard)
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Create a new quarterly review cycle' })
   @ApiBody({ type: CreateQuarterlyReviewDto })
-  async create(@Body() createDto: CreateQuarterlyReviewDto) {
-    return await this.reviewService.create(createDto);
+  async create(@Body() createDto: CreateQuarterlyReviewDto, @Req() req: { user: User }) {
+    return await this.reviewService.create(createDto, req.user);
   }
 
   /**
@@ -295,21 +305,25 @@ export class QuarterlyReviewController {
    * PUT /api/quarterly-review/:id
    */
   @Put(':id')
+  @UseGuards(JwtAuthGuard)
   @ApiOperation({ summary: 'Update a quarterly review' })
   async update(
     @Param('id', ParseIntPipe) id: number,
     @Body() updateDto: UpdateQuarterlyReviewDto,
+    @Req() req: { user: User },
   ) {
-    return await this.reviewService.update(id, updateDto);
+    return await this.reviewService.update(id, updateDto, req.user);
   }
 
   @Patch(':id')
+  @UseGuards(JwtAuthGuard)
   @ApiOperation({ summary: 'Update a quarterly review with only the sent fields' })
   async patch(
     @Param('id', ParseIntPipe) id: number,
     @Body() updateDto: UpdateQuarterlyReviewDto,
+    @Req() req: { user: User },
   ) {
-    return await this.reviewService.update(id, updateDto);
+    return await this.reviewService.update(id, updateDto, req.user);
   }
 
   /**

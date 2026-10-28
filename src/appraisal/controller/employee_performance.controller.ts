@@ -14,9 +14,13 @@ import {
   UseInterceptors,
   UploadedFile,
   Res,
+  UseGuards,
+  Req,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { BufferedFile } from '../../common/s3-client/file.model';
+import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
+import { User } from '../../users/entities/user.entity';
 import {
   ApiTags,
   ApiOperation,
@@ -125,6 +129,7 @@ export class EmployeePerformanceController {
    * PUT /api/employee-performance/:id/respond-edit or PUT /api/employee-performance/respond-edit
    */
   @Put(':id/respond-edit')
+  @UseGuards(JwtAuthGuard)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Manager Responds to Edit Request by ID (PUT /:id/respond-edit)',
@@ -133,26 +138,29 @@ export class EmployeePerformanceController {
   async respondEditPut(
     @Param('id', ParseIntPipe) id: number,
     @Body() respondDto: RespondEditPermissionDto,
+    @Req() req: { user: User },
   ) {
     return await this.performanceService.respondEditPermission({
       ...respondDto,
       performanceId: id,
-    });
+    }, req.user);
   }
 
   @Put('respond-edit')
+  @UseGuards(JwtAuthGuard)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Manager Responds to Edit Permission (PUT)' })
-  async respondEditPutLegacy(@Body() respondDto: RespondEditPermissionDto) {
-    return await this.performanceService.respondEditPermission(respondDto);
+  async respondEditPutLegacy(@Body() respondDto: RespondEditPermissionDto, @Req() req: { user: User }) {
+    return await this.performanceService.respondEditPermission(respondDto, req.user);
   }
 
   @Post('respond-edit')
+  @UseGuards(JwtAuthGuard)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Manager Responds to Edit Permission (POST legacy)' })
   @ApiBody({ type: RespondEditPermissionDto })
-  async respondEdit(@Body() respondDto: RespondEditPermissionDto) {
-    return await this.performanceService.respondEditPermission(respondDto);
+  async respondEdit(@Body() respondDto: RespondEditPermissionDto, @Req() req: { user: User }) {
+    return await this.performanceService.respondEditPermission(respondDto, req.user);
   }
 
   /**

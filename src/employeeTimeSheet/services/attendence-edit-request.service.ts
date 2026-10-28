@@ -27,13 +27,15 @@ import {
 } from '../dto/attendence-edit-request.dto';
 import { EmailService } from '../../email/email.service';
 import { getGeneralNotificationTemplate } from '../../common/mail/templates';
-import { hasAdminAccess } from '../../users/utils/admin-access';
+import { hasAdminAccess, isCeoUser } from '../../users/utils/admin-access';
+import { UserType } from '../../users/enums/user-type.enum';
 
 export interface AttendenceEditRequestQuery {
   managerId?: string;
   department?: string;
   status?: string;
   lockType?: string;
+  role?: string;
   page?: number;
   limit?: number;
 }
@@ -276,11 +278,27 @@ export class AttendenceEditRequestService {
     };
 
     let employeeIds: string[] | null = null;
-    if (!isAdmin) {
+    if (isCeoUser(user)) {
+      employeeIds = await this.getManagerEmployeeIds();
+      if (employeeIds.length === 0) return empty;
+    } else if (!isAdmin) {
       employeeIds = await this.getVisibleEmployeeIds(user?.loginId, user);
       if (employeeIds.length === 0) return empty;
     } else if (query.managerId) {
       employeeIds = await this.getVisibleEmployeeIds(query.managerId, user);
+    }
+
+    const roleFilter = (query.role || '').trim();
+    if (roleFilter) {
+      const roleIds = await this.getEmployeeIdsByRole(roleFilter);
+      if (roleIds.length === 0) return empty;
+      if (employeeIds) {
+        const allowed = new Set(roleIds);
+        employeeIds = employeeIds.filter((id) => allowed.has(id));
+        if (employeeIds.length === 0) return empty;
+      } else {
+        employeeIds = roleIds;
+      }
     }
 
     const qb = this.requestRepo.createQueryBuilder('req');
@@ -420,6 +438,18 @@ export class AttendenceEditRequestService {
       throw new NotFoundException(`Edit Access request ${id} not found`);
     }
 
+    if (isCeoUser(reviewer)) {
+      const employee = await this.employeeRepo.findOne({
+        where: { employeeId: request.employeeId },
+      });
+      if (!employee || String(employee.role || '').toUpperCase() !== UserType.MANAGER) {
+        throw new ForbiddenException(
+          'CEO can review access tickets only for managers',
+        );
+      }
+      return request;
+    }
+
     const isAdmin = hasAdminAccess(reviewer);
     if (!isAdmin) {
       const allowedIds = await this.getVisibleEmployeeIds(
@@ -544,6 +574,23 @@ export class AttendenceEditRequestService {
         return true;
       })
       .map((emp) => emp.employeeId);
+  }
+
+  private async getManagerEmployeeIds(): Promise<string[]> {
+    return this.getEmployeeIdsByRole(UserType.MANAGER);
+  }
+
+  private async getEmployeeIdsByRole(role: string): Promise<string[]> {
+    const roles = role
+      .split(',')
+      .map((item) => item.trim())
+      .filter(Boolean) as UserType[];
+    if (roles.length === 0) return [];
+    const rows = await this.employeeRepo.find({
+      where: { role: In(roles) },
+      select: ['employeeId'],
+    });
+    return rows.map((row) => row.employeeId).filter(Boolean);
   }
 
   private async getVisibleEmployeeIds(

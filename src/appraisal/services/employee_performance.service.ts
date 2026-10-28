@@ -2,6 +2,7 @@ import {
   Injectable,
   NotFoundException,
   BadRequestException,
+  ForbiddenException,
   Logger,
   HttpException,
   HttpStatus,
@@ -25,6 +26,8 @@ import {
   UpdatePerformanceProjectDto,
 } from '../dto/employee_performance.dto';
 import { EmployeePerformanceStatus } from '../enums/employee_performance.enums';
+import { UserType } from '../../users/enums/user-type.enum';
+import { isCeoUser } from '../../users/utils/admin-access';
 import { QuarterlyReviewStatus } from '../enums/quarterly_review.enums';
 import { AppraisalNoticeService } from './appraisal_notice.service';
 import { DocumentUploaderService } from '../../common/document-uploader/services/document-uploader.service';
@@ -583,12 +586,23 @@ export class EmployeePerformanceService {
   /**
    * Manager responds to Edit Permission request (Approve or Reject)
    */
-  async respondEditPermission(dto: RespondEditPermissionDto): Promise<EnrichedEmployeePerformance> {
+  async respondEditPermission(
+    dto: RespondEditPermissionDto,
+    user?: { userType?: string | null; role?: string | null } | null,
+  ): Promise<EnrichedEmployeePerformance> {
     try {
       const targetId = dto.performanceId || dto.requestId;
       const record = await this.performanceRepository.findOne({
         where: { id: targetId },
       });
+      if (record && isCeoUser(user)) {
+        const employee = await this.employeeDetailsRepository.findOne({
+          where: { employeeId: record.employeeId },
+        });
+        if (!employee || String(employee.role || '').toUpperCase() !== UserType.MANAGER) {
+          throw new ForbiddenException('CEO can assign and review appraisals only for managers');
+        }
+      }
 
       if (!record) {
         throw new NotFoundException(`Performance submission with ID ${targetId} not found.`);

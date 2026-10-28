@@ -2,6 +2,7 @@ import {
   Injectable,
   NotFoundException,
   BadRequestException,
+  ForbiddenException,
   Logger,
   HttpException,
   HttpStatus,
@@ -30,6 +31,9 @@ import {
   QuaterlyEnum,
 } from '../enums/quarterly_review.enums';
 import { EmployeePerformanceStatus } from '../enums/employee_performance.enums';
+import { User } from '../../users/entities/user.entity';
+import { UserType } from '../../users/enums/user-type.enum';
+import { isCeoUser } from '../../users/utils/admin-access';
 import { AnnualAppraisalService } from './annual_appraisal.service';
 import { AppraisalNoticeService } from './appraisal_notice.service';
 import {
@@ -47,8 +51,6 @@ import {
 import { isLockedReviewStatus, isOneDayBeforeDeadline, reviewAccessFlags, shouldCloseRenewedAccess } from '../utils/review-access';
 import { MasterFinancialYearService } from '../../master/service/master-financialyear.service';
 import { UsersService } from '../../users/service/user.service';
-import { User } from '../../users/entities/user.entity';
-import { UserType } from '../../users/enums/user-type.enum';
 import { RevealedEvaluationDto } from '../dto/reveal_rating.dto';
 import { createAuditEntry, appendAuditEntry } from '../utils/audit-history.helper';
 import { overlayPerformanceView } from '../utils/performance-steps';
@@ -142,8 +144,22 @@ export class QuarterlyReviewService {
    * FR-02: Create Quarterly Review cycle (Manager / Admin assigns)
    * Guard: An employee can only have ONE review per quarter + financial year.
    */
-  async create(createDto: CreateQuarterlyReviewDto): Promise<EnrichedQuarterlyReview> {
+  private async assertCeoManagerEmployee(
+    employeeId: string | null | undefined,
+    user?: { userType?: string | null; role?: string | null } | null,
+  ): Promise<void> {
+    if (!isCeoUser(user) || !employeeId) return;
+    const employee = await this.employeeDetailsRepository.findOne({
+      where: { employeeId },
+    });
+    if (!employee || String(employee.role || '').toUpperCase() !== UserType.MANAGER) {
+      throw new ForbiddenException('CEO can assign and review appraisals only for managers');
+    }
+  }
+
+  async create(createDto: CreateQuarterlyReviewDto, user?: User): Promise<EnrichedQuarterlyReview> {
     try {
+      await this.assertCeoManagerEmployee(createDto.employeeId, user);
       this.logger.log(
         `Creating review for employee: ${createDto.employeeId}, Quarter: ${createDto.quarter}, FY: ${createDto.financialYear}`,
       );
@@ -290,11 +306,13 @@ export class QuarterlyReviewService {
   async evaluateReview(
     id: number,
     evalDto: ManagerEvaluationDto,
+    user?: User,
   ): Promise<EnrichedQuarterlyReview> {
     try {
       const review = await this.reviewRepository.findOne({
         where: { id },
       });
+      await this.assertCeoManagerEmployee(review?.employeeId, user);
 
       if (!review) {
         throw new NotFoundException(`Quarterly review with ID ${id} not found.`);
@@ -891,6 +909,30 @@ export class QuarterlyReviewService {
         }
       }
 
+      const employeeRole = (params?.employeeRole || params?.role || '').trim();
+      if (employeeRole) {
+        const roles = employeeRole
+          .split(',')
+          .map((item) => item.trim())
+          .filter(Boolean) as UserType[];
+        const roleRows = roles.length
+          ? await this.employeeDetailsRepository.find({
+              where: { role: In(roles) },
+              select: ['employeeId'],
+            })
+          : [];
+        const roleEmployeeIds = roleRows.map((row) => row.employeeId).filter(Boolean);
+        if (roleEmployeeIds.length === 0) {
+          return {
+            data: [],
+            total: 0,
+            page: params?.page,
+            limit: params?.limit,
+          };
+        }
+        qb.andWhere('review.employeeId IN (:...roleEmployeeIds)', { roleEmployeeIds });
+      }
+
       if (params?.q?.trim()) {
         const keyword = `%${params.q.trim()}%`;
         qb.andWhere(
@@ -945,10 +987,11 @@ export class QuarterlyReviewService {
   /**
    * Find single review by ID
    */
-  async findOne(id: number, hideEvaluation = false): Promise<EnrichedQuarterlyReview> {
+  async findOne(id: number, hideEvaluation = false, user?: User): Promise<EnrichedQuarterlyReview> {
     const review = await this.reviewRepository.findOne({
       where: { id },
     });
+    await this.assertCeoManagerEmployee(review?.employeeId, user);
 
     if (!review) {
       throw new NotFoundException(`Quarterly review with ID ${id} not found`);
@@ -1002,10 +1045,12 @@ export class QuarterlyReviewService {
   async update(
     id: number,
     updateDto: UpdateQuarterlyReviewDto,
+    user?: User,
   ): Promise<EnrichedQuarterlyReview> {
     const review = await this.reviewRepository.findOne({
       where: { id },
     });
+    await this.assertCeoManagerEmployee(review?.employeeId, user);
 
     if (!review) {
       throw new NotFoundException(`Quarterly review with ID ${id} not found`);
@@ -1424,6 +1469,7 @@ export class QuarterlyReviewService {
     if (!review) {
       throw new NotFoundException(`Quarterly review #${id} was not found.`);
     }
+    await this.assertCeoManagerEmployee(review.employeeId, user);
 
     if ((review.reassignCount || 0) >= 1 && isLockedReviewStatus(review.status)) {
       throw new BadRequestException(

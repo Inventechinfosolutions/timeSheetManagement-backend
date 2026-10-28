@@ -51,9 +51,10 @@ export class AttendenceEditRequestController {
     @Query('department') department?: string,
     @Query('status') status?: string,
     @Query('lockType') lockType?: string,
+    @Query('role') role?: string,
   ) {
     this.logger.log(
-      `Fetching Edit Access requests for ${req.user?.loginId} managerId=${managerId || '-'} page=${page || 1} limit=${limit || 10}`,
+      `Fetching Edit Access requests for ${req.user?.loginId} managerId=${managerId || '-'} page=${page || 1} limit=${limit || 10} role=${role || '-'}`,
     );
     return this.requestService.findForReviewer(req.user, {
       managerId,
@@ -62,6 +63,7 @@ export class AttendenceEditRequestController {
       department,
       status,
       lockType,
+      role,
     });
   }
 

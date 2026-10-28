@@ -467,6 +467,22 @@ export class QueryQuarterlyReviewDto {
   status?: QuarterlyReviewStatus;
 
   @ApiPropertyOptional({
+    example: 'MANAGER',
+    description: 'Limit results to employees with this role',
+  })
+  @IsOptional()
+  @IsString()
+  employeeRole?: string;
+
+  @ApiPropertyOptional({
+    example: 'MANAGER',
+    description: 'Filter by employee role, same as employee list-select',
+  })
+  @IsOptional()
+  @IsString()
+  role?: string;
+
+  @ApiPropertyOptional({
     example: 'EMP-10021',
     description: 'Search keyword',
   })

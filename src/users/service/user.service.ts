@@ -86,24 +86,34 @@ export class UsersService {
         select: ['id', 'aliasLoginName', 'loginId', 'userType', 'role', 'createdAt', 'updatedAt', 'password'],
       });
 
-      if (user && !user.role && (!user.userType || user.userType === UserType.EMPLOYEE)) {
+      if (user) {
         try {
+          let role = user.role ? String(user.role) : '';
           const employee = await this.employeeDetailsRepository.findOne({
-            where: { employeeId: user.loginId },
+            where: [
+              { employeeId: user.loginId },
+              { email: user.loginId },
+            ],
             select: ['designation', 'role'],
           });
-          if (employee) {
-            user.role = (employee.role ? String(employee.role) : employee.designation) as UserType;
-            const roleUpper = (user.role || '').toUpperCase();
-            if (roleUpper === UserType.CEO) {
-              user.userType = UserType.CEO;
-            } else if (roleUpper.includes('MNG') || roleUpper.includes(UserType.MANAGER)) {
-              user.userType = UserType.MANAGER;
+          if (employee && !role) {
+            role = employee.role ? String(employee.role) : String(employee.designation || '');
+            if (employee.role) {
+              user.role = employee.role;
             }
+          }
+          const roleUpper = role.toUpperCase();
+          if (user.userType === UserType.CEO || roleUpper === UserType.CEO) {
+            user.userType = UserType.CEO;
+          } else if (
+            user.userType !== UserType.ADMIN &&
+            user.userType !== UserType.RECEPTIONIST &&
+            (roleUpper.includes('MNG') || roleUpper.includes(UserType.MANAGER))
+          ) {
+            user.userType = UserType.MANAGER;
           }
         } catch (error) {
           this.logger.warn(`Failed to enrich user ${id} with employee details: ${error.message}`);
-          // fail silently, return user as is
         }
       }
 
