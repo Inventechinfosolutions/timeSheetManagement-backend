@@ -6,6 +6,7 @@ import {
   IsOptional,
   IsBoolean,
   IsInt,
+  IsObject,
   Min,
   Max,
   IsArray,
@@ -407,9 +408,100 @@ export class CreateEmployeePerformanceDto {
   @IsOptional()
   @IsBoolean()
   confirmationAccepted?: boolean;
+
+  @ApiPropertyOptional({ description: 'Step 1 JSON' })
+  @IsOptional()
+  @IsObject()
+  stepOverview?: Record<string, unknown>;
+
+  @ApiPropertyOptional({ description: 'Step 3 JSON' })
+  @IsOptional()
+  @IsObject()
+  stepTeamwork?: Record<string, unknown>;
+
+  @ApiPropertyOptional({ description: 'Step 4 JSON' })
+  @IsOptional()
+  @IsObject()
+  stepLearning?: Record<string, unknown>;
+
+  @ApiPropertyOptional({ description: 'Step 5 JSON' })
+  @IsOptional()
+  @IsObject()
+  stepEnvironment?: Record<string, unknown>;
+
+  @ApiPropertyOptional({ description: 'Step 6 JSON' })
+  @IsOptional()
+  @IsObject()
+  stepFinalReview?: Record<string, unknown>;
 }
 
-export class UpdateEmployeePerformanceDto extends PartialType(CreateEmployeePerformanceDto) { }
+export class UpdatePerformanceProjectDto {
+  @IsOptional()
+  @IsString()
+  projectName?: string;
+
+  @IsOptional()
+  @IsString()
+  description?: string;
+
+  @IsOptional()
+  @IsString()
+  challenge?: string;
+
+  @IsOptional()
+  @IsString()
+  projectRole?: string;
+
+  @IsOptional()
+  @IsString()
+  responsibilityType?: string;
+
+  @IsOptional()
+  @IsString()
+  keyResponsibilities?: string;
+
+  @IsOptional()
+  @IsString()
+  challengesFaced?: string;
+
+  @IsOptional()
+  @IsString()
+  solutionsImplemented?: string;
+
+  @IsOptional()
+  @IsString()
+  keyAchievementsOutcomes?: string;
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  technologiesUsed?: string[];
+
+  @IsOptional()
+  @IsString()
+  leadershipQualities?: string;
+
+  @IsOptional()
+  @IsString()
+  clientReviewFeedback?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  isDraft?: boolean;
+
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => PerformanceProjectAttachmentDto)
+  attachments?: PerformanceProjectAttachmentDto[];
+}
+
+export class UpdateEmployeePerformanceDto extends PartialType(CreateEmployeePerformanceDto) {
+  @ApiPropertyOptional({ description: 'Clear every saved step. Used when the employee resets an empty form.' })
+  @IsOptional()
+  @IsBoolean()
+  clearSteps?: boolean;
+}
 
 export class SaveDraftDto extends CreateEmployeePerformanceDto { }
 

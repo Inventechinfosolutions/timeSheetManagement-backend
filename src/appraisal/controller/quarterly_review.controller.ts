@@ -3,6 +3,7 @@ import {
   Get,
   Post,
   Put,
+  Patch,
   Delete,
   Param,
   Body,
@@ -189,6 +190,16 @@ export class QuarterlyReviewController {
     return await this.reviewService.evaluateReview(id, evalDto);
   }
 
+  @Patch(':id/evaluate')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Save or submit a manager evaluation with PATCH' })
+  async patchEvaluation(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() evalDto: ManagerEvaluationDto,
+  ) {
+    return await this.reviewService.evaluateReview(id, evalDto);
+  }
+
   /**
    * Re-assign & Unlock a Quarterly Review (Set new deadline and reset status to ASSIGNED)
    * POST /api/quarterly-review/:id/reassign
@@ -286,6 +297,15 @@ export class QuarterlyReviewController {
   @Put(':id')
   @ApiOperation({ summary: 'Update a quarterly review' })
   async update(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() updateDto: UpdateQuarterlyReviewDto,
+  ) {
+    return await this.reviewService.update(id, updateDto);
+  }
+
+  @Patch(':id')
+  @ApiOperation({ summary: 'Update a quarterly review with only the sent fields' })
+  async patch(
     @Param('id', ParseIntPipe) id: number,
     @Body() updateDto: UpdateQuarterlyReviewDto,
   ) {

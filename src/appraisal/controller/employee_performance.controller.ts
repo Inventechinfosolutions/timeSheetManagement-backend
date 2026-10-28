@@ -3,6 +3,7 @@ import {
   Get,
   Post,
   Put,
+  Patch,
   Delete,
   Param,
   Body,
@@ -37,6 +38,8 @@ import {
   SubmitReviewDto,
   RequestEditPermissionDto,
   RespondEditPermissionDto,
+  PerformanceProjectDto,
+  UpdatePerformanceProjectDto,
 } from '../dto/employee_performance.dto';
 import { EmployeePerformance } from '../entities/employee_performance.entity';
 
@@ -298,6 +301,39 @@ export class EmployeePerformanceController {
     @Query('index', ParseIntPipe) index: number,
   ) {
     return await this.performanceService.removeProject(id, index);
+  }
+
+  @Post(':id/projects')
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({ summary: 'Add one project to the performance record' })
+  async addProject(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() project: PerformanceProjectDto,
+  ) {
+    return await this.performanceService.addProject(id, project);
+  }
+
+  @Patch(':id/projects/:index')
+  @ApiOperation({ summary: 'Update one project. Body contains only the changed fields.' })
+  async patchProject(
+    @Param('id', ParseIntPipe) id: number,
+    @Param('index', ParseIntPipe) index: number,
+    @Body() project: UpdatePerformanceProjectDto,
+  ) {
+    return await this.performanceService.patchProject(id, index, project);
+  }
+
+  /**
+   * PATCH: Update only the fields sent in the body
+   * PATCH /api/employee-performance/:id
+   */
+  @Patch(':id')
+  @ApiOperation({ summary: 'Update an employee performance record with only the changed fields' })
+  async patch(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() updateDto: UpdateEmployeePerformanceDto,
+  ) {
+    return await this.performanceService.update(id, updateDto);
   }
 
   /**

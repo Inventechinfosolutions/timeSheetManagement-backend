@@ -51,6 +51,7 @@ import { User } from '../../users/entities/user.entity';
 import { UserType } from '../../users/enums/user-type.enum';
 import { RevealedEvaluationDto } from '../dto/reveal_rating.dto';
 import { createAuditEntry, appendAuditEntry } from '../utils/audit-history.helper';
+import { overlayPerformanceView } from '../utils/performance-steps';
 import { AppraisalAuditEntry } from '../interfaces/appraisal_audit.interface';
 
 export interface EnrichedQuarterlyReview extends QuarterlyReview {
@@ -768,8 +769,8 @@ export class QuarterlyReviewService {
       'Review Outcome': r.reviewOutcome,
       'Performance Action': r.performanceAction,
       'Final Manager Comments': r.finalManagerComments,
-      'Key Accomplishments': r.performanceDetails?.keyAccomplishments || '',
-      'Major Projects': (r.performanceDetails?.projects || []).map((project) => project.projectName).filter(Boolean).join(', '),
+      'Key Accomplishments': r.performanceDetails?.stepOverview?.majorContributions || '',
+      'Major Projects': (r.performanceDetails?.stepAchievements?.projects || []).map((project) => project.projectName).filter(Boolean).join(', '),
     }));
   }
 
@@ -1374,7 +1375,7 @@ export class QuarterlyReviewService {
 
       if (rawPerf) {
         perf = {
-          ...rawPerf,
+          ...overlayPerformanceView(rawPerf),
           canRequestEdit,
           remainingRequestHours,
           isEditWindowActive,
