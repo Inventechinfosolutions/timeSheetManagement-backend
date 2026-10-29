@@ -109,6 +109,11 @@ export class EmployeeDetailsService {
       // Remove confirmPassword as it's not in the entity
       const { confirmPassword, ...employeeData } = createEmployeeDetailsDto;
 
+      const createRole = String(employeeData.role || UserType.EMPLOYEE).toUpperCase();
+      if (employeeData.employmentType === EmploymentType.INTERN && createRole !== UserType.EMPLOYEE) {
+        throw new BadRequestException('Only the Employee role can be an Intern. Use Full-time for other roles.');
+      }
+
       const isIntern = employeeData.employmentType === EmploymentType.INTERN ||
         (employeeData.designation && employeeData.designation.toLowerCase().includes('intern'));
 
@@ -1556,6 +1561,13 @@ export class EmployeeDetailsService {
     if (role && !BULK_UPLOAD_ROLES.includes(role.toUpperCase())) {
       fail('role', `Role "${role}" is not valid. Use ${BULK_UPLOAD_ROLES.join(' or ')}.`);
     }
+    if (
+      this.normalizeEmploymentType(employmentType) === EmploymentType.INTERN &&
+      role &&
+      role.toUpperCase() !== UserType.EMPLOYEE
+    ) {
+      fail('employmentType', `Only the ${UserType.EMPLOYEE} role can be ${EmploymentType.INTERN}. Use ${EmploymentType.FULL_TIMER} for ${role.toUpperCase()}.`);
+    }
 
     const dates: [string, unknown][] = [
       ['joiningDate', data.joiningDate ?? data.dateOfJoining ?? data['Joining Date'] ?? data['Date of Joining']],
@@ -1934,7 +1946,7 @@ export class EmployeeDetailsService {
       ['department', 'Yes', 'Department the employee belongs to.', 'Pick from the dropdown (see Departments below)', lists.departments[0] ?? ''],
       ['designation', 'Yes', 'Job title. If it contains "Intern" the employee is treated as an intern.', 'Text', 'Software Engineer'],
       ['email', 'Yes', 'Official email address. Activation link is sent here.', 'Valid email, must be unique', 'ravi.kumar@company.com'],
-      ['employmentType', 'Recommended', 'Decides leave entitlement: Full timer 18 leaves/year, Intern 12 leaves/year.', lists.employmentTypes.join(' / '), 'FULL_TIMER'],
+      ['employmentType', 'Recommended', 'Decides leave entitlement: Full timer 18 leaves/year, Intern 12 leaves/year. INTERN is allowed only when role is EMPLOYEE; managers must be FULL_TIMER.', lists.employmentTypes.join(' / '), 'FULL_TIMER'],
       ['joiningDate', 'Recommended', 'Date the employee joined. Used for experience and work anniversaries.', 'DD/MM/YYYY (or YYYY-MM-DD)', '15/06/2025'],
       ['dateOfBirth', 'Optional', 'Used for birthday wishes and the dashboard events.', 'DD/MM/YYYY (or YYYY-MM-DD)', '20/08/1998'],
       ['gender', 'Recommended', 'Employee gender.', lists.genders.join(' / '), 'MALE'],

@@ -1,6 +1,7 @@
 import { Entity, PrimaryGeneratedColumn, Column } from 'typeorm';
 import { BaseEntity } from '../../common/core/models/base.entity';
 import { LockType } from '../enums/lock-type.enum';
+import { LeaveCalculationType } from '../enums/leave-calculation-type.enum';
 
 @Entity('master_department')
 export class MasterDepartment extends BaseEntity {
@@ -20,4 +21,12 @@ export class MasterDepartment extends BaseEntity {
     default: LockType.WEEKLY,
   })
   lockType!: LockType;
+
+  @Column({
+    name: 'leave_calculation_type',
+    type: 'enum',
+    enum: LeaveCalculationType,
+    default: LeaveCalculationType.AUTO,
+  })
+  leaveCalculationType!: LeaveCalculationType;
 }
