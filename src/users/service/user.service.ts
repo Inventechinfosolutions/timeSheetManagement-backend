@@ -97,6 +97,8 @@ export class UsersService {
             const roleUpper = (user.role || '').toUpperCase();
             if (roleUpper === UserType.CEO) {
               user.userType = UserType.CEO;
+            } else if (roleUpper === UserType.GENERAL_MANAGER) {
+              user.userType = UserType.GENERAL_MANAGER;
             } else if (roleUpper.includes('MNG') || roleUpper.includes(UserType.MANAGER)) {
               user.userType = UserType.MANAGER;
             }
@@ -205,7 +207,8 @@ export class UsersService {
 
       const roleUpper = (role || '').toUpperCase();
       const isCeo = user.userType === UserType.CEO || roleUpper === UserType.CEO;
-      const isManager = !isCeo && (roleUpper.includes('MNG') || roleUpper.includes(UserType.MANAGER));
+      const isGm = user.userType === UserType.GENERAL_MANAGER || roleUpper === UserType.GENERAL_MANAGER;
+      const isManager = !isCeo && !isGm && (roleUpper.includes('MNG') || roleUpper.includes(UserType.MANAGER));
 
       this.logger.log(`User ${userLoginDto.loginId} logged in successfully with employeeId: ${employeeIdStr}`);
 
@@ -213,7 +216,13 @@ export class UsersService {
         userId: user.id,
         name: user.aliasLoginName,
         email: user.loginId,
-        userType: isCeo ? UserType.CEO : isManager ? UserType.MANAGER : user.userType,
+        userType: isCeo
+          ? UserType.CEO
+          : isGm
+            ? UserType.GENERAL_MANAGER
+            : isManager
+              ? UserType.MANAGER
+              : user.userType,
         role: role,
         employeeId: employeeIdStr,
         accessToken: tokens.accessToken,
@@ -264,14 +273,20 @@ export class UsersService {
         // ignore
       }
 
+      const roleUpper = String(role || '').toUpperCase();
+      const isCeo = user.userType === UserType.CEO || roleUpper === UserType.CEO;
+      const isGm = user.userType === UserType.GENERAL_MANAGER || roleUpper === UserType.GENERAL_MANAGER;
+
       return {
         userId: user.id,
         name: user.aliasLoginName,
         email: user.loginId,
         userType: hasAdminAccess({ userType: user.userType, role })
-          ? (user.userType === UserType.CEO || String(role || '').toUpperCase() === UserType.CEO
+          ? (isCeo
             ? UserType.CEO
-            : user.userType)
+            : isGm
+              ? UserType.GENERAL_MANAGER
+              : user.userType)
           : role?.toUpperCase().includes(UserType.MANAGER)
             ? UserType.MANAGER
             : user.userType,
