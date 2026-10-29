@@ -459,14 +459,33 @@ export class InboxService {
 
       qb.orderBy('inbox.createdAt', 'DESC');
 
+      const startDb = Date.now();
       const inboxItems = await qb.getMany();
+      const dbDuration = Date.now() - startDb;
       if (inboxItems.length === 0) {
         return [];
       }
 
-      // Fetch related notes
+      // Fetch related notes (lightweight columns only, avoiding full entity overhead)
       const noteIds = Array.from(new Set(inboxItems.map((item) => item.notesId)));
-      const notes = noteIds.length > 0 ? await this.noteRepo.findBy({ id: In(noteIds) }) : [];
+      const startNotes = Date.now();
+      const notes = noteIds.length > 0
+        ? await this.noteRepo
+            .createQueryBuilder('note')
+            .select([
+              'note.id',
+              'note.title',
+              'note.type',
+              'note.projectName',
+              'note.color',
+              'note.isPinned',
+              'note.createdAt',
+              'note.description',
+            ])
+            .where('note.id IN (:...noteIds)', { noteIds })
+            .getMany()
+        : [];
+      const notesDuration = Date.now() - startNotes;
       const notesMap = new Map<number, Note>();
       notes.forEach((n) => notesMap.set(n.id, n));
 
@@ -496,10 +515,18 @@ export class InboxService {
         if (r.employeeId) receiversMap.set(r.employeeId.toLowerCase(), r);
       });
 
+      // Fetch attachments from local object_store metadata ONLY (loadNames = false avoids slow MinIO/S3 network calls)
+      const startAttach = Date.now();
       const attachmentDocs = await this.documentUploaderService.getDocsForEntities(
         EntityType.NOTE,
         noteIds,
         ReferenceType.NOTE_ATTACHMENT,
+        false,
+      );
+      const attachDuration = Date.now() - startAttach;
+
+      this.logger.debug(
+        `[Inbox] Retrieved ${inboxItems.length} items (DB: ${dbDuration}ms, Notes: ${notesDuration}ms, Attachments: ${attachDuration}ms)`,
       );
 
       // Assemble enriched response
