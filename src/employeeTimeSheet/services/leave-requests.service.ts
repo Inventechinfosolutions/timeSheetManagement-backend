@@ -5656,8 +5656,16 @@ export class LeaveRequestsService {
         for (let m = startM; m <= endM; m++) {
           const isInternThisMonth = this.isInternForMonth(employee, curYear, m);
 
+          // Manual total is taken out of the opening balance so carry forward excludes it
+          const isAsOfMonth =
+            !!asOf && curYear === asOf.year() && m === asOf.month() + 1;
+          if (isAsOfMonth) {
+            runningBalance -= override!.totalLeavesTaken;
+            if (curYear === year) ytdUsed += override!.totalLeavesTaken;
+          }
+
           if (curYear === year && m === month)
-            targetMonthStats.carryOver = runningBalance;
+            targetMonthStats.carryOver = Math.max(0, runningBalance);
 
           let effectiveAccrual = isInternThisMonth ? 1.0 : 1.5;
           if (curYear === joinYear && m === joinMonth && joinDate.date() > 10)
@@ -5707,13 +5715,6 @@ export class LeaveRequestsService {
           const roundedUsage = Math.round(monthlyUsage * 10) / 10;
           runningBalance -= roundedUsage;
           if (curYear === year) ytdUsed += roundedUsage;
-
-          const isAsOfMonth =
-            !!asOf && curYear === asOf.year() && m === asOf.month() + 1;
-          if (isAsOfMonth) {
-            runningBalance -= override!.totalLeavesTaken;
-            if (curYear === year) ytdUsed += override!.totalLeavesTaken;
-          }
 
           let lop = 0;
           if (runningBalance < 0) {
