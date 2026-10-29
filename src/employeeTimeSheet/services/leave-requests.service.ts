@@ -5585,7 +5585,9 @@ export class LeaveRequestsService {
       if (!employee)
         throw new NotFoundException(`Employee ${employeeId} not found`);
 
-      const override = await this.getManualLeaveOverride(employee, year);
+      // Balance resets every January, so only this year's manual entry matters
+      const latestOverride = await this.getManualLeaveOverride(employee, year);
+      const override = latestOverride?.year === year ? latestOverride : null;
       const asOf = override ? dayjs(override.asOfDate) : null;
       const asOfKey = asOf ? asOf.format('YYYY-MM-DD') : null;
 
@@ -5611,8 +5613,8 @@ export class LeaveRequestsService {
       const joinDate = dayjs(employee.joiningDate);
       const joinMonth = joinDate.isValid() ? joinDate.month() + 1 : 1;
       const joinYear = joinDate.isValid() ? joinDate.year() : year;
-      // Manual departments start fresh from the year the admin entered leaves for.
-      const calculationStartYear = Math.max(joinYear, override ? override.year : 2024);
+      // Leave does not carry over between years: only the selected year is calculated.
+      const calculationStartYear = Math.max(joinYear, year);
 
       const attendanceRecords = await this.employeeAttendanceRepository.find({
         where: {
@@ -5647,10 +5649,7 @@ export class LeaveRequestsService {
         ytdUsed = 0;
         ytdLop = 0;
 
-        const startsAtJoinMonth = override
-          ? curYear === joinYear
-          : curYear === calculationStartYear;
-        const startM = startsAtJoinMonth ? joinMonth : 1;
+        const startM = curYear === joinYear ? joinMonth : 1;
         const endM = curYear === year ? month : 12;
 
         for (let m = startM; m <= endM; m++) {
