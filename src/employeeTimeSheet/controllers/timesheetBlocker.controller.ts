@@ -21,9 +21,11 @@ export class TimesheetBlockerController {
 
       data.blockedBy = user?.userType === UserType.CEO
         ? UserType.CEO
-        : isAdmin
-          ? UserType.ADMIN
-          : UserType.MANAGER;
+        : user?.userType === UserType.GENERAL_MANAGER
+          ? UserType.GENERAL_MANAGER
+          : isAdmin
+            ? UserType.ADMIN
+            : UserType.MANAGER;
 
       return await this.blockerService.create(data, isAdmin);
     } catch (error) {

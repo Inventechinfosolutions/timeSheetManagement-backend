@@ -196,7 +196,7 @@ export class EmployeeDetailsService {
   async getRoles(): Promise<string[]> {
     this.logger.log('Fetching all roles from enum');
     try {
-      const roles: string[] = Object.values(UserType);
+      let roles: string[] = Object.values(UserType);
       // Only one CEO: hide the option once a non-inactive CEO employee exists.
       const ceoCount = await this.employeeDetailsRepository
         .createQueryBuilder('employee')
@@ -205,8 +205,21 @@ export class EmployeeDetailsService {
           inactive: UserStatus.INACTIVE,
         })
         .getCount();
-      const ceoExists = ceoCount > 0;
-      return ceoExists ? roles.filter((role) => role !== UserType.CEO) : roles;
+      if (ceoCount > 0) {
+        roles = roles.filter((role) => role !== UserType.CEO);
+      }
+      // Only one General Manager: hide the option once a non-inactive GM employee exists.
+      const gmCount = await this.employeeDetailsRepository
+        .createQueryBuilder('employee')
+        .where('UPPER(employee.role) = :gm', { gm: UserType.GENERAL_MANAGER })
+        .andWhere('(employee.userStatus IS NULL OR employee.userStatus != :inactive)', {
+          inactive: UserStatus.INACTIVE,
+        })
+        .getCount();
+      if (gmCount > 0) {
+        roles = roles.filter((role) => role !== UserType.GENERAL_MANAGER);
+      }
+      return roles;
     } catch (error) {
       this.logger.error(`Error fetching roles: ${error.message}`);
       throw new HttpException('Failed to fetch roles', HttpStatus.INTERNAL_SERVER_ERROR);
@@ -1961,7 +1974,7 @@ export class EmployeeDetailsService {
     addList('Departments', lists.departments, 'Type exactly as shown (or pick from the dropdown).');
     addList('Employment Types', lists.employmentTypes, 'FULL_TIMER = full-time employee, INTERN = intern.');
     addList('Gender', lists.genders);
-    addList('Roles', lists.roles, 'Admin and CEO accounts cannot be created through bulk upload.');
+    addList('Roles', lists.roles, 'Admin, CEO, and General Manager accounts cannot be created through bulk upload.');
   }
 
   private normalizeEmploymentType(value: unknown): EmploymentType | null {

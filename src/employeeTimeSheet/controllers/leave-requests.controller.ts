@@ -10,7 +10,7 @@ import { FileService } from '../../common/core/utils/fileType.utils';
 import { EntityType, ReferenceType } from '../../common/document-uploader/models/documentmetainfo.model';
 import { Readable } from 'stream';
 import { UserType } from 'src/users/enums/user-type.enum';
-import { hasAdminAccess, isCeoUser } from 'src/users/utils/admin-access';
+import { hasAdminAccess, isCeoUser, isCeoOrGmUser } from 'src/users/utils/admin-access';
 import { NO_CACHE_HEADERS } from '../../common/utils/no-cache-headers';
 
 @Controller('leave-requests')
@@ -92,7 +92,7 @@ export class LeaveRequestsController {
         requestType,
         managerName,
         managerId,
-        employeeRole: isCeoUser(user) ? UserType.MANAGER : undefined,
+        employeeRole: isCeoOrGmUser(user) ? UserType.MANAGER : undefined,
       });
 
       const stamp = new Date().toISOString().slice(0, 10);
@@ -197,7 +197,7 @@ export class LeaveRequestsController {
         limit,
         managerName,
         managerId,
-        employeeRole: isCeoUser(user)
+        employeeRole: isCeoOrGmUser(user)
           ? UserType.MANAGER
           : hasAdminAccess(user)
             ? employeeRole
@@ -298,7 +298,7 @@ export class LeaveRequestsController {
       const isManager = user?.userType === UserType.MANAGER && !hasAdminAccess(user);
       return this.leaveRequestsService.findUnread(
         isManager ? user.aliasLoginName : undefined,
-        isCeoUser(user),
+        isCeoOrGmUser(user),
       );
     } catch (error) {
       this.logger.error(`Error fetching unread notifications: ${error.message}`, error.stack);
@@ -394,7 +394,7 @@ export class LeaveRequestsController {
       const user = req.user;
       const reviewerName = user?.aliasLoginName || user?.fullName || 'Admin';
       const reviewerEmail = user?.loginId || user?.email;
-      const employeeRole = isCeoUser(user) ? UserType.MANAGER : undefined;
+      const employeeRole = isCeoOrGmUser(user) ? UserType.MANAGER : undefined;
       if (employeeRole && ids?.length) {
         await this.leaveRequestsService.assertRequestsBelongToManagers(ids);
       }
@@ -435,7 +435,7 @@ export class LeaveRequestsController {
       const user = req.user;
       const reviewerName = user?.aliasLoginName || user?.fullName || 'Admin';
       const reviewerEmail = user?.loginId || user?.email;
-      const employeeRole = isCeoUser(user) ? UserType.MANAGER : undefined;
+      const employeeRole = isCeoOrGmUser(user) ? UserType.MANAGER : undefined;
       if (employeeRole && ids?.length) {
         await this.leaveRequestsService.assertRequestsBelongToManagers(ids);
       }
@@ -475,7 +475,7 @@ export class LeaveRequestsController {
       const user = req.user;
       const reviewerName = user?.aliasLoginName || user?.fullName || 'Admin';
       const reviewerEmail = user?.loginId || user?.email;
-      if (isCeoUser(user)) {
+      if (isCeoOrGmUser(user)) {
         await this.leaveRequestsService.assertRequestsBelongToManagers(ids || []);
       }
       return await this.leaveRequestsService.bulkUpdateStatus({
@@ -483,7 +483,7 @@ export class LeaveRequestsController {
         ids,
         reviewerName,
         reviewerEmail,
-        employeeRole: isCeoUser(user) ? UserType.MANAGER : undefined,
+        employeeRole: isCeoOrGmUser(user) ? UserType.MANAGER : undefined,
       });
     } catch (error) {
       this.logger.error(`Error in bulk cancellation: ${error.message}`, error.stack);
@@ -509,7 +509,7 @@ export class LeaveRequestsController {
       const user = req.user;
       const reviewerName = user?.aliasLoginName || user?.fullName || 'Admin';
       const reviewerEmail = user?.loginId || user?.email;
-      if (isCeoUser(user)) {
+      if (isCeoOrGmUser(user)) {
         await this.leaveRequestsService.assertRequestsBelongToManagers(ids || []);
       }
       return await this.leaveRequestsService.bulkUpdateStatus({
@@ -517,7 +517,7 @@ export class LeaveRequestsController {
         ids,
         reviewerName,
         reviewerEmail,
-        employeeRole: isCeoUser(user) ? UserType.MANAGER : undefined,
+        employeeRole: isCeoOrGmUser(user) ? UserType.MANAGER : undefined,
       });
     } catch (error) {
       this.logger.error(`Error in bulk modification: ${error.message}`, error.stack);
@@ -535,7 +535,7 @@ export class LeaveRequestsController {
     try {
       this.logger.log(`Updating leave request ${id} status to ${status}`);
       const user = req.user;
-      if (isCeoUser(user)) {
+      if (isCeoOrGmUser(user)) {
         await this.leaveRequestsService.assertRequestsBelongToManagers([+id]);
       }
       const reviewerName = user?.aliasLoginName || user?.fullName || 'Admin';
