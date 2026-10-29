@@ -62,6 +62,16 @@ import { MasterHolidays } from '../../master/models/master-holidays.entity';
 import { LeaveRequestDto } from '../dto/leave-request.dto';
 import { TimesheetBlockerService } from './timesheetBlocker.service';
 import * as ExcelJS from 'exceljs';
+import { LeaveManager } from '../entities/leave-manager.entity';
+import { MasterDepartment } from '../../master/models/master-department.entity';
+import { LeaveCalculationType } from '../../master/enums/leave-calculation-type.enum';
+
+/** Admin-entered leaves taken for a MANUAL department; system usage after `asOfDate` is added on top. */
+export interface ManualLeaveOverride {
+  year: number;
+  totalLeavesTaken: number;
+  asOfDate: string;
+}
 
 @Injectable()
 export class LeaveRequestsService {
@@ -193,6 +203,10 @@ export class LeaveRequestsService {
     private userRepository: Repository<User>,
     @InjectRepository(MasterHolidays)
     private masterHolidayRepository: Repository<MasterHolidays>,
+    @InjectRepository(LeaveManager)
+    private leaveManagerRepository: Repository<LeaveManager>,
+    @InjectRepository(MasterDepartment)
+    private masterDepartmentRepository: Repository<MasterDepartment>,
     private emailService: EmailService,
     private documentUploaderService: DocumentUploaderService,
     private notificationsService: NotificationsService,
@@ -2075,7 +2089,7 @@ export class LeaveRequestsService {
   }
 
   /** Month-aware intern status including intern-to-full-timer conversion date. */
-  private isInternForMonth(
+  isInternForMonth(
     employee: {
       employmentType?: EmploymentType | null;
       designation?: string | null;
@@ -2110,6 +2124,64 @@ export class LeaveRequestsService {
     return isInternThisMonth;
   }
 
+  /** Leaves accrued in `year` from January (or the joining month) up to and including `uptoMonth`. */
+  getAccruedLeaves(
+    employee: {
+      joiningDate?: Date | null;
+      employmentType?: EmploymentType | null;
+      designation?: string | null;
+      conversionDate?: Date | null;
+    },
+    year: number,
+    uptoMonth: number,
+  ): number {
+    const joinDate = dayjs(employee.joiningDate);
+    const joinYear = joinDate.isValid() ? joinDate.year() : year;
+    const joinMonth = joinDate.isValid() ? joinDate.month() + 1 : 1;
+    if (year < joinYear) return 0;
+
+    let accrued = 0;
+    for (let m = year === joinYear ? joinMonth : 1; m <= Math.min(uptoMonth, 12); m++) {
+      if (year === joinYear && m === joinMonth && joinDate.date() > 10) continue;
+      accrued += this.isInternForMonth(employee, year, m) ? 1.0 : 1.5;
+    }
+    return accrued;
+  }
+
+  /**
+   * Latest manual leave entry (year <= `year`) for an employee whose department uses MANUAL
+   * leave calculation. Returns null for AUTO departments or when nothing was entered.
+   */
+  async getManualLeaveOverride(
+    employee: { employeeId: string; department?: string | null },
+    year: number,
+  ): Promise<ManualLeaveOverride | null> {
+    if (!employee?.department) return null;
+    try {
+      const department = await this.masterDepartmentRepository.findOne({
+        where: { departmentName: employee.department },
+        select: ['id', 'leaveCalculationType'],
+      });
+      if (department?.leaveCalculationType !== LeaveCalculationType.MANUAL) return null;
+
+      const entry = await this.leaveManagerRepository.findOne({
+        where: { employeeId: employee.employeeId, year: LessThanOrEqual(year) },
+        order: { year: 'DESC' },
+      });
+      if (!entry) return null;
+      return {
+        year: entry.year,
+        totalLeavesTaken: Number(entry.totalLeavesTaken) || 0,
+        asOfDate: dayjs(entry.asOfDate).format('YYYY-MM-DD'),
+      };
+    } catch (error) {
+      this.logger.warn(
+        `[MANUAL_LEAVE] Could not resolve manual leave entry for ${employee.employeeId}: ${error.message}`,
+      );
+      return null;
+    }
+  }
+
   /** Leave balance: entitlement (18 full timer / 12 intern), used (approved leave in year), pending, balance */
   async getLeaveBalance(employeeId: string, year: string) {
     this.logger.log(
@@ -2133,6 +2205,7 @@ export class LeaveRequestsService {
           'joiningDate',
           'conversionDate',
           'internId',
+          'department',
         ],
       });
       if (!employee) {
@@ -2171,7 +2244,10 @@ export class LeaveRequestsService {
 
       const leaveTypes = [LeaveRequestType.APPLY_LEAVE, LeaveRequestType.LEAVE];
 
-      const usedResult = await this.leaveRequestRepository
+      const override = await this.getManualLeaveOverride(employee, yearNum);
+      const manualThisYear = override?.year === yearNum ? override : null;
+
+      const usedQuery = this.leaveRequestRepository
         .createQueryBuilder('lr')
         .select('SUM(lr.duration)', 'total')
         .where('lr.employeeId IN (:...employeeIds)', { employeeIds })
@@ -2190,10 +2266,14 @@ export class LeaveRequestsService {
           status: LeaveRequestStatus.APPROVED,
         })
         .andWhere('lr.fromDate <= :yearEnd', { yearEnd })
-        .andWhere('lr.toDate >= :yearStart', { yearStart })
-        .getRawOne();
+        .andWhere('lr.toDate >= :yearStart', { yearStart });
+      if (manualThisYear) {
+        usedQuery.andWhere('lr.fromDate > :asOfDate', { asOfDate: manualThisYear.asOfDate });
+      }
+      const usedResult = await usedQuery.getRawOne();
 
-      const used = parseFloat(usedResult?.total || '0');
+      const used =
+        parseFloat(usedResult?.total || '0') + (manualThisYear?.totalLeavesTaken || 0);
 
       const pendingResult = await this.leaveRequestRepository
         .createQueryBuilder('lr')
@@ -5498,11 +5578,16 @@ export class LeaveRequestsService {
           'joiningDate',
           'conversionDate',
           'internId',
+          'department',
         ],
       });
 
       if (!employee)
         throw new NotFoundException(`Employee ${employeeId} not found`);
+
+      const override = await this.getManualLeaveOverride(employee, year);
+      const asOf = override ? dayjs(override.asOfDate) : null;
+      const asOfKey = asOf ? asOf.format('YYYY-MM-DD') : null;
 
       const employeeIds = [employeeId];
       if (employee.internId) {
@@ -5526,7 +5611,8 @@ export class LeaveRequestsService {
       const joinDate = dayjs(employee.joiningDate);
       const joinMonth = joinDate.isValid() ? joinDate.month() + 1 : 1;
       const joinYear = joinDate.isValid() ? joinDate.year() : year;
-      const calculationStartYear = Math.max(joinYear, 2024);
+      // Manual departments start fresh from the year the admin entered leaves for.
+      const calculationStartYear = Math.max(joinYear, override ? override.year : 2024);
 
       const attendanceRecords = await this.employeeAttendanceRepository.find({
         where: {
@@ -5561,14 +5647,25 @@ export class LeaveRequestsService {
         ytdUsed = 0;
         ytdLop = 0;
 
-        const startM = curYear === calculationStartYear ? joinMonth : 1;
+        const startsAtJoinMonth = override
+          ? curYear === joinYear
+          : curYear === calculationStartYear;
+        const startM = startsAtJoinMonth ? joinMonth : 1;
         const endM = curYear === year ? month : 12;
 
         for (let m = startM; m <= endM; m++) {
           const isInternThisMonth = this.isInternForMonth(employee, curYear, m);
 
+          // Manual total is taken out of the opening balance so carry forward excludes it
+          const isAsOfMonth =
+            !!asOf && curYear === asOf.year() && m === asOf.month() + 1;
+          if (isAsOfMonth) {
+            runningBalance -= override!.totalLeavesTaken;
+            if (curYear === year) ytdUsed += override!.totalLeavesTaken;
+          }
+
           if (curYear === year && m === month)
-            targetMonthStats.carryOver = runningBalance;
+            targetMonthStats.carryOver = Math.max(0, runningBalance);
 
           let effectiveAccrual = isInternThisMonth ? 1.0 : 1.5;
           if (curYear === joinYear && m === joinMonth && joinDate.date() > 10)
@@ -5589,6 +5686,8 @@ export class LeaveRequestsService {
             const isHol = holidayDates.has(recDate.format('YYYY-MM-DD'));
 
             if (isWknd || isHol) return acc;
+            // Usage up to the manual entry date is already in the admin-entered total
+            if (asOfKey && recDate.format('YYYY-MM-DD') <= asOfKey) return acc;
 
             if (rec.firstHalf || rec.secondHalf) {
               const h1 = (rec.firstHalf || '').toLowerCase();
@@ -5633,7 +5732,10 @@ export class LeaveRequestsService {
             targetMonthStats.ytdLop = ytdLop;
           }
 
-          if (isInternThisMonth) runningBalance = 0;
+          // Before the manual entry month usage is unknown per month, so accruals keep adding up
+          const beforeAsOf =
+            !!asOf && (curYear < asOf.year() || (curYear === asOf.year() && m < asOf.month() + 1));
+          if (isInternThisMonth && !beforeAsOf) runningBalance = 0;
         }
       }
 
