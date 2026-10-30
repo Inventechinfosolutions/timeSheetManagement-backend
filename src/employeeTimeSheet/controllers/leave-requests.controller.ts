@@ -395,8 +395,18 @@ export class LeaveRequestsController {
       const reviewerName = user?.aliasLoginName || user?.fullName || 'Admin';
       const reviewerEmail = user?.loginId || user?.email;
       const employeeRole = isCeoOrGmUser(user) ? UserType.MANAGER : undefined;
+      let managerName: string | undefined;
+      let managerId: string | undefined;
+      const roleUpper = (user?.role || '').toUpperCase();
+      const isManager = user && !hasAdminAccess(user) && (user.userType === UserType.MANAGER || roleUpper.includes('MNG') || roleUpper.includes(UserType.MANAGER));
+      if (isManager) {
+        managerName = user.aliasLoginName;
+        managerId = user.loginId;
+      }
       if (employeeRole && ids?.length) {
         await this.leaveRequestsService.assertRequestsBelongToManagers(ids);
+      } else if (isManager && ids?.length) {
+        await this.leaveRequestsService.assertManagerCannotReviewOwnRequests(user, ids);
       }
       return await this.leaveRequestsService.bulkUpdateStatus({
         status: LeaveRequestStatus.APPROVED,
@@ -409,6 +419,8 @@ export class LeaveRequestsController {
         reviewerName,
         reviewerEmail,
         employeeRole,
+        managerName,
+        managerId,
       });
     } catch (error) {
       this.logger.error(`Error in bulk approve: ${error.message}`, error.stack);
@@ -436,8 +448,18 @@ export class LeaveRequestsController {
       const reviewerName = user?.aliasLoginName || user?.fullName || 'Admin';
       const reviewerEmail = user?.loginId || user?.email;
       const employeeRole = isCeoOrGmUser(user) ? UserType.MANAGER : undefined;
+      let managerName: string | undefined;
+      let managerId: string | undefined;
+      const roleUpper = (user?.role || '').toUpperCase();
+      const isManager = user && !hasAdminAccess(user) && (user.userType === UserType.MANAGER || roleUpper.includes('MNG') || roleUpper.includes(UserType.MANAGER));
+      if (isManager) {
+        managerName = user.aliasLoginName;
+        managerId = user.loginId;
+      }
       if (employeeRole && ids?.length) {
         await this.leaveRequestsService.assertRequestsBelongToManagers(ids);
+      } else if (isManager && ids?.length) {
+        await this.leaveRequestsService.assertManagerCannotReviewOwnRequests(user, ids);
       }
       return await this.leaveRequestsService.bulkUpdateStatus({
         status: LeaveRequestStatus.REJECTED,
@@ -450,6 +472,8 @@ export class LeaveRequestsController {
         reviewerName,
         reviewerEmail,
         employeeRole,
+        managerName,
+        managerId,
       });
     } catch (error) {
       this.logger.error(`Error in bulk reject: ${error.message}`, error.stack);
@@ -477,6 +501,8 @@ export class LeaveRequestsController {
       const reviewerEmail = user?.loginId || user?.email;
       if (isCeoOrGmUser(user)) {
         await this.leaveRequestsService.assertRequestsBelongToManagers(ids || []);
+      } else if (!hasAdminAccess(user)) {
+        await this.leaveRequestsService.assertManagerCannotReviewOwnRequests(user, ids || []);
       }
       return await this.leaveRequestsService.bulkUpdateStatus({
         status: targetStatus,
@@ -511,6 +537,8 @@ export class LeaveRequestsController {
       const reviewerEmail = user?.loginId || user?.email;
       if (isCeoOrGmUser(user)) {
         await this.leaveRequestsService.assertRequestsBelongToManagers(ids || []);
+      } else if (!hasAdminAccess(user)) {
+        await this.leaveRequestsService.assertManagerCannotReviewOwnRequests(user, ids || []);
       }
       return await this.leaveRequestsService.bulkUpdateStatus({
         status: targetStatus,
@@ -537,6 +565,8 @@ export class LeaveRequestsController {
       const user = req.user;
       if (isCeoOrGmUser(user)) {
         await this.leaveRequestsService.assertRequestsBelongToManagers([+id]);
+      } else if (!hasAdminAccess(user)) {
+        await this.leaveRequestsService.assertManagerCannotReviewOwnRequests(user, [+id]);
       }
       const reviewerName = user?.aliasLoginName || user?.fullName || 'Admin';
       const reviewerEmail = user?.loginId || user?.email;
@@ -611,6 +641,11 @@ export class LeaveRequestsController {
     try {
       this.logger.log(`Rejecting cancellation for request: ${id}`);
       const user = req.user;
+      if (isCeoOrGmUser(user)) {
+        await this.leaveRequestsService.assertRequestsBelongToManagers([+id]);
+      } else if (!hasAdminAccess(user)) {
+        await this.leaveRequestsService.assertManagerCannotReviewOwnRequests(user, [+id]);
+      }
       const reviewerName = user?.aliasLoginName || user?.fullName || UserType.ADMIN;
       const reviewerEmail = user?.loginId || user?.email;
       return await this.leaveRequestsService.rejectCancellation(+id, employeeId, reviewerName, reviewerEmail);
