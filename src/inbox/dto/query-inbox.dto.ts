@@ -10,6 +10,12 @@ export class QueryInboxDto {
   @IsBoolean()
   isRead?: boolean;
 
+  @ApiPropertyOptional({ description: 'Filter by starred status (true/false or 1/0)' })
+  @IsOptional()
+  @Transform(({ value }) => value === 'true' || value === true || value === '1' || value === 1)
+  @IsBoolean()
+  isStarred?: boolean;
+
   @ApiPropertyOptional({ description: 'Search term for sender or note title/content' })
   @IsOptional()
   @IsString()
@@ -23,6 +29,16 @@ export class QueryInboxDto {
   @IsOptional()
   @IsEnum(InboxFolder)
   folder?: InboxFolder;
+
+  @ApiPropertyOptional({ description: 'Filter messages created on or after date (YYYY-MM-DD)' })
+  @IsOptional()
+  @IsString()
+  fromDate?: string;
+
+  @ApiPropertyOptional({ description: 'Filter messages created on or before date (YYYY-MM-DD)' })
+  @IsOptional()
+  @IsString()
+  toDate?: string;
 
   @ApiPropertyOptional({ description: 'Page number for pagination (starts at 1)', default: 1 })
   @IsOptional()

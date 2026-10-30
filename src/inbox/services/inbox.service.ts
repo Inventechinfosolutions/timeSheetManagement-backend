@@ -6,7 +6,7 @@ import {
   InternalServerErrorException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In } from 'typeorm';
+import { Repository, In, Brackets } from 'typeorm';
 import { Readable } from 'stream';
 import { Inbox } from '../entities/inbox.entity';
 import { Note } from '../../notes/entities/note.entity';
@@ -21,7 +21,6 @@ import { MailService } from '../../common/mail/mail.service';
 import { DocumentUploaderService } from '../../common/document-uploader/services/document-uploader.service';
 import { EntityType, ReferenceType } from '../../common/document-uploader/models/documentmetainfo.model';
 import { getNoteEmailTemplate, stripAttachmentUiFromHtml } from '../../common/mail/email-templates';
-import { cleanDescriptionSnippet } from '../../notes/utils/clean-description.util';
 
 export function parseNotePermissions(
   val?: any,
@@ -431,10 +430,21 @@ export class InboxService {
   /**
    * Get inbox messages for the currently logged-in user, joined with note_recipients permissions.
    */
-  async getInbox(user: any, query?: QueryInboxDto): Promise<any[]> {
+  async getInbox(user: any, query?: QueryInboxDto): Promise<{
+    data: any[];
+    total: number;
+    page: number;
+    limit: number;
+    totalPages: number;
+  }> {
     try {
       const { employeeId, email } = this.resolveUserIdentifiers(user);
       const folder = (query?.folder || InboxFolder.INBOX).toUpperCase();
+
+      const page = query?.page && Number(query.page) > 0 ? Number(query.page) : 1;
+      const rawLimit = query?.limit !== undefined && query?.limit !== null ? query.limit : query?.pageSize;
+      const limit = rawLimit !== undefined && rawLimit !== null ? Math.min(50, Math.max(1, Number(rawLimit))) : 5;
+      const skip = (page - 1) * limit;
 
       const qb = this.inboxRepo.createQueryBuilder('inbox');
 
@@ -457,16 +467,58 @@ export class InboxService {
         qb.andWhere('inbox.isRead = :isRead', { isRead: query.isRead });
       }
 
-      qb.orderBy('inbox.createdAt', 'DESC');
-
-      const startDb = Date.now();
-      const inboxItems = await qb.getMany();
-      const dbDuration = Date.now() - startDb;
-      if (inboxItems.length === 0) {
-        return [];
+      if (query?.isStarred !== undefined) {
+        qb.andWhere('inbox.isStarred = :isStarred', { isStarred: query.isStarred ? 1 : 0 });
       }
 
-      // Fetch related notes (lightweight columns only, avoiding full entity overhead)
+      if (query?.fromDate) {
+        qb.andWhere('inbox.createdAt >= :fromDate', { fromDate: new Date(`${query.fromDate}T00:00:00`) });
+      }
+
+      if (query?.toDate) {
+        qb.andWhere('inbox.createdAt <= :toDate', { toDate: new Date(`${query.toDate}T23:59:59.999`) });
+      }
+
+      if (query?.search && query.search.trim()) {
+        const searchTerm = `%${query.search.trim()}%`;
+        qb.leftJoin('inbox.note', 'note')
+          .leftJoin(EmployeeDetails, 'senderEmp', 'senderEmp.email = inbox.fromMail OR senderEmp.employeeId = inbox.senderId')
+          .leftJoin(EmployeeDetails, 'receiverEmp', 'receiverEmp.email = inbox.toMail OR receiverEmp.employeeId = inbox.receiverId')
+          .andWhere(
+            new Brackets((subQb) => {
+              subQb.where('inbox.fromMail LIKE :search', { search: searchTerm })
+                .orWhere('inbox.toMail LIKE :search', { search: searchTerm })
+                .orWhere('inbox.senderId LIKE :search', { search: searchTerm })
+                .orWhere('inbox.receiverId LIKE :search', { search: searchTerm })
+                .orWhere('note.title LIKE :search', { search: searchTerm })
+                .orWhere('note.projectName LIKE :search', { search: searchTerm })
+                .orWhere('CAST(inbox.notesId AS CHAR) LIKE :search', { search: searchTerm })
+                .orWhere('senderEmp.fullName LIKE :search', { search: searchTerm })
+                .orWhere('receiverEmp.fullName LIKE :search', { search: searchTerm });
+            }),
+          );
+      }
+
+      qb.orderBy('inbox.createdAt', 'DESC')
+        .skip(skip)
+        .take(limit);
+
+      const startDb = Date.now();
+      const [inboxItems, total] = await qb.getManyAndCount();
+      const dbDuration = Date.now() - startDb;
+
+      if (inboxItems.length === 0) {
+        return {
+          data: [],
+          total: total || 0,
+          page,
+          limit,
+          totalPages: Math.ceil((total || 0) / limit) || 1,
+        };
+      }
+      const isSentFolder = folder === InboxFolder.SENT;
+
+      // Fetch related notes (only strictly required fields: id, title, projectName)
       const noteIds = Array.from(new Set(inboxItems.map((item) => item.notesId)));
       const startNotes = Date.now();
       const notes = noteIds.length > 0
@@ -475,12 +527,7 @@ export class InboxService {
             .select([
               'note.id',
               'note.title',
-              'note.type',
               'note.projectName',
-              'note.color',
-              'note.isPinned',
-              'note.createdAt',
-              'note.description',
             ])
             .where('note.id IN (:...noteIds)', { noteIds })
             .getMany()
@@ -489,144 +536,122 @@ export class InboxService {
       const notesMap = new Map<number, Note>();
       notes.forEach((n) => notesMap.set(n.id, n));
 
-      // Fetch sender employee details by fromMail or senderId
-      const senderEmails = Array.from(new Set(inboxItems.map((item) => item.fromMail).filter(Boolean)));
-      const senderIds = Array.from(new Set(inboxItems.map((item) => item.senderId).filter(Boolean))) as string[];
-      const senderWhere: any[] = [];
-      if (senderEmails.length > 0) senderWhere.push({ email: In(senderEmails) });
-      if (senderIds.length > 0) senderWhere.push({ employeeId: In(senderIds) });
-      const senders = senderWhere.length > 0 ? await this.employeeRepo.find({ where: senderWhere }) : [];
+      // Fetch employee details only for the relevant party (senders for INBOX, receivers for SENT)
       const sendersMap = new Map<string, EmployeeDetails>();
-      senders.forEach((s) => {
-        if (s.email) sendersMap.set(s.email.toLowerCase(), s);
-        if (s.employeeId) sendersMap.set(s.employeeId.toLowerCase(), s);
-      });
-
-      // Fetch receiver employee details by toMail or receiverId
-      const receiverEmails = Array.from(new Set(inboxItems.map((item) => item.toMail).filter(Boolean)));
-      const receiverIds = Array.from(new Set(inboxItems.map((item) => item.receiverId).filter(Boolean))) as string[];
-      const receiverWhere: any[] = [];
-      if (receiverEmails.length > 0) receiverWhere.push({ email: In(receiverEmails) });
-      if (receiverIds.length > 0) receiverWhere.push({ employeeId: In(receiverIds) });
-      const receivers = receiverWhere.length > 0 ? await this.employeeRepo.find({ where: receiverWhere }) : [];
       const receiversMap = new Map<string, EmployeeDetails>();
-      receivers.forEach((r) => {
-        if (r.email) receiversMap.set(r.email.toLowerCase(), r);
-        if (r.employeeId) receiversMap.set(r.employeeId.toLowerCase(), r);
-      });
 
-      // Fetch attachments from local object_store metadata ONLY (loadNames = false avoids slow MinIO/S3 network calls)
+      if (!isSentFolder) {
+        const senderEmails = Array.from(new Set(inboxItems.map((item) => item.fromMail).filter(Boolean)));
+        const senderIds = Array.from(new Set(inboxItems.map((item) => item.senderId).filter(Boolean))) as string[];
+        const senderWhere: any[] = [];
+        if (senderEmails.length > 0) senderWhere.push({ email: In(senderEmails) });
+        if (senderIds.length > 0) senderWhere.push({ employeeId: In(senderIds) });
+        const senders = senderWhere.length > 0 ? await this.employeeRepo.find({ where: senderWhere }) : [];
+        senders.forEach((s) => {
+          if (s.email) sendersMap.set(s.email.toLowerCase(), s);
+          if (s.employeeId) sendersMap.set(s.employeeId.toLowerCase(), s);
+        });
+      } else {
+        const receiverEmails = Array.from(new Set(inboxItems.map((item) => item.toMail).filter(Boolean)));
+        const receiverIds = Array.from(new Set(inboxItems.map((item) => item.receiverId).filter(Boolean))) as string[];
+        const receiverWhere: any[] = [];
+        if (receiverEmails.length > 0) receiverWhere.push({ email: In(receiverEmails) });
+        if (receiverIds.length > 0) receiverWhere.push({ employeeId: In(receiverIds) });
+        const receivers = receiverWhere.length > 0 ? await this.employeeRepo.find({ where: receiverWhere }) : [];
+        receivers.forEach((r) => {
+          if (r.email) receiversMap.set(r.email.toLowerCase(), r);
+          if (r.employeeId) receiversMap.set(r.employeeId.toLowerCase(), r);
+        });
+      }
+
+      // Fetch attachments only if at least one item on the page has documents
       const startAttach = Date.now();
-      const attachmentDocs = await this.documentUploaderService.getDocsForEntities(
-        EntityType.NOTE,
-        noteIds,
-        ReferenceType.NOTE_ATTACHMENT,
-        false,
+      const noteIdsWithDocs = Array.from(
+        new Set(
+          inboxItems
+            .filter((item) => item.hasDocument)
+            .map((item) => item.notesId),
+        ),
       );
+      const attachmentDocs = noteIdsWithDocs.length > 0
+        ? await this.documentUploaderService.getDocsForEntities(
+            EntityType.NOTE,
+            noteIdsWithDocs,
+            ReferenceType.NOTE_ATTACHMENT,
+            false,
+          )
+        : new Map<number, any[]>();
       const attachDuration = Date.now() - startAttach;
 
       this.logger.debug(
-        `[Inbox] Retrieved ${inboxItems.length} items (DB: ${dbDuration}ms, Notes: ${notesDuration}ms, Attachments: ${attachDuration}ms)`,
+        `[Inbox] Retrieved page ${page}/${Math.ceil(total / limit) || 1} with ${inboxItems.length} items (Total: ${total}, DB: ${dbDuration}ms, Notes: ${notesDuration}ms, Attachments: ${attachDuration}ms)`,
       );
 
-      // Assemble enriched response
+      // Assemble concise response with only strictly required data
       const results: any[] = [];
 
       for (const item of inboxItems) {
         const note = notesMap.get(item.notesId);
-        const sender =
-          sendersMap.get(item.fromMail?.toLowerCase()) ||
-          sendersMap.get(item.senderId?.toLowerCase() || '');
-        const senderDisplayName =
-          sender?.fullName || item.fromMail?.split('@')[0] || item.senderId || 'Unknown Sender';
-
-        const receiver =
-          receiversMap.get(item.toMail?.toLowerCase()) ||
-          receiversMap.get(item.receiverId?.toLowerCase() || '');
-        const receiverDisplayName =
-          receiver?.fullName || item.toMail?.split('@')[0] || item.receiverId || 'Recipient';
-
         const permission = item.permission || 'CanView';
         const attachments = note && item.hasDocument ? attachmentDocs.get(note.id) || [] : [];
 
-        // Apply search filter if specified (plain text — ignore HTML noise in description)
-        if (query?.search && query.search.trim()) {
-          const s = query.search.trim().toLowerCase();
-          const plainDesc = (note?.description || '')
-            .replace(/<[^>]*>/g, ' ')
-            .replace(/\s+/g, ' ')
-            .trim()
-            .toLowerCase();
-          const matchesTitle = note?.title?.toLowerCase().includes(s);
-          const matchesDesc = plainDesc.includes(s);
-          const matchesSender =
-            senderDisplayName.toLowerCase().includes(s) || item.fromMail?.toLowerCase().includes(s);
-          const matchesReceiver =
-            receiverDisplayName.toLowerCase().includes(s) || item.toMail?.toLowerCase().includes(s);
-          const matchesProject = note?.projectName?.toLowerCase().includes(s);
-          const matchesNoteId = note?.id != null && String(note.id).includes(s);
-          if (
-            !matchesTitle &&
-            !matchesDesc &&
-            !matchesSender &&
-            !matchesReceiver &&
-            !matchesProject &&
-            !matchesNoteId
-          ) {
-            continue;
-          }
+        const cleanItem: any = {
+          inboxId: Number(item.inboxId),
+          notesId: item.notesId,
+        };
+
+        if (isSentFolder) {
+          cleanItem.toMail = item.toMail;
+        } else {
+          cleanItem.fromMail = item.fromMail;
         }
 
-        results.push({
-          inboxId: Number(item.inboxId),
-          employeeId: item.employeeId,
-          senderId: item.senderId,
-          receiverId: item.receiverId,
-          folder: (item.folder as InboxFolder) || InboxFolder.INBOX,
-          notesId: item.notesId,
-          fromMail: item.fromMail,
-          toMail: item.toMail,
-          permission,
-          isRead: Boolean(item.isRead),
-          isStarred: Number(item.isStarred) ? 1 : 0,
-          hasDocument: Boolean(item.hasDocument),
-          hasDescription: item.hasDescription !== undefined ? Boolean(item.hasDescription) : true,
-          createdAt: item.createdAt,
-          updatedAt: item.updatedAt,
-          senderName: senderDisplayName,
-          senderDesignation: sender?.designation || '',
-          senderDepartment: sender?.department || '',
-          receiverName: receiverDisplayName,
-          receiverDesignation: receiver?.designation || '',
-          receiverDepartment: receiver?.department || '',
-          note: note
-            ? {
+        cleanItem.permission = permission;
+        cleanItem.isRead = Boolean(item.isRead);
+        cleanItem.isStarred = Number(item.isStarred) ? 1 : 0;
+        cleanItem.hasDocument = Boolean(item.hasDocument);
+        cleanItem.hasDescription = item.hasDescription !== undefined ? Boolean(item.hasDescription) : true;
+        cleanItem.createdAt = item.createdAt;
+
+        if (isSentFolder) {
+          const receiver =
+            receiversMap.get(item.toMail?.toLowerCase()) ||
+            receiversMap.get(item.receiverId?.toLowerCase() || '');
+          const receiverDisplayName =
+            receiver?.fullName || item.toMail?.split('@')[0] || item.receiverId || 'Recipient';
+
+          cleanItem.receiverName = receiverDisplayName;
+          cleanItem.receiverDesignation = receiver?.designation || '';
+        } else {
+          const sender =
+            sendersMap.get(item.fromMail?.toLowerCase()) ||
+            sendersMap.get(item.senderId?.toLowerCase() || '');
+          const senderDisplayName =
+            sender?.fullName || item.fromMail?.split('@')[0] || item.senderId || 'Unknown Sender';
+
+          cleanItem.senderName = senderDisplayName;
+          cleanItem.senderDesignation = sender?.designation || '';
+        }
+
+        cleanItem.note = note
+          ? {
               id: note.id,
               title: note.title,
-              description:
-                item.hasDescription !== false
-                  ? cleanDescriptionSnippet(note.description || '', 200)
-                  : '',
-              type: note.type,
               projectName: note.projectName,
-              color: note.color,
-              isPinned: note.isPinned,
-              createdAt: note.createdAt,
               attachments: item.hasDocument ? (attachments || []) : [],
             }
-            : null,
-        });
+          : null;
+
+        results.push(cleanItem);
       }
 
-      if (query?.page !== undefined || query?.limit !== undefined || query?.pageSize !== undefined) {
-        const page = query.page && Number(query.page) > 0 ? Number(query.page) : 1;
-        const rawLimit = query.limit !== undefined && query.limit !== null ? query.limit : query.pageSize;
-        const limit = rawLimit !== undefined && rawLimit !== null ? Number(rawLimit) : 5;
-        const start = (page - 1) * limit;
-        return results.slice(start, start + limit);
-      }
-
-      return results;
+      return {
+        data: results,
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit) || 1,
+      };
     } catch (error: any) {
       this.logger.error(`Failed to get user inbox: ${error.message}`, error.stack);
       throw new InternalServerErrorException(error.message || 'Failed to get inbox');
@@ -636,7 +661,7 @@ export class InboxService {
   /**
    * Get inbox messages explicitly by employee ID.
    */
-  async getInboxByEmployeeId(employeeId: string, query?: QueryInboxDto): Promise<any[]> {
+  async getInboxByEmployeeId(employeeId: string, query?: QueryInboxDto): Promise<any> {
     return await this.getInbox({ employeeId }, query);
   }
 
