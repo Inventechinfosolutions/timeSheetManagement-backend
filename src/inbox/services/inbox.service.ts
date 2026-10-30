@@ -516,9 +516,8 @@ export class InboxService {
           totalPages: Math.ceil((total || 0) / limit) || 1,
         };
       }
-      const isSentFolder = folder === InboxFolder.SENT;
 
-      // Fetch related notes (only strictly required fields: id, title, projectName)
+      // Fetch related notes (lightweight columns only, avoiding full entity overhead)
       const noteIds = Array.from(new Set(inboxItems.map((item) => item.notesId)));
       const startNotes = Date.now();
       const notes = noteIds.length > 0
@@ -527,7 +526,11 @@ export class InboxService {
             .select([
               'note.id',
               'note.title',
+              'note.type',
               'note.projectName',
+              'note.color',
+              'note.isPinned',
+              'note.createdAt',
             ])
             .where('note.id IN (:...noteIds)', { noteIds })
             .getMany()
@@ -536,33 +539,31 @@ export class InboxService {
       const notesMap = new Map<number, Note>();
       notes.forEach((n) => notesMap.set(n.id, n));
 
-      // Fetch employee details only for the relevant party (senders for INBOX, receivers for SENT)
+      // Fetch sender employee details by fromMail or senderId (only for the current page items)
+      const senderEmails = Array.from(new Set(inboxItems.map((item) => item.fromMail).filter(Boolean)));
+      const senderIds = Array.from(new Set(inboxItems.map((item) => item.senderId).filter(Boolean))) as string[];
+      const senderWhere: any[] = [];
+      if (senderEmails.length > 0) senderWhere.push({ email: In(senderEmails) });
+      if (senderIds.length > 0) senderWhere.push({ employeeId: In(senderIds) });
+      const senders = senderWhere.length > 0 ? await this.employeeRepo.find({ where: senderWhere }) : [];
       const sendersMap = new Map<string, EmployeeDetails>();
-      const receiversMap = new Map<string, EmployeeDetails>();
+      senders.forEach((s) => {
+        if (s.email) sendersMap.set(s.email.toLowerCase(), s);
+        if (s.employeeId) sendersMap.set(s.employeeId.toLowerCase(), s);
+      });
 
-      if (!isSentFolder) {
-        const senderEmails = Array.from(new Set(inboxItems.map((item) => item.fromMail).filter(Boolean)));
-        const senderIds = Array.from(new Set(inboxItems.map((item) => item.senderId).filter(Boolean))) as string[];
-        const senderWhere: any[] = [];
-        if (senderEmails.length > 0) senderWhere.push({ email: In(senderEmails) });
-        if (senderIds.length > 0) senderWhere.push({ employeeId: In(senderIds) });
-        const senders = senderWhere.length > 0 ? await this.employeeRepo.find({ where: senderWhere }) : [];
-        senders.forEach((s) => {
-          if (s.email) sendersMap.set(s.email.toLowerCase(), s);
-          if (s.employeeId) sendersMap.set(s.employeeId.toLowerCase(), s);
-        });
-      } else {
-        const receiverEmails = Array.from(new Set(inboxItems.map((item) => item.toMail).filter(Boolean)));
-        const receiverIds = Array.from(new Set(inboxItems.map((item) => item.receiverId).filter(Boolean))) as string[];
-        const receiverWhere: any[] = [];
-        if (receiverEmails.length > 0) receiverWhere.push({ email: In(receiverEmails) });
-        if (receiverIds.length > 0) receiverWhere.push({ employeeId: In(receiverIds) });
-        const receivers = receiverWhere.length > 0 ? await this.employeeRepo.find({ where: receiverWhere }) : [];
-        receivers.forEach((r) => {
-          if (r.email) receiversMap.set(r.email.toLowerCase(), r);
-          if (r.employeeId) receiversMap.set(r.employeeId.toLowerCase(), r);
-        });
-      }
+      // Fetch receiver employee details by toMail or receiverId (only for the current page items)
+      const receiverEmails = Array.from(new Set(inboxItems.map((item) => item.toMail).filter(Boolean)));
+      const receiverIds = Array.from(new Set(inboxItems.map((item) => item.receiverId).filter(Boolean))) as string[];
+      const receiverWhere: any[] = [];
+      if (receiverEmails.length > 0) receiverWhere.push({ email: In(receiverEmails) });
+      if (receiverIds.length > 0) receiverWhere.push({ employeeId: In(receiverIds) });
+      const receivers = receiverWhere.length > 0 ? await this.employeeRepo.find({ where: receiverWhere }) : [];
+      const receiversMap = new Map<string, EmployeeDetails>();
+      receivers.forEach((r) => {
+        if (r.email) receiversMap.set(r.email.toLowerCase(), r);
+        if (r.employeeId) receiversMap.set(r.employeeId.toLowerCase(), r);
+      });
 
       // Fetch attachments only if at least one item on the page has documents
       const startAttach = Date.now();
@@ -587,62 +588,61 @@ export class InboxService {
         `[Inbox] Retrieved page ${page}/${Math.ceil(total / limit) || 1} with ${inboxItems.length} items (Total: ${total}, DB: ${dbDuration}ms, Notes: ${notesDuration}ms, Attachments: ${attachDuration}ms)`,
       );
 
-      // Assemble concise response with only strictly required data
+      // Assemble enriched response
       const results: any[] = [];
 
       for (const item of inboxItems) {
         const note = notesMap.get(item.notesId);
+        const sender =
+          sendersMap.get(item.fromMail?.toLowerCase()) ||
+          sendersMap.get(item.senderId?.toLowerCase() || '');
+        const senderDisplayName =
+          sender?.fullName || item.fromMail?.split('@')[0] || item.senderId || 'Unknown Sender';
+
+        const receiver =
+          receiversMap.get(item.toMail?.toLowerCase()) ||
+          receiversMap.get(item.receiverId?.toLowerCase() || '');
+        const receiverDisplayName =
+          receiver?.fullName || item.toMail?.split('@')[0] || item.receiverId || 'Recipient';
+
         const permission = item.permission || 'CanView';
         const attachments = note && item.hasDocument ? attachmentDocs.get(note.id) || [] : [];
 
-        const cleanItem: any = {
+        results.push({
           inboxId: Number(item.inboxId),
+          employeeId: item.employeeId,
+          senderId: item.senderId,
+          receiverId: item.receiverId,
+          folder: (item.folder as InboxFolder) || InboxFolder.INBOX,
           notesId: item.notesId,
-        };
-
-        if (isSentFolder) {
-          cleanItem.toMail = item.toMail;
-        } else {
-          cleanItem.fromMail = item.fromMail;
-        }
-
-        cleanItem.permission = permission;
-        cleanItem.isRead = Boolean(item.isRead);
-        cleanItem.isStarred = Number(item.isStarred) ? 1 : 0;
-        cleanItem.hasDocument = Boolean(item.hasDocument);
-        cleanItem.hasDescription = item.hasDescription !== undefined ? Boolean(item.hasDescription) : true;
-        cleanItem.createdAt = item.createdAt;
-
-        if (isSentFolder) {
-          const receiver =
-            receiversMap.get(item.toMail?.toLowerCase()) ||
-            receiversMap.get(item.receiverId?.toLowerCase() || '');
-          const receiverDisplayName =
-            receiver?.fullName || item.toMail?.split('@')[0] || item.receiverId || 'Recipient';
-
-          cleanItem.receiverName = receiverDisplayName;
-          cleanItem.receiverDesignation = receiver?.designation || '';
-        } else {
-          const sender =
-            sendersMap.get(item.fromMail?.toLowerCase()) ||
-            sendersMap.get(item.senderId?.toLowerCase() || '');
-          const senderDisplayName =
-            sender?.fullName || item.fromMail?.split('@')[0] || item.senderId || 'Unknown Sender';
-
-          cleanItem.senderName = senderDisplayName;
-          cleanItem.senderDesignation = sender?.designation || '';
-        }
-
-        cleanItem.note = note
-          ? {
-              id: note.id,
-              title: note.title,
-              projectName: note.projectName,
-              attachments: item.hasDocument ? (attachments || []) : [],
-            }
-          : null;
-
-        results.push(cleanItem);
+          fromMail: item.fromMail,
+          toMail: item.toMail,
+          permission,
+          isRead: Boolean(item.isRead),
+          isStarred: Number(item.isStarred) ? 1 : 0,
+          hasDocument: Boolean(item.hasDocument),
+          hasDescription: item.hasDescription !== undefined ? Boolean(item.hasDescription) : true,
+          createdAt: item.createdAt,
+          updatedAt: item.updatedAt,
+          senderName: senderDisplayName,
+          senderDesignation: sender?.designation || '',
+          senderDepartment: sender?.department || '',
+          receiverName: receiverDisplayName,
+          receiverDesignation: receiver?.designation || '',
+          receiverDepartment: receiver?.department || '',
+          note: note
+            ? {
+                id: note.id,
+                title: note.title,
+                type: note.type,
+                projectName: note.projectName,
+                color: note.color,
+                isPinned: note.isPinned,
+                createdAt: note.createdAt,
+                attachments: item.hasDocument ? (attachments || []) : [],
+              }
+            : null,
+        });
       }
 
       return {
