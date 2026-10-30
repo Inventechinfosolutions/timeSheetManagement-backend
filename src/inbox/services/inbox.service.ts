@@ -436,6 +436,8 @@ export class InboxService {
     page: number;
     limit: number;
     totalPages: number;
+    currentPage?: number;
+    pageSize?: number;
   }> {
     try {
       const { employeeId, email } = this.resolveUserIdentifiers(user);
@@ -443,10 +445,11 @@ export class InboxService {
 
       const page = query?.page && Number(query.page) > 0 ? Number(query.page) : 1;
       const rawLimit = query?.limit !== undefined && query?.limit !== null ? query.limit : query?.pageSize;
-      const limit = rawLimit !== undefined && rawLimit !== null ? Math.min(50, Math.max(1, Number(rawLimit))) : 5;
+      const limit = rawLimit !== undefined && rawLimit !== null && Number(rawLimit) > 0 ? Math.min(100, Number(rawLimit)) : 5;
       const skip = (page - 1) * limit;
 
       const qb = this.inboxRepo.createQueryBuilder('inbox');
+      qb.leftJoin('inbox.note', 'note');
 
       if (folder === InboxFolder.SENT) {
         qb.where('inbox.folder = :folder', { folder: InboxFolder.SENT })
@@ -468,7 +471,8 @@ export class InboxService {
       }
 
       if (query?.isStarred !== undefined) {
-        qb.andWhere('inbox.isStarred = :isStarred', { isStarred: query.isStarred ? 1 : 0 });
+        const isStarredVal = query.isStarred === true || (query.isStarred as any) === 'true' || Number(query.isStarred) === 1 ? 1 : 0;
+        qb.andWhere('inbox.isStarred = :isStarred', { isStarred: isStarredVal });
       }
 
       if (query?.fromDate) {
@@ -481,8 +485,7 @@ export class InboxService {
 
       if (query?.search && query.search.trim()) {
         const searchTerm = `%${query.search.trim()}%`;
-        qb.leftJoin('inbox.note', 'note')
-          .leftJoin(EmployeeDetails, 'senderEmp', 'senderEmp.email = inbox.fromMail OR senderEmp.employeeId = inbox.senderId')
+        qb.leftJoin(EmployeeDetails, 'senderEmp', 'senderEmp.email = inbox.fromMail OR senderEmp.employeeId = inbox.senderId')
           .leftJoin(EmployeeDetails, 'receiverEmp', 'receiverEmp.email = inbox.toMail OR receiverEmp.employeeId = inbox.receiverId')
           .andWhere(
             new Brackets((subQb) => {
@@ -507,13 +510,17 @@ export class InboxService {
       const [inboxItems, total] = await qb.getManyAndCount();
       const dbDuration = Date.now() - startDb;
 
+      const totalPages = limit > 0 && total > 0 ? Math.ceil(total / limit) : (total > 0 ? 1 : 0);
+
       if (inboxItems.length === 0) {
         return {
           data: [],
           total: total || 0,
           page,
           limit,
-          totalPages: Math.ceil((total || 0) / limit) || 1,
+          totalPages: total > 0 ? totalPages : 0,
+          currentPage: page,
+          pageSize: limit,
         };
       }
 
@@ -585,7 +592,7 @@ export class InboxService {
       const attachDuration = Date.now() - startAttach;
 
       this.logger.debug(
-        `[Inbox] Retrieved page ${page}/${Math.ceil(total / limit) || 1} with ${inboxItems.length} items (Total: ${total}, DB: ${dbDuration}ms, Notes: ${notesDuration}ms, Attachments: ${attachDuration}ms)`,
+        `[Inbox] Retrieved page ${page}/${totalPages || 1} with ${inboxItems.length} items of ${total} total (DB: ${dbDuration}ms, Notes: ${notesDuration}ms, Attachments: ${attachDuration}ms)`,
       );
 
       // Assemble enriched response
@@ -650,7 +657,9 @@ export class InboxService {
         total,
         page,
         limit,
-        totalPages: Math.ceil(total / limit) || 1,
+        totalPages,
+        currentPage: page,
+        pageSize: limit,
       };
     } catch (error: any) {
       this.logger.error(`Failed to get user inbox: ${error.message}`, error.stack);
