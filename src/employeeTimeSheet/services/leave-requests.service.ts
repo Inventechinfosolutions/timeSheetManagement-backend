@@ -851,22 +851,51 @@ export class LeaveRequestsService {
         const {
           ManagerMapping,
         } = require('../../managerMapping/entities/managerMapping.entity');
-        query.leftJoin(ManagerMapping, 'mm', 'mm.employeeId = lr.employeeId');
-        query.andWhere(
-          '(lr.employeeId = :exactManagerId OR (mm.managerName LIKE :managerNameQuery OR mm.managerName LIKE :managerIdQuery))',
-          {
-            exactManagerId: managerId,
-            managerNameQuery: `%${managerName}%`,
-            managerIdQuery: `%${managerId}%`,
-          },
+        query.innerJoin(
+          ManagerMapping,
+          'mm',
+          'mm.employeeId = lr.employeeId AND mm.status = :mmStatus',
+          { mmStatus: ManagerMappingStatus.ACTIVE },
         );
-        query.andWhere(
-          '(mm.status = :mmStatus OR lr.employeeId = :exactManagerId)',
-          {
-            mmStatus: ManagerMappingStatus.ACTIVE,
-            exactManagerId: managerId,
-          },
-        );
+        const matchers: string[] = [];
+        const params: Record<string, string> = {};
+        if (managerName) {
+          matchers.push('mm.managerName LIKE :managerNameQuery');
+          params.managerNameQuery = `%${managerName}%`;
+        }
+        if (managerId) {
+          matchers.push('mm.managerName LIKE :managerIdQuery');
+          params.managerIdQuery = `%${managerId}%`;
+        }
+        if (matchers.length > 0) {
+          query.andWhere(`(${matchers.join(' OR ')})`, params);
+        }
+
+        // Manager should NOT approve their own leave/client/WFH requests (handled by GM)
+        const excludeIds = new Set<string>();
+        if (managerId) excludeIds.add(managerId);
+        const managerWhere: any[] = [];
+        if (managerId) {
+          managerWhere.push({ employeeId: managerId }, { internId: managerId });
+        }
+        if (managerName) {
+          managerWhere.push({ fullName: managerName });
+        }
+        if (managerWhere.length > 0) {
+          const mgrEmps = await this.employeeDetailsRepository.find({
+            where: managerWhere,
+            select: ['employeeId', 'internId'],
+          });
+          mgrEmps.forEach((m) => {
+            if (m.employeeId) excludeIds.add(m.employeeId);
+            if (m.internId) excludeIds.add(m.internId);
+          });
+        }
+        if (excludeIds.size > 0) {
+          query.andWhere('lr.employeeId NOT IN (:...excludeManagerIds)', {
+            excludeManagerIds: Array.from(excludeIds),
+          });
+        }
       }
 
       if (employeeRole && employeeRole !== 'All') {
@@ -2444,6 +2473,46 @@ export class LeaveRequestsService {
     if (blocked || requests.length !== ids.length) {
       throw new ForbiddenException(
         'CEO can review leave, work from home, and client visit only for managers',
+      );
+    }
+  }
+
+  async assertManagerCannotReviewOwnRequests(user: any, requestIds: number[]): Promise<void> {
+    const ids = requestIds.filter((id) => Number.isFinite(id));
+    if (!ids.length) return;
+    const managerId = user?.loginId || user?.employeeId;
+    const managerName = user?.aliasLoginName || user?.fullName;
+
+    const ownIds = new Set<string>();
+    if (managerId) ownIds.add(managerId);
+
+    const managerWhere: any[] = [];
+    if (managerId) {
+      managerWhere.push({ employeeId: managerId }, { internId: managerId });
+    }
+    if (managerName) {
+      managerWhere.push({ fullName: managerName });
+    }
+    if (managerWhere.length > 0) {
+      const mgrEmps = await this.employeeDetailsRepository.find({
+        where: managerWhere,
+        select: ['employeeId', 'internId'],
+      });
+      mgrEmps.forEach((m) => {
+        if (m.employeeId) ownIds.add(m.employeeId);
+        if (m.internId) ownIds.add(m.internId);
+      });
+    }
+
+    const requests = await this.leaveRequestRepository.find({
+      where: { id: In(ids) },
+      select: ['id', 'employeeId'],
+    });
+
+    const hasOwnRequest = requests.some((r) => ownIds.has(r.employeeId));
+    if (hasOwnRequest) {
+      throw new ForbiddenException(
+        'Managers cannot approve or reject their own requests. Manager requests are reviewed by General Manager (GM).',
       );
     }
   }
@@ -5794,8 +5863,10 @@ export class LeaveRequestsService {
     reviewerName?: string;
     reviewerEmail?: string;
     employeeRole?: string;
+    managerName?: string;
+    managerId?: string;
   }): Promise<{ successCount: number; failCount: number; total: number }> {
-    const { status, department, search, month, year, requestType, ids: explicitIds, reviewerName, reviewerEmail, employeeRole } = params;
+    const { status, department, search, month, year, requestType, ids: explicitIds, reviewerName, reviewerEmail, employeeRole, managerName, managerId } = params;
 
     let ids: number[] = [];
     if (explicitIds && Array.isArray(explicitIds) && explicitIds.length > 0) {
@@ -5819,6 +5890,8 @@ export class LeaveRequestsService {
         year: year || 'All',
         requestType,
         employeeRole,
+        managerName,
+        managerId,
         status: queryStatus,
         page: 1,
         limit: 99999,

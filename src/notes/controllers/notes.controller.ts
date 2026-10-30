@@ -285,6 +285,29 @@ export class NotesController {
   ) {
     return this.downloadNote(id, format, req.user, res);
   }
+  @Get(':id/sub-notes')
+  @Permission(NotePermission.CanView)
+  @ApiOperation({
+    summary: 'Get paginated sub-notes for a parent note',
+    description: 'Retrieve child sub-notes for the specified parent note ID with optional pagination (default 3 items per page), search, and date filters.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Returns paginated sub-notes { data: Note[], total, page, limit, totalPages }',
+  })
+  @ApiQuery({ name: 'search', type: String, required: false, description: 'Search child notes by title or creator' })
+  @ApiQuery({ name: 'fromDate', type: String, required: false, description: 'Filter child notes created on or after date (YYYY-MM-DD)' })
+  @ApiQuery({ name: 'toDate', type: String, required: false, description: 'Filter child notes created on or before date (YYYY-MM-DD)' })
+  @ApiQuery({ name: 'page', type: Number, required: false, description: 'Page number for pagination (starts at 1)', default: 1 })
+  @ApiQuery({ name: 'limit', type: Number, required: false, description: 'Number of child notes per page (default: 3)', default: 3 })
+  async findSubNotes(
+    @Param('id', ParseIntPipe) id: number,
+    @Query() query: QueryNotesDto,
+    @Req() req: any,
+  ) {
+    return await this.notesService.findSubNotes(id, query, req.user);
+  }
+
 
   @Get(':id')
   @Permission(NotePermission.CanView)
