@@ -35,19 +35,19 @@ import { TimesheetBlockerService } from '../services/timesheetBlocker.service';
 import { AttendenceEditRequestService } from '../services/attendence-edit-request.service';
 import { NO_CACHE_HEADERS } from '../../common/utils/no-cache-headers';
 import dayjs from 'dayjs';
-
+ 
 @ApiTags('Employee Attendance')
 @Controller('employee-attendance')
 export class EmployeeAttendanceController {
   private readonly logger = new Logger(EmployeeAttendanceController.name);
-
+ 
   constructor(
     private readonly employeeAttendanceService: EmployeeAttendanceService,
     private readonly leaveRequestsService: LeaveRequestsService,
     private readonly timesheetBlockerService: TimesheetBlockerService,
     private readonly attendenceEditRequestService: AttendenceEditRequestService,
   ) { }
-
+ 
   @UseGuards(JwtAuthGuard, ReceptionistReadOnlyGuard)
   @Get('download-report')
   @ApiOperation({ summary: 'Download monthly attendance Excel report' })
@@ -63,34 +63,34 @@ export class EmployeeAttendanceController {
       const user = req.user;
       let managerName: string | undefined;
       let managerId: string | undefined;
-
+ 
       const roleUpper = (user?.role || '').toUpperCase();
       if (user && !hasAdminAccess(user) && (user.userType === UserType.MANAGER || roleUpper.includes('MNG') || roleUpper.includes(UserType.MANAGER))) {
         managerName = user.aliasLoginName;
         managerId = user.loginId;
       }
-
+ 
       const buffer = await this.employeeAttendanceService.generateMonthlyReport(
         query.month,
         query.year,
         managerName,
         managerId
       );
-
+ 
       res.set({
         ...NO_CACHE_HEADERS,
         'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
         'Content-Disposition': `attachment; filename=Attendance_${query.month}_${query.year}.xlsx`,
         'Content-Length': buffer.length,
       });
-
+ 
       res.send(buffer);
     } catch (error) {
       this.logger.error(`Error downloading monthly report: ${error.message}`, error.stack);
       throw error;
     }
   }
-
+ 
   @UseGuards(JwtAuthGuard, ReceptionistReadOnlyGuard)
   @Get('monthly-report-data')
   @ApiOperation({ summary: 'Get monthly attendance matrix report data for UI grid' })
@@ -106,13 +106,13 @@ export class EmployeeAttendanceController {
       const user = req.user;
       let managerName: string | undefined;
       let managerId: string | undefined;
-
+ 
       const roleUpper = (user?.role || '').toUpperCase();
       if (user && !hasAdminAccess(user) && (user.userType === UserType.MANAGER || roleUpper.includes('MNG') || roleUpper.includes(UserType.MANAGER))) {
         managerName = user.aliasLoginName;
         managerId = user.loginId;
       }
-
+ 
       return await this.employeeAttendanceService.getMonthlyReportData(
         query.month,
         query.year,
@@ -127,7 +127,7 @@ export class EmployeeAttendanceController {
       throw error;
     }
   }
-
+ 
   @UseGuards(JwtAuthGuard, ReceptionistReadOnlyGuard)
   @Get('download-pdf')
   @ApiOperation({ summary: 'Download monthly attendance PDF report' })
@@ -142,39 +142,39 @@ export class EmployeeAttendanceController {
     try {
       this.logger.log(`Downloading individual PDF report for employee: ${query.employeeId || 'self'}`);
       const user = req.user;
-
+ 
       // Determine which employee's report to download
       // If employeeId is provided in query, use it (typically for Admin/Manager viewing someone else)
       // Otherwise, use the current user's employeeId
       const targetEmployeeId = query.employeeId || user.loginId || user.employeeId;
-
+ 
       if (!targetEmployeeId) {
         throw new BadRequestException('Employee ID is required for PDF report');
       }
-
+ 
       const startDate = query.startDate ? new Date(query.startDate) : new Date(query.year, query.month - 1, 1);
       const endDate = query.endDate ? new Date(query.endDate) : new Date(query.year, query.month, 0);
-
+ 
       const buffer = await this.employeeAttendanceService.generateIndividualPdfReport(
         targetEmployeeId,
         startDate,
         endDate
       );
-
+ 
       res.set({
         ...NO_CACHE_HEADERS,
         'Content-Type': 'application/pdf',
         'Content-Disposition': `attachment; filename=Attendance_${targetEmployeeId}_${query.month}_${query.year}.pdf`,
         'Content-Length': buffer.length,
       });
-
+ 
       res.send(buffer);
     } catch (error) {
       this.logger.error(`Error downloading PDF report: ${error.message}`, error.stack);
       throw error;
     }
   }
-
+ 
   @UseGuards(JwtAuthGuard, ReceptionistReadOnlyGuard)
   @Post()
   @ApiOperation({ summary: 'Create a new employee attendance record' })
@@ -199,8 +199,8 @@ export class EmployeeAttendanceController {
       throw error;
     }
   }
-
-
+ 
+ 
   @Get('/all')
   @ApiOperation({ summary: 'Get all employee attendance records' })
   @ApiResponse({
@@ -216,7 +216,7 @@ export class EmployeeAttendanceController {
       throw error;
     }
   }
-
+ 
   @Get('all-dashboard-stats')
   @UseGuards(JwtAuthGuard, ReceptionistReadOnlyGuard)
   @ApiOperation({ summary: 'Get dashboard statistics for all employees' })
@@ -232,21 +232,21 @@ export class EmployeeAttendanceController {
       const user = req.user;
       let managerName: string | undefined;
       let managerId: string | undefined;
-
+ 
       // Filter for Managers (consistent with other dashboard endpoints)
       const roleUpper = (user?.role || '').toUpperCase();
       if (user && !hasAdminAccess(user) && (user.userType === UserType.MANAGER || roleUpper.includes('MNG') || roleUpper.includes(UserType.MANAGER))) {
         managerName = user.aliasLoginName;
         managerId = user.loginId;
       }
-
+ 
       return await this.employeeAttendanceService.getAllDashboardStats(month, year, managerName, managerId);
     } catch (error) {
       this.logger.error(`Error fetching all dashboard stats: ${error.message}`, error.stack);
       throw error;
     }
   }
-
+ 
   @UseGuards(JwtAuthGuard, ReceptionistReadOnlyGuard)
   @Get('check-entry-block')
   @ApiOperation({ summary: 'Check if an attendance entry is blocked' })
@@ -268,7 +268,7 @@ export class EmployeeAttendanceController {
       throw error;
     }
   }
-
+ 
   @Get(':id')
   @ApiOperation({ summary: 'Get a single employee attendance record by ID' })
   @ApiResponse({
@@ -288,7 +288,7 @@ export class EmployeeAttendanceController {
       throw error;
     }
   }
-
+ 
   @Get('work-trends/:employeeId')
   @ApiOperation({ summary: 'Get work trends for last 5 months' })
   @ApiParam({ name: 'employeeId', type: String })
@@ -301,7 +301,7 @@ export class EmployeeAttendanceController {
     try {
       this.logger.log(`Fetching work trends for employee: ${employeeId}`);
       let { endDate, startDate } = query;
-
+ 
       // Support custom format ?From<Start>To<End>
       if (!endDate) {
         const rangeKey = Object.keys(query).find(k => k.startsWith('From') && k.includes('To'));
@@ -310,14 +310,14 @@ export class EmployeeAttendanceController {
           endDate = rangeKey.substring(rangeKey.indexOf('To') + 2);
         }
       }
-
+ 
       return await this.employeeAttendanceService.getTrends(employeeId, endDate, startDate);
     } catch (error) {
       this.logger.error(`Error fetching work trends for ${employeeId}: ${error.message}`, error.stack);
       throw error;
     }
   }
-
+ 
   @Get('work-trends-detailed/:employeeId')
   @ApiOperation({ summary: 'Get detailed work trends based on half-day activities' })
   @ApiParam({ name: 'employeeId', type: String })
@@ -330,7 +330,7 @@ export class EmployeeAttendanceController {
     try {
       this.logger.log(`Fetching detailed work trends for employee: ${employeeId}`);
       let { endDate, startDate } = query;
-
+ 
       // Support custom format ?From<Start>To<End>
       if (!endDate) {
         const rangeKey = Object.keys(query).find(k => k.startsWith('From') && k.includes('To'));
@@ -339,14 +339,14 @@ export class EmployeeAttendanceController {
           endDate = rangeKey.substring(rangeKey.indexOf('To') + 2);
         }
       }
-
+ 
       return await this.employeeAttendanceService.getTrendsDetailed(employeeId, endDate, startDate);
     } catch (error) {
       this.logger.error(`Error fetching detailed trends for ${employeeId}: ${error.message}`, error.stack);
       throw error;
     }
   }
-
+ 
   @Get('monthly-details/:employeeId/:month/:year')
   @ApiOperation({ summary: 'Get monthly attendance for employee' })
   @ApiParam({ name: 'employeeId', type: String })
@@ -371,7 +371,7 @@ export class EmployeeAttendanceController {
       throw error;
     }
   }
-
+ 
   @Get('working-date/:workingDate/:employeeId')
   @ApiOperation({ summary: 'Get attendance records by working date' })
   async findByWorkingDate(
@@ -386,7 +386,7 @@ export class EmployeeAttendanceController {
       throw error;
     }
   }
-
+ 
   @Get('date-range/:employeeId/:startDate/:endDate')
   @ApiOperation({ summary: 'Get attendance records by employee ID and date range' })
   @ApiParam({ name: 'employeeId', type: String, description: 'Employee ID' })
@@ -409,7 +409,7 @@ export class EmployeeAttendanceController {
       throw error;
     }
   }
-
+ 
   @Get('worked-days/:employeeId/:startDate/:endDate')
   @ApiOperation({ summary: 'Get worked days for a specific employee' })
   @ApiParam({ name: 'employeeId', type: String })
@@ -432,7 +432,7 @@ export class EmployeeAttendanceController {
       throw error;
     }
   }
-
+ 
   @Get('my-timesheet/:employeeId')
   @ApiOperation({ summary: 'Get consolidated my-timesheet data (attendance + blockers) in a single request' })
   @ApiParam({ name: 'employeeId', type: String })
@@ -447,11 +447,11 @@ export class EmployeeAttendanceController {
       const now = new Date();
       const resolvedMonth = (month || String(now.getMonth() + 1)).padStart(2, '0');
       const resolvedYear = year || String(now.getFullYear());
-
+ 
       this.logger.log(
         `Fetching consolidated my-timesheet for ${employeeId} (${resolvedMonth}/${resolvedYear})`,
       );
-
+ 
       const [monthlyAttendance, blockers, pendingDates, approvedDates] =
         await Promise.all([
           this.employeeAttendanceService.findByMonth(resolvedMonth, resolvedYear, employeeId),
@@ -459,7 +459,7 @@ export class EmployeeAttendanceController {
           this.attendenceEditRequestService.getPendingDates(employeeId),
           this.attendenceEditRequestService.getApprovedDates(employeeId),
         ]);
-
+ 
       return { monthlyAttendance, blockers, pendingDates, approvedDates };
     } catch (error) {
       this.logger.error(
@@ -469,7 +469,7 @@ export class EmployeeAttendanceController {
       throw error;
     }
   }
-
+ 
   @Get('employee-dashboard/:employeeId')
   @ApiOperation({ summary: 'Get consolidated employee dashboard data in a single request' })
   @ApiParam({ name: 'employeeId', type: String })
@@ -486,17 +486,17 @@ export class EmployeeAttendanceController {
       const resolvedYear = year || String(now.getFullYear());
       const monthNum = parseInt(resolvedMonth, 10);
       const yearNum = parseInt(resolvedYear, 10);
-
+ 
       const startOfYear = `${resolvedYear}-01-01`;
       const endOfYear = `${resolvedYear}-12-31`;
       const lastDayOfMonth = new Date(yearNum, monthNum, 0);
       const endDateStr = dayjs(lastDayOfMonth).format('YYYY-MM-DD');
       const startDateStr = `${resolvedYear}-${resolvedMonth}-01`;
-
+ 
       this.logger.log(
         `Fetching consolidated dashboard for ${employeeId} (${resolvedMonth}/${resolvedYear})`,
       );
-
+ 
       const [
         monthlyAttendance,
         yearlyAttendance,
@@ -512,7 +512,7 @@ export class EmployeeAttendanceController {
         this.leaveRequestsService.getMonthlyLeaveBalance(employeeId, monthNum, yearNum),
         this.employeeAttendanceService.getHolidays(),
       ]);
-
+ 
       return {
         monthlyAttendance,
         yearlyAttendance,
@@ -529,7 +529,7 @@ export class EmployeeAttendanceController {
       throw error;
     }
   }
-
+ 
   @Get('dashboard-stats/:employeeId')
   @ApiOperation({ summary: 'Get dashboard statistics (hours, pending updates)' })
   @ApiParam({ name: 'employeeId', type: String })
@@ -548,8 +548,8 @@ export class EmployeeAttendanceController {
       throw error;
     }
   }
-
-
+ 
+ 
   @UseGuards(JwtAuthGuard, ReceptionistReadOnlyGuard)
   @Put(':id')
   @ApiOperation({ summary: 'Update an existing employee attendance record' })
@@ -575,7 +575,7 @@ export class EmployeeAttendanceController {
       throw error;
     }
   }
-
+ 
   @UseGuards(JwtAuthGuard, ReceptionistReadOnlyGuard)
   @Delete(':id')
   @ApiOperation({ summary: 'Delete an employee attendance record by ID' })
@@ -588,9 +588,9 @@ export class EmployeeAttendanceController {
       throw error;
     }
   }
-
-
-
+ 
+ 
+ 
   @UseGuards(JwtAuthGuard, ReceptionistReadOnlyGuard)
   @Post('attendance-data/:employeeId')
   @ApiOperation({ summary: 'Bulk create/update attendance records' })
@@ -607,7 +607,7 @@ export class EmployeeAttendanceController {
       throw error;
     }
   }
-
+ 
   @UseGuards(JwtAuthGuard, ReceptionistReadOnlyGuard)
   @Post('auto-update')
   @ApiOperation({ summary: 'Auto update timesheet for current month' })
@@ -624,7 +624,7 @@ export class EmployeeAttendanceController {
       throw error;
     }
   }
-
+ 
   @Get('monthly-details-all/:month/:year')
   @UseGuards(JwtAuthGuard, ReceptionistReadOnlyGuard)
   @ApiOperation({ summary: 'Get all employees monthly attendance' })
@@ -639,13 +639,13 @@ export class EmployeeAttendanceController {
       const user = req.user;
       let managerName: string | undefined;
       let managerId: string | undefined;
-
+ 
       const roleUpper = (user?.role || '').toUpperCase();
       if (user && !hasAdminAccess(user) && (user.userType === UserType.MANAGER || roleUpper.includes('MNG') || roleUpper.includes(UserType.MANAGER))) {
         managerName = user.aliasLoginName;
         managerId = user.loginId;
       }
-
+ 
       this.logger.log(`Fetching all employees attendance - Month: ${month}, Year: ${year}, Manager: ${managerName || 'None'}`);
       return await this.employeeAttendanceService.findAllMonthlyDetails(month, year, managerName, managerId);
     } catch (error) {
@@ -653,8 +653,5 @@ export class EmployeeAttendanceController {
       throw error;
     }
   }
-
+ 
 }
-
-
-

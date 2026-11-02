@@ -41,5 +41,5 @@ import { EmployeeDetails } from '../employeeTimeSheet/entities/employeeDetails.e
   providers: [AuthService, ForgotPasswordService, JwtStrategy],
   exports: [AuthService, ForgotPasswordService, JwtModule],
 })
-export class AuthModule {}
+export class AuthModule { }
 

@@ -5,19 +5,19 @@ import * as path from 'path';
 import { ConfigService } from '@nestjs/config';
 import { InjectQueue } from '@nestjs/bull';
 import { Queue } from 'bull';
-
+ 
 @Injectable()
 export class MailService {
   private readonly logger = new Logger(MailService.name);
   private transporter: nodemailer.Transporter;
-
+ 
   constructor(
     private readonly configService: ConfigService,
     @InjectQueue('mail-queue') private readonly mailQueue: Queue,
   ) {
     this.createTransporter();
   }
-
+ 
   async sendMailAsync(
     to: string,
     subject: string,
@@ -40,21 +40,21 @@ export class MailService {
       this.logger.error(`Failed to add email job to queue for ${to}: ${err.message}`);
     });
   }
-
+ 
   private createTransporter() {
     const host = this.configService.get<string>('SMTP_HOST');
     const port = this.configService.get<number>('SMTP_PORT');
     const user = this.configService.get<string>('SMTP_USERNAME');
     const pass = this.configService.get<string>('SMTP_PASSWORD');
     const secure = this.configService.get<boolean>('SMTP_SECURE', false);
-
+ 
     if (!host || !user || !pass) {
       this.logger.warn(
         'SMTP configuration is missing. MailService will not send emails.',
       );
       return;
     }
-
+ 
     this.transporter = nodemailer.createTransport({
       host,
       port,
@@ -65,7 +65,7 @@ export class MailService {
       },
     });
   }
-
+ 
   async sendMail(
     to: string,
     subject: string,
@@ -79,12 +79,12 @@ export class MailService {
       this.logger.warn('Transporter not initialized. Cannot send email.');
       return;
     }
-
+ 
     const from =
       this.configService.get<string>('mail.FROM') ||
       this.configService.get<string>('SMTP_USERNAME') ||
       'noreply@timesheet.com';
-
+ 
     const finalAttachments: any[] = attachments ? [...attachments] : [];
     if (html && (html.includes('cid:inventech-logo') || html.includes('cid:in-logo'))) {
       const alreadyHasLogo = finalAttachments.some(
@@ -111,7 +111,7 @@ export class MailService {
         }
       }
     }
-
+ 
     try {
       const info = await this.transporter.sendMail({
         from,
@@ -130,3 +130,5 @@ export class MailService {
     }
   }
 }
+ 
+ 

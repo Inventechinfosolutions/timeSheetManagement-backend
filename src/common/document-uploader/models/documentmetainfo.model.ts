@@ -35,8 +35,8 @@ export class DocumentMetaInfo extends BaseEntity {
   refId: number;
 
   @Column({
-    type: 'enum',
-    enum: ReferenceType,
+    type: 'varchar',
+    length: 255,
     nullable: false,
   })
   refType: ReferenceType;
@@ -45,8 +45,8 @@ export class DocumentMetaInfo extends BaseEntity {
   entityId: number;
 
   @Column({
-    type: 'enum',
-    enum: EntityType,
+    type: 'varchar',
+    length: 255,
     nullable: false,
   })
   entityType: EntityType;

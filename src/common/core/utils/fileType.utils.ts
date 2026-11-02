@@ -1,6 +1,14 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { fileTypeFromBuffer } from 'file-type';
 
+const OFFICE_EXT_MIME: Record<string, string> = {
+  '.pdf': 'application/pdf',
+  '.doc': 'application/msword',
+  '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  '.xls': 'application/vnd.ms-excel',
+  '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+};
+
 @Injectable()
 export class FileService {
   async validateFileType(file: Express.Multer.File, maxSize?: number): Promise<void> {
@@ -10,9 +18,7 @@ export class FileService {
 
     const detectedFileType = await fileTypeFromBuffer(file.buffer);
 
-    // List of allowed MIME types
     const allowedMimeTypes = [
-      // Document types
       'application/pdf',
       'application/msword',
       'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
@@ -20,34 +26,53 @@ export class FileService {
       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       'application/vnd.ms-powerpoint',
       'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+      'application/x-cfb',
+      'application/x-ole-storage',
       'text/plain',
       'application/rtf',
       'text/csv',
-      
-      // Image types
       'image/jpeg',
       'image/png',
       'image/jpg',
       'image/gif',
       'image/webp',
       'image/avif',
-      
-      // Archive types
       'application/zip',
       'application/x-rar-compressed',
     ];
 
-    // Check if detected file type is in the allowed types
-    if (!detectedFileType || !allowedMimeTypes.includes(detectedFileType.mime)) {
+    const textBasedMimeTypes = ['text/plain', 'text/csv', 'application/rtf'];
+    const originalName = (file.originalname || '').toLowerCase();
+    const ext = originalName.includes('.')
+      ? originalName.slice(originalName.lastIndexOf('.'))
+      : '';
+    const officeMime = OFFICE_EXT_MIME[ext];
+
+    let effectiveMime = detectedFileType?.mime || null;
+    const zipLike =
+      effectiveMime === 'application/zip' ||
+      effectiveMime === 'application/x-cfb' ||
+      effectiveMime === 'application/x-ole-storage';
+
+    if (officeMime && (!effectiveMime || zipLike)) {
+      effectiveMime = officeMime;
+    } else if (!effectiveMime && textBasedMimeTypes.includes(file.mimetype)) {
+      effectiveMime = file.mimetype;
+    } else if (!effectiveMime && officeMime) {
+      effectiveMime = officeMime;
+    } else if (!effectiveMime && allowedMimeTypes.includes(file.mimetype)) {
+      effectiveMime = file.mimetype;
+    }
+
+    if (!effectiveMime || !allowedMimeTypes.includes(effectiveMime)) {
       throw new BadRequestException('Invalid file type');
     }
 
-    // Validate file size
-    const MAX_IMAGE_SIZE = 2 * 1024 * 1024; // 2 MB
-    const MAX_DOC_SIZE = 5 * 1024 * 1024; // 5 MB
+    const MAX_IMAGE_SIZE = 2 * 1024 * 1024;
+    const MAX_DOC_SIZE = 5 * 1024 * 1024;
 
     const isImage = ['image/jpeg', 'image/png', 'image/gif', 'image/avif', 'image/webp'].includes(
-      detectedFileType.mime,
+      effectiveMime,
     );
     const effectiveMax = typeof maxSize === 'number' ? maxSize : isImage ? MAX_IMAGE_SIZE : MAX_DOC_SIZE;
 

@@ -26,7 +26,7 @@ async function bootstrap() {
                      configService.get<string>('CORS_ORIGIN_URL') ||
                      '*';
   app.enableCors({
-    origin: corsOrigin.split(',').map(origin => origin.trim()),
+    origin: corsOrigin.split(',').map((origin) => origin.trim()),
     credentials: true,
   });
 
@@ -45,7 +45,8 @@ async function bootstrap() {
       configService.get<string>('PORT') ||
       3900,
   );
-  await app.listen(port);
+  await app.listen(port, '0.0.0.0');
+  console.log(`Application is running on: http://0.0.0.0:${port}/api`);
   console.log(`Application is running on: http://localhost:${port}/api`);
 
   // Log DB connection info last, once the app is fully up.

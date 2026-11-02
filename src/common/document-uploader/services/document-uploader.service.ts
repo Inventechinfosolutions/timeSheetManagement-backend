@@ -9,22 +9,21 @@ import {
   EntityType,
   ReferenceType,
 } from '../models/documentmetainfo.model';
-
+ 
 @Injectable()
 export class DocumentUploaderService {
   private readonly logger = new Logger(DocumentUploaderService.name);
-
+ 
   constructor(
     private s3ClientService: S3ClientService,
     @InjectRepository(DocumentMetaInfo)
     private readonly documentRepo: Repository<DocumentMetaInfo>,
   ) {}
-
+ 
   async uploadImage(
     image: BufferedFile,
     details: DocumentMetaInfo,
   ): Promise<{
-    id?: string;
     image_url: string;
     message: string;
     key: string;
@@ -38,24 +37,23 @@ export class DocumentUploaderService {
       `Image uploaded successfully with URL: ${uploaded_image.url}`,
     );
     return {
-      id: uploaded_image.id,
       image_url: uploaded_image.url,
       key: uploaded_image.key,
       fileName: uploaded_image.fileName,
       message: 'Image upload successful',
     };
   }
-
+ 
   async downloadFile(key: string) {
     this.logger.log(`Downloading file with key: ${key}`);
     return await this.s3ClientService.downloadFile(key);
   }
-
+ 
   async getMetaData(key: string) {
     this.logger.debug(`Getting metadata for key: ${key}`);
     return await this.s3ClientService.getMetaData(key);
   }
-
+ 
   async deleteMinioDoc(key: string) {
     try {
       this.logger.log(`Attempting to delete document with key: ${key}`);
@@ -74,7 +72,7 @@ export class DocumentUploaderService {
       }
       await this.s3ClientService.delete(key);
       this.logger.debug(`Successfully deleted image with key: ${key}`);
-
+ 
       return {
         message: 'Image deleted successfully',
       };
@@ -88,7 +86,7 @@ export class DocumentUploaderService {
       );
     }
   }
-
+ 
   async getAllDocs(
     entityType: EntityType,
     entityId: number,
@@ -102,25 +100,25 @@ export class DocumentUploaderService {
       const query = this.documentRepo
         .createQueryBuilder('doc')
         .where('doc.entityType = :entityType', { entityType });
-
+ 
       // Strict Filtering Logic:
       // 1. Filter by entityId (Employee ID) to maintain security boundaries, allowing 0 as fallback for improperly linked docs.
       // 2. Filter by refId (Request ID) if it's explicitly provided (including 0).
       query.andWhere('doc.entityId = :entityId', {
         entityId,
       });
-
+ 
       if (referenceId != null) {
         query.andWhere('doc.refId = :referenceId', { referenceId });
       }
-
+ 
       if (referenceType) {
         query.andWhere('doc.refType = :referenceType', { referenceType });
       }
-
+ 
       const objects = await query.getMany();
       this.logger.debug(`Found ${objects.length} documents`);
-
+ 
       const docs: DocumentDetailsDto[] = [];
       for (const e of objects) {
         try {
@@ -131,8 +129,8 @@ export class DocumentUploaderService {
           docDetails.entityId = e.entityId;
           docDetails.refType = e.refType;
           docDetails.refId = e.refId;
-          docDetails.name = metadata.filename || 'Attachment';
-          docDetails.key = metadata.id || s3Key;
+          docDetails.name = metadata.filename;
+          docDetails.key = metadata.id;
           docDetails.createdAt = e.createdAt;
           docs.push(docDetails);
         } catch (error) {
@@ -158,7 +156,7 @@ export class DocumentUploaderService {
           docs.push(fallback);
         }
       }
-
+ 
       return docs;
     } catch (error) {
       this.logger.error('Error fetching documents:', {
@@ -171,7 +169,7 @@ export class DocumentUploaderService {
       return [];
     }
   }
-
+ 
   /**
    * One query for many notes, then storage metadata in parallel.
    * List and inbox only need keys and names, not a storage call per note.
@@ -180,12 +178,12 @@ export class DocumentUploaderService {
     entityType: EntityType,
     entityIds: number[],
     referenceType?: ReferenceType,
-    loadNames = true,
+    loadNames = false,
   ): Promise<Map<number, DocumentDetailsDto[]>> {
     const grouped = new Map<number, DocumentDetailsDto[]>();
     const ids = Array.from(new Set(entityIds.filter((id) => id != null)));
     if (ids.length === 0) return grouped;
-
+ 
     const qb = this.documentRepo
       .createQueryBuilder('doc')
       .where('doc.entityType = :entityType', { entityType })
@@ -194,7 +192,7 @@ export class DocumentUploaderService {
       qb.andWhere('doc.refType = :referenceType', { referenceType });
     }
     const objects = await qb.getMany();
-
+ 
     await Promise.all(
       objects.map(async (e) => {
         const key = e.s3Key || e.id;
@@ -220,17 +218,17 @@ export class DocumentUploaderService {
         grouped.set(e.entityId, list);
       }),
     );
-
+ 
     return grouped;
   }
-
+ 
   async deleteDoc(key: string) {
     try {
       this.logger.log(`Attempting to delete document with key: ${key}`);
       const doc = await this.documentRepo.findOne({
         where: [{ id: key }, { s3Key: key }],
       });
-
+ 
       if (!doc) {
         this.logger.warn(`Document not found with key: ${key}`);
         throw new HttpException(
@@ -238,11 +236,11 @@ export class DocumentUploaderService {
           HttpStatus.NOT_FOUND,
         );
       }
-
+ 
       const s3Key = doc.s3Key || doc.id || key;
       await this.deleteMinioDoc(s3Key);
       await this.documentRepo.delete(doc.id);
-
+ 
       this.logger.debug(`Successfully deleted document with key: ${key}`);
       return;
     } catch (error) {
@@ -256,3 +254,5 @@ export class DocumentUploaderService {
     }
   }
 }
+ 
+ 

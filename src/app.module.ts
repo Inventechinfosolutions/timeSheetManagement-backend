@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+﻿import { Module } from '@nestjs/common';
 import { APP_INTERCEPTOR } from '@nestjs/core';
 import { NoCacheInterceptor } from './common/interceptors/no-cache.interceptor';
 import { SlidingSessionInterceptor } from './common/interceptors/sliding-session.interceptor';
@@ -11,6 +11,8 @@ import { UsersModule } from './users/users.module';
 import { EmployeeTimeSheetModule } from './employeeTimeSheet/employeeTimeSheet.module';
 import { MasterModule } from './master/master.module';
 import { ManagerMappingModule } from './managerMapping/managerMapping.module';
+import { AppraisalModule } from './appraisal/appraisal.module';
+import { EmployeeNotesModule } from './employeeNotes/employee-notes.module';
 import { ScheduleModule } from '@nestjs/schedule';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AttendanceCronService } from './cron/attendance.cron.service';
@@ -44,14 +46,14 @@ function getEnvFiles(): string[] {
       process.env.PROFILE = profileMatch?.[1]?.trim();
     }
   }
- 
+
   const profile = process.env.PROFILE || 'local';
   const envFiles = [`.env.${profile}`, '.env'];
   console.log(`[Config] Using PROFILE="${profile}" -> env files: ${envFiles.join(', ')}`);
   return envFiles;
 
 }
- 
+
 @Module({
   imports: [
     ConfigModule.forRoot({
@@ -70,6 +72,8 @@ function getEnvFiles(): string[] {
     EmployeeTimeSheetModule,
     MasterModule,
     ManagerMappingModule,
+    AppraisalModule,
+    EmployeeNotesModule,
     ScheduleModule.forRoot(),
     TypeOrmModule.forFeature([
       EmployeeAttendance,
@@ -133,4 +137,4 @@ function getEnvFiles(): string[] {
   ],
 })
 // Registered ManagerMappingModule
-export class AppModule {}
+export class AppModule { }

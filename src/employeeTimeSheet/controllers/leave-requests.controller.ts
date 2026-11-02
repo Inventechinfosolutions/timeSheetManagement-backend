@@ -10,19 +10,19 @@ import { FileService } from '../../common/core/utils/fileType.utils';
 import { EntityType, ReferenceType } from '../../common/document-uploader/models/documentmetainfo.model';
 import { Readable } from 'stream';
 import { UserType } from 'src/users/enums/user-type.enum';
-import { hasAdminAccess, isCeoUser, isCeoOrGmUser } from 'src/users/utils/admin-access';
+import { hasAdminAccess, isCeoUser } from 'src/users/utils/admin-access';
 import { NO_CACHE_HEADERS } from '../../common/utils/no-cache-headers';
-
+ 
 @Controller('leave-requests')
 export class LeaveRequestsController {
   private readonly logger = new Logger(LeaveRequestsController.name);
-
+ 
   constructor(
     private readonly leaveRequestsService: LeaveRequestsService,
     private readonly documentUploaderService: DocumentUploaderService,
     private readonly fileService: FileService,
   ) { }
-
+ 
   @Get('duration-types')
   getLeaveDurationTypes() {
     try {
@@ -33,7 +33,7 @@ export class LeaveRequestsController {
       throw error;
     }
   }
-
+ 
   @Get('request-types')
   @UseGuards(JwtAuthGuard, ReceptionistReadOnlyGuard)
   async getRequestTypes() {
@@ -48,7 +48,7 @@ export class LeaveRequestsController {
       throw error;
     }
   }
-
+ 
   @Get('download-excel')
   @UseGuards(JwtAuthGuard, ReceptionistReadOnlyGuard)
   async downloadExcel(
@@ -69,7 +69,7 @@ export class LeaveRequestsController {
       const user = req.user;
       let managerName: string | undefined;
       let managerId: string | undefined;
-
+ 
       const roleUpper = (user?.role || '').toUpperCase();
       if (
         user &&
@@ -81,7 +81,7 @@ export class LeaveRequestsController {
         managerName = user.aliasLoginName;
         managerId = user.loginId;
       }
-
+ 
       const buffer = await this.leaveRequestsService.exportRequestsToExcel({
         employeeId,
         department,
@@ -92,9 +92,9 @@ export class LeaveRequestsController {
         requestType,
         managerName,
         managerId,
-        employeeRole: isCeoOrGmUser(user) ? UserType.MANAGER : undefined,
+        employeeRole: isCeoUser(user) ? UserType.MANAGER : undefined,
       });
-
+ 
       const stamp = new Date().toISOString().slice(0, 10);
       res.set({
         ...NO_CACHE_HEADERS,
@@ -112,7 +112,7 @@ export class LeaveRequestsController {
       throw error;
     }
   }
-
+ 
   @Post(':employeeId/leave-requests')
   create(@Param('employeeId') employeeId: string, @Body() body: LeaveRequestDto) {
     try {
@@ -124,7 +124,7 @@ export class LeaveRequestsController {
       throw error;
     }
   }
-
+ 
   @Post(':employeeId/leave-requests/batch-notify')
   notifyBatch(
     @Param('employeeId') employeeId: string,
@@ -146,7 +146,7 @@ export class LeaveRequestsController {
       throw error;
     }
   }
-
+ 
   @Post()
   createRoot(@Body() body: LeaveRequestDto) {
     try {
@@ -157,7 +157,7 @@ export class LeaveRequestsController {
       throw error;
     }
   }
-
+ 
   @Get()
   @UseGuards(JwtAuthGuard, ReceptionistReadOnlyGuard)
   findAll(
@@ -178,13 +178,13 @@ export class LeaveRequestsController {
       const user = req.user;
       let managerName: string | undefined;
       let managerId: string | undefined;
-
+ 
       const roleUpper = (user?.role || '').toUpperCase();
       if (user && !hasAdminAccess(user) && (user.userType === UserType.MANAGER || roleUpper.includes('MNG') || roleUpper.includes(UserType.MANAGER))) {
         managerName = user.aliasLoginName;
         managerId = user.loginId;
       }
-
+ 
       return this.leaveRequestsService.findUnifiedRequests({
         employeeId,
         department,
@@ -197,7 +197,7 @@ export class LeaveRequestsController {
         limit,
         managerName,
         managerId,
-        employeeRole: isCeoOrGmUser(user)
+        employeeRole: isCeoUser(user)
           ? UserType.MANAGER
           : hasAdminAccess(user)
             ? employeeRole
@@ -208,7 +208,7 @@ export class LeaveRequestsController {
       throw error;
     }
   }
-
+ 
   @Get('employee/:employeeId')
   findByEmployeeId(
     @Param('employeeId') employeeId: string,
@@ -233,7 +233,7 @@ export class LeaveRequestsController {
       throw error;
     }
   }
-
+ 
   @Get('monthly-details/:month/:year')
   @UseGuards(JwtAuthGuard, ReceptionistReadOnlyGuard)
   async findAllMonthlyDetails(
@@ -249,13 +249,13 @@ export class LeaveRequestsController {
       const user = req.user;
       let managerName: string | undefined;
       let managerId: string | undefined;
-
+ 
       const roleUpper = (user?.role || '').toUpperCase();
       if (user && !hasAdminAccess(user) && (user.userType === UserType.MANAGER || roleUpper.includes(UserType.MANAGER))) {
         managerName = user.aliasLoginName;
         managerId = user.loginId;
       }
-
+ 
       return await this.leaveRequestsService.findUnifiedRequests({
         month,
         year,
@@ -270,7 +270,7 @@ export class LeaveRequestsController {
       throw error;
     }
   }
-
+ 
   @Get('monthly-details/:employeeId/:month/:year')
   async findEmployeeMonthlyDetails(
     @Param('employeeId') employeeId: string,
@@ -288,7 +288,7 @@ export class LeaveRequestsController {
       throw error;
     }
   }
-
+ 
   @Get('notifications/unread')
   @UseGuards(JwtAuthGuard, ReceptionistReadOnlyGuard)
   findUnread(@Req() req: any) {
@@ -298,14 +298,14 @@ export class LeaveRequestsController {
       const isManager = user?.userType === UserType.MANAGER && !hasAdminAccess(user);
       return this.leaveRequestsService.findUnread(
         isManager ? user.aliasLoginName : undefined,
-        isCeoOrGmUser(user),
+        isCeoUser(user),
       );
     } catch (error) {
       this.logger.error(`Error fetching unread notifications: ${error.message}`, error.stack);
       throw error;
     }
   }
-
+ 
   @Get('employee/:employeeId/updates')
   findEmployeeUpdates(@Param('employeeId') employeeId: string) {
     try {
@@ -316,7 +316,7 @@ export class LeaveRequestsController {
       throw error;
     }
   }
-
+ 
   @Patch('notifications/:id/read')
   markAsRead(@Param('id') id: string) {
     try {
@@ -327,7 +327,7 @@ export class LeaveRequestsController {
       throw error;
     }
   }
-
+ 
   @Patch('employee/notifications/:id/read')
   markEmployeeRead(@Param('id') id: string) {
     try {
@@ -338,7 +338,7 @@ export class LeaveRequestsController {
       throw error;
     }
   }
-
+ 
   @Post('notifications/mark-all-read')
   @UseGuards(JwtAuthGuard, ReceptionistReadOnlyGuard)
   markAllAsRead(@Req() req: any) {
@@ -352,7 +352,7 @@ export class LeaveRequestsController {
       throw error;
     }
   }
-
+ 
   @Post('employee/:employeeId/notifications/mark-all-read')
   markAllEmployeeUpdatesRead(@Param('employeeId') employeeId: string) {
     try {
@@ -363,7 +363,7 @@ export class LeaveRequestsController {
       throw error;
     }
   }
-
+ 
   @Delete(':id/RequestDeleted')
   remove(@Param('id') id: string) {
     try {
@@ -374,7 +374,7 @@ export class LeaveRequestsController {
       throw error;
     }
   }
-
+ 
   @Post('bulk/approve')
   @UseGuards(JwtAuthGuard, ReceptionistReadOnlyGuard)
   async bulkApprove(
@@ -394,7 +394,7 @@ export class LeaveRequestsController {
       const user = req.user;
       const reviewerName = user?.aliasLoginName || user?.fullName || 'Admin';
       const reviewerEmail = user?.loginId || user?.email;
-      const employeeRole = isCeoOrGmUser(user) ? UserType.MANAGER : undefined;
+      const employeeRole = isCeoUser(user) ? UserType.MANAGER : undefined;
       if (employeeRole && ids?.length) {
         await this.leaveRequestsService.assertRequestsBelongToManagers(ids);
       }
@@ -415,7 +415,7 @@ export class LeaveRequestsController {
       throw error;
     }
   }
-
+ 
   @Post('bulk/reject')
   @UseGuards(JwtAuthGuard, ReceptionistReadOnlyGuard)
   async bulkReject(
@@ -435,7 +435,7 @@ export class LeaveRequestsController {
       const user = req.user;
       const reviewerName = user?.aliasLoginName || user?.fullName || 'Admin';
       const reviewerEmail = user?.loginId || user?.email;
-      const employeeRole = isCeoOrGmUser(user) ? UserType.MANAGER : undefined;
+      const employeeRole = isCeoUser(user) ? UserType.MANAGER : undefined;
       if (employeeRole && ids?.length) {
         await this.leaveRequestsService.assertRequestsBelongToManagers(ids);
       }
@@ -456,7 +456,7 @@ export class LeaveRequestsController {
       throw error;
     }
   }
-
+ 
   @Post('bulk/cancellation')
   @UseGuards(JwtAuthGuard, ReceptionistReadOnlyGuard)
   async bulkCancellation(
@@ -475,7 +475,7 @@ export class LeaveRequestsController {
       const user = req.user;
       const reviewerName = user?.aliasLoginName || user?.fullName || 'Admin';
       const reviewerEmail = user?.loginId || user?.email;
-      if (isCeoOrGmUser(user)) {
+      if (isCeoUser(user)) {
         await this.leaveRequestsService.assertRequestsBelongToManagers(ids || []);
       }
       return await this.leaveRequestsService.bulkUpdateStatus({
@@ -483,14 +483,14 @@ export class LeaveRequestsController {
         ids,
         reviewerName,
         reviewerEmail,
-        employeeRole: isCeoOrGmUser(user) ? UserType.MANAGER : undefined,
+        employeeRole: isCeoUser(user) ? UserType.MANAGER : undefined,
       });
     } catch (error) {
       this.logger.error(`Error in bulk cancellation: ${error.message}`, error.stack);
       throw error;
     }
   }
-
+ 
   @Post('bulk/modification')
   @UseGuards(JwtAuthGuard, ReceptionistReadOnlyGuard)
   async bulkModification(
@@ -509,7 +509,7 @@ export class LeaveRequestsController {
       const user = req.user;
       const reviewerName = user?.aliasLoginName || user?.fullName || 'Admin';
       const reviewerEmail = user?.loginId || user?.email;
-      if (isCeoOrGmUser(user)) {
+      if (isCeoUser(user)) {
         await this.leaveRequestsService.assertRequestsBelongToManagers(ids || []);
       }
       return await this.leaveRequestsService.bulkUpdateStatus({
@@ -517,14 +517,14 @@ export class LeaveRequestsController {
         ids,
         reviewerName,
         reviewerEmail,
-        employeeRole: isCeoOrGmUser(user) ? UserType.MANAGER : undefined,
+        employeeRole: isCeoUser(user) ? UserType.MANAGER : undefined,
       });
     } catch (error) {
       this.logger.error(`Error in bulk modification: ${error.message}`, error.stack);
       throw error;
     }
   }
-
+ 
   @Post(':id/update-status')
   @UseGuards(JwtAuthGuard, ReceptionistReadOnlyGuard)
   async updateStatus(
@@ -535,7 +535,7 @@ export class LeaveRequestsController {
     try {
       this.logger.log(`Updating leave request ${id} status to ${status}`);
       const user = req.user;
-      if (isCeoOrGmUser(user)) {
+      if (isCeoUser(user)) {
         await this.leaveRequestsService.assertRequestsBelongToManagers([+id]);
       }
       const reviewerName = user?.aliasLoginName || user?.fullName || 'Admin';
@@ -546,7 +546,7 @@ export class LeaveRequestsController {
       throw error;
     }
   }
-
+ 
   @Patch(':id/:employeeId/clear-attendance')
   @UseGuards(JwtAuthGuard, ReceptionistReadOnlyGuard)
   clearAttendance(@Param('id') id: string, @Param('employeeId') employeeId: string) {
@@ -558,7 +558,7 @@ export class LeaveRequestsController {
       throw error;
     }
   }
-
+ 
   @Patch(':id/modify')
   @UseGuards(JwtAuthGuard, ReceptionistReadOnlyGuard)
   modifyRequest(
@@ -575,7 +575,7 @@ export class LeaveRequestsController {
       throw error;
     }
   }
-
+ 
   @Post(':id/request-modified')
   createModification(
     @Param('id') id: string,
@@ -589,7 +589,7 @@ export class LeaveRequestsController {
       throw error;
     }
   }
-
+ 
   @Patch(':id/cancel-approved')
   async cancelApproved(@Param('id') id: string, @Body('employeeId') employeeId: string) {
     try {
@@ -600,7 +600,7 @@ export class LeaveRequestsController {
       throw error;
     }
   }
-
+ 
   @Patch(':id/reject-cancellation')
   @UseGuards(JwtAuthGuard, ReceptionistReadOnlyGuard)
   async rejectCancellation(
@@ -619,7 +619,7 @@ export class LeaveRequestsController {
       throw error;
     }
   }
-
+ 
   @Patch(':id/undo-modification')
   async undoModificationRequest(@Param('id') id: number, @Body('employeeId') employeeId: string) {
     try {
@@ -630,7 +630,7 @@ export class LeaveRequestsController {
       throw error;
     }
   }
-
+ 
   @Get(':id/cancellable-dates')
   @UseGuards(JwtAuthGuard, ReceptionistReadOnlyGuard)
   async getCancellableDates(
@@ -646,7 +646,7 @@ export class LeaveRequestsController {
       throw error;
     }
   }
-
+ 
   @Patch(':id/cancel-dates')
   @UseGuards(JwtAuthGuard, ReceptionistReadOnlyGuard)
   async cancelApprovedDates(
@@ -668,7 +668,7 @@ export class LeaveRequestsController {
       throw error;
     }
   }
-
+ 
   @Patch(':id/undo-cancellation')
   async undoCancellation(@Param('id') id: string, @Body('employeeId') employeeId: string) {
     try {
@@ -679,7 +679,7 @@ export class LeaveRequestsController {
       throw error;
     }
   }
-
+ 
   @Get('balance/:employeeId')
   getLeaveBalance(
     @Param('employeeId') employeeId: string,
@@ -694,7 +694,7 @@ export class LeaveRequestsController {
       throw error;
     }
   }
-
+ 
   @Get('monthly-balance/:employeeId')
   getMonthlyLeaveBalance(
     @Param('employeeId') employeeId: string,
@@ -713,7 +713,7 @@ export class LeaveRequestsController {
       throw error;
     }
   }
-
+ 
   @Get('stats/:employeeId')
   getStats(
     @Param('employeeId') employeeId: string,
@@ -728,7 +728,7 @@ export class LeaveRequestsController {
       throw error;
     }
   }
-
+ 
   @Get('email-config')
   getLeaveRequestEmailConfig(@Query('employeeId') employeeId: string) {
     try {
@@ -739,7 +739,7 @@ export class LeaveRequestsController {
       throw error;
     }
   }
-
+ 
   @Get(':id')
   findOne(@Param('id') id: string) {
     try {
@@ -750,7 +750,7 @@ export class LeaveRequestsController {
       throw error;
     }
   }
-
+ 
   @Patch('parent-update')
   async updateParentRequest(
     @Body('parentId', ParseIntPipe) parentId: number,
@@ -766,7 +766,7 @@ export class LeaveRequestsController {
       throw error;
     }
   }
-
+ 
   @Post('upload-file/entityId/:entityId/refId/:refId')
   @HttpCode(HttpStatus.CREATED)
   @UseInterceptors(FileFieldsInterceptor([{ name: 'file', maxCount: 1 }]))
@@ -782,35 +782,35 @@ export class LeaveRequestsController {
       this.logger.log(`Uploading document for entity: ${entityId}, refId: ${refId}`);
       const userContext = req.user;
       const loginId = userContext?.userId || 'system';
-
+ 
       if (entityId === 'NaN' || isNaN(Number(entityId))) {
         throw new HttpException('Invalid entityId: must be a numeric string. Received "NaN" or non-numeric value.', HttpStatus.BAD_REQUEST);
       }
       if (refId === 'NaN' || isNaN(Number(refId))) {
         throw new HttpException('Invalid refId: must be a numeric string.', HttpStatus.BAD_REQUEST);
       }
-
+ 
       const documents = docs.file || [];
-
+ 
       if (!refType) {
         throw new HttpException('Reference type is required', HttpStatus.BAD_REQUEST);
       }
-
+ 
       if (documents.length === 0) {
         throw new HttpException('No files uploaded', HttpStatus.BAD_REQUEST);
       }
-
+ 
       for (const file of documents) {
         await this.fileService.validateFileType(file);
       }
-
+ 
       return await this.leaveRequestsService.uploadDocument(documents, refType, +refId, entityType, +entityId);
     } catch (error) {
       this.logger.error(`Error uploading document: ${error.message}`, error.stack);
       throw error;
     }
   }
-
+ 
   @Get('entityId/:entityId/refId/:refId/get-files')
   @HttpCode(HttpStatus.OK)
   async getFiles(
@@ -830,7 +830,7 @@ export class LeaveRequestsController {
       throw error;
     }
   }
-
+ 
   @Get('entityId/:entityId/refId/:refId/download-file')
   @HttpCode(HttpStatus.OK)
   async downloadFile(
@@ -846,17 +846,17 @@ export class LeaveRequestsController {
         throw new HttpException('Invalid entityId or refId: must be numeric.', HttpStatus.BAD_REQUEST);
       }
       await this.leaveRequestsService.validateEntity(entityType, +entityId, +refId);
-
+ 
       const metaData = await this.documentUploaderService.getMetaData(key);
       const dataStream = await this.documentUploaderService.downloadFile(key);
-
+ 
       res.set({
         ...NO_CACHE_HEADERS,
         'Content-Type': metaData.mimetype,
         'Content-Disposition': `attachment; filename="${metaData.filename}"`,
         'Content-Length': dataStream.ContentLength || undefined,
       });
-
+ 
       if (dataStream.Body instanceof Readable) {
         dataStream.Body.pipe(res);
       } else if (dataStream.Body) {
@@ -870,7 +870,7 @@ export class LeaveRequestsController {
       throw error;
     }
   }
-
+ 
   @Get('entityId/:entityId/refId/:refId/view')
   @HttpCode(HttpStatus.OK)
   async viewFile(
@@ -886,17 +886,17 @@ export class LeaveRequestsController {
         throw new HttpException('Invalid entityId or refId: must be numeric.', HttpStatus.BAD_REQUEST);
       }
       await this.leaveRequestsService.validateEntity(entityType, +entityId, +refId);
-
+ 
       const metaData = await this.documentUploaderService.getMetaData(key);
       const dataStream = await this.documentUploaderService.downloadFile(key);
-
+ 
       res.set({
         ...NO_CACHE_HEADERS,
         'Content-Type': metaData.mimetype,
         'Content-Disposition': `inline; filename="${metaData.filename}"`,
         'Content-Length': dataStream.ContentLength || undefined,
       });
-
+ 
       if (dataStream.Body instanceof Readable) {
         dataStream.Body.pipe(res);
       } else if (dataStream.Body) {
@@ -910,7 +910,7 @@ export class LeaveRequestsController {
       throw error;
     }
   }
-
+ 
   @Delete('entityId/:entityId/refId/:refId/delete')
   @HttpCode(HttpStatus.OK)
   async deleteFile(
@@ -930,5 +930,7 @@ export class LeaveRequestsController {
       throw error;
     }
   }
-
+ 
 }
+ 
+ 

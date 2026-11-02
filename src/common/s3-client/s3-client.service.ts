@@ -101,6 +101,7 @@ export class S3ClientService implements OnModuleInit {
       throw new Error('Bucket name is required');
     }
     this.logger.log(`Starting upload for file: ${file.originalname}`);
+    let savedDoc: DocumentMetaInfo | null = null;
     try {
       const timestamp = Date.now().toString();
       const hashedFileName = crypto.createHash('md5').update(timestamp).digest('hex');
@@ -116,13 +117,13 @@ export class S3ClientService implements OnModuleInit {
         entityId: fileDetails.entityId,
         entityType: fileDetails.entityType,
       });
-      const savedDoc = await this.documentRepo.save(newDocument);
+      savedDoc = await this.documentRepo.save(newDocument);
       this.logger.debug(`Document metadata saved with ID: ${savedDoc.id}`);
  
       savedDoc.s3Key = savedDoc.id;
       await this.documentRepo.save(savedDoc);
       this.logger.debug(`Document metadata updated with S3 Key: ${savedDoc.s3Key}`);
- 
+
       this.logger.debug('Uploading file to S3');
       await this.s3Client.send(
         new PutObjectCommand({
@@ -149,7 +150,10 @@ export class S3ClientService implements OnModuleInit {
         fileName: file.originalname.replace(/[^a-zA-Z0-9.]/g, ''),
         key: savedDoc.s3Key,
       };
-    } catch (error) {
+    } catch (error: any) {
+      if (savedDoc?.id) {
+        await this.documentRepo.delete({ id: savedDoc.id }).catch(() => null);
+      }
       this.logger.error(`Failed to upload file: ${error.stack}`);
       throw new HttpException(
         error.message || 'Failed to upload file',
@@ -166,17 +170,17 @@ export class S3ClientService implements OnModuleInit {
     this.logger.log(`Deleting ${objetName} from ${targetBucket}`);
     try {
       const documents = await this.documentRepo.findOne({
-        where: { id: objetName },
+        where: [{ id: objetName }, { s3Key: objetName }],
       });
       if (!documents) {
         this.logger.warn(`Document not found: ${objetName}`);
-        throw new HttpException('Document not found', HttpStatus.NOT_FOUND);
+        return { message: 'Document not found or already deleted' } as any;
       }
  
       const s3KeyToDelete = documents.s3Key || documents.id;
       
       this.logger.debug('Deleting document metadata');
-      await this.documentRepo.delete({ id: objetName });
+      await this.documentRepo.delete({ id: documents.id });
 
       // Only delete from S3 if no other records are using this S3 key
       const remainingCount = await this.documentRepo.count({
@@ -213,11 +217,11 @@ export class S3ClientService implements OnModuleInit {
           Key: objetName,
         }),
       );
- 
+
       if (!stat.Metadata) {
         throw new HttpException('File not found in storage', HttpStatus.NOT_FOUND);
       }
- 
+
       const metaData = {
         'Content-Type': stat.Metadata['content-type'] || 'application/octet-stream',
         'filename': stat.Metadata['x-amz-meta-filename'] || 'unknown',
@@ -228,7 +232,7 @@ export class S3ClientService implements OnModuleInit {
         'entityType': stat.Metadata['x-amz-meta-entitytype'] || '',
         'id': stat.Metadata['x-amz-meta-id'] || '',
       };
- 
+
       return metaData;
     } catch (error) {
       if (error instanceof HttpException) {

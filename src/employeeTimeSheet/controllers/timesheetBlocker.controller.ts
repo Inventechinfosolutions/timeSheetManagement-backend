@@ -5,35 +5,33 @@ import { JwtAuthGuard } from 'src/auth/guards/jwt-auth.guard';
 import { ReceptionistReadOnlyGuard } from 'src/auth/guards/receptionist-readonly.guard';
 import { UserType } from 'src/users/enums/user-type.enum';
 import { hasAdminAccess } from 'src/users/utils/admin-access';
-
+ 
 @Controller('timesheet-blockers')
 @UseGuards(JwtAuthGuard, ReceptionistReadOnlyGuard)
 export class TimesheetBlockerController {
   private readonly logger = new Logger(TimesheetBlockerController.name);
   constructor(private readonly blockerService: TimesheetBlockerService) { }
-
+ 
   @Post()
   async create(@Body() data: Partial<TimesheetBlocker>, @Req() req: any): Promise<TimesheetBlocker> {
     try {
       this.logger.log(`Creating timesheet blocker for employee: ${data.employeeId}`);
       const user = req.user;
       const isAdmin = hasAdminAccess(user);
-
+ 
       data.blockedBy = user?.userType === UserType.CEO
         ? UserType.CEO
-        : user?.userType === UserType.GENERAL_MANAGER
-          ? UserType.GENERAL_MANAGER
-          : isAdmin
-            ? UserType.ADMIN
-            : UserType.MANAGER;
-
+        : isAdmin
+          ? UserType.ADMIN
+          : UserType.MANAGER;
+ 
       return await this.blockerService.create(data, isAdmin);
     } catch (error) {
       this.logger.error(`Error creating timesheet blocker: ${error.message}`, error.stack);
       throw error;
     }
   }
-
+ 
   @Get('employee/:employeeId')
   async findAll(@Param('employeeId') employeeId: string): Promise<TimesheetBlocker[]> {
     try {
@@ -44,18 +42,18 @@ export class TimesheetBlockerController {
       throw error;
     }
   }
-
+ 
   @Delete(':id')
   async remove(@Param('id') id: string, @Req() req: any): Promise<void> {
     try {
       this.logger.log(`Removing timesheet blocker ID: ${id}`);
       const user = req.user;
       const isAdmin = hasAdminAccess(user);
-
+ 
       // Check for Manager Role
       const roleUpper = (user?.role || '').toUpperCase();
       const isManager = user && (user.userType === UserType.MANAGER || roleUpper.includes('MNG') || roleUpper.includes(UserType.MANAGER));
-
+ 
       await this.blockerService.remove(+id, isAdmin, isManager, user?.loginId, user?.aliasLoginName);
     } catch (error) {
       this.logger.error(`Error removing timesheet blocker ${id}: ${error.message}`, error.stack);
@@ -63,3 +61,5 @@ export class TimesheetBlockerController {
     }
   }
 }
+ 
+ 
