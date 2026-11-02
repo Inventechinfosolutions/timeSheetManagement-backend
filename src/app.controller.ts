@@ -53,4 +53,11 @@ export class AppController {
     const result = await this.appraisalDeadlineCronService.remindOrCloseOpenReviews();
     return { message: 'Appraisal deadline cron completed', ...result };
   }
+
+  @Post('cron/work-anniversary')
+  async runWorkAnniversary() {
+    this.logger.log('Manually running work anniversary cron');
+    const result = await this.attendanceCronService.dailyWorkAnniversaryCheck();
+    return { message: 'Work anniversary check cron completed', result };
+  }
 }

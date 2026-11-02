@@ -46,7 +46,7 @@ function getEnvFiles(): string[] {
     }
   }
  
-  const profile = process.env.PROFILE || 'local';
+  const profile = process.env.PROFILE;
   const envFiles = [`.env.${profile}`, '.env'];
   console.log(`[Config] Using PROFILE="${profile}" -> env files: ${envFiles.join(', ')}`);
   return envFiles;

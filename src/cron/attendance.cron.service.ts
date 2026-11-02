@@ -565,4 +565,25 @@ export class AttendanceCronService {
     this.logger.debug('Running Weekend Reminder...');
     await this.notificationsService.sendWeekendReminder();
   }
+
+  /**
+   * Daily 10:00 AM (every day including Sunday) — Work Anniversary Wishes
+   * Checks if any active employee completes their 1-year (or milestone) work anniversary today.
+   * Sends rich celebration email + in-app notification.
+   * Duplicate prevention: checks the notifications table — if a 'Work Anniversary' notification
+   * already exists for the employee in the current calendar year, it is skipped.
+   */
+  @Cron('0 10 * * *')
+  async dailyWorkAnniversaryCheck() {
+    this.logger.log('Running daily work anniversary check (9 AM)...');
+    try {
+      const result = await this.notificationsService.sendDailyWorkAnniversaryWishes();
+      this.logger.log(
+        `Daily work anniversary check completed: ${result.sent} sent out of ${result.processed} eligible.`,
+      );
+      return result;
+    } catch (error) {
+      this.logger.error(`Error in dailyWorkAnniversaryCheck: ${error.message}`, error.stack);
+    }
+  }
 }

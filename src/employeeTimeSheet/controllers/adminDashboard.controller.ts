@@ -5,7 +5,9 @@ import {
   ForbiddenException,
   Get,
   Logger,
+  Param,
   ParseIntPipe,
+  Post,
   Query,
   Req,
   UseGuards,
@@ -17,6 +19,7 @@ import { ReceptionistReadOnlyGuard } from '../../auth/guards/receptionist-readon
 import { UserType } from '../../users/enums/user-type.enum';
 import { hasAdminAccess } from '../../users/utils/admin-access';
 import { AdminDashboardService } from '../services/adminDashboard.service';
+import { NotificationsService } from '../../notifications/Services/notifications.service';
 
 @ApiTags('Admin Dashboard')
 @Controller('admin-dashboard')
@@ -24,7 +27,10 @@ import { AdminDashboardService } from '../services/adminDashboard.service';
 export class AdminDashboardController {
   private readonly logger = new Logger(AdminDashboardController.name);
 
-  constructor(private readonly adminDashboardService: AdminDashboardService) {}
+  constructor(
+    private readonly adminDashboardService: AdminDashboardService,
+    private readonly notificationsService: NotificationsService,
+  ) {}
 
   @Get('summary')
   @ApiOperation({ summary: "Organisation-wide snapshot: today's attendance, pending approvals and upcoming events" })
@@ -48,6 +54,22 @@ export class AdminDashboardController {
     }
     this.logger.log(`Fetching admin dashboard attendance snapshot for ${date}`);
     return this.adminDashboardService.getAttendanceSnapshot(date);
+  }
+
+  @Post('anniversary/send-wish/:employeeId')
+  @ApiOperation({ summary: 'Send 1-year (or milestone) work anniversary celebration email and notification to an employee' })
+  async sendAnniversaryWish(@Req() req: any, @Param('employeeId') employeeId: string) {
+    this.assertAdmin(req);
+    this.logger.log(`Admin triggered work anniversary wish for employee ${employeeId}`);
+    return this.notificationsService.sendWorkAnniversaryWish(employeeId);
+  }
+
+  @Post('anniversary/process-today')
+  @ApiOperation({ summary: "Check and send anniversary wishes to all employees whose work anniversary is today" })
+  async processAnniversariesToday(@Req() req: any) {
+    this.assertAdmin(req);
+    this.logger.log("Admin triggered batch processing of today's work anniversaries");
+    return this.notificationsService.sendDailyWorkAnniversaryWishes();
   }
 
   private assertAdmin(req: any) {
