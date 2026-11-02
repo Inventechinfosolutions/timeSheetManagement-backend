@@ -848,30 +848,6 @@ export class LeaveRequestsService {
 
       // 2. Manager Filter (from Upstream)
       if (managerName || managerId) {
-        const {
-          ManagerMapping,
-        } = require('../../managerMapping/entities/managerMapping.entity');
-        query.innerJoin(
-          ManagerMapping,
-          'mm',
-          'mm.employeeId = lr.employeeId AND mm.status = :mmStatus',
-          { mmStatus: ManagerMappingStatus.ACTIVE },
-        );
-        const matchers: string[] = [];
-        const params: Record<string, string> = {};
-        if (managerName) {
-          matchers.push('mm.managerName LIKE :managerNameQuery');
-          params.managerNameQuery = `%${managerName}%`;
-        }
-        if (managerId) {
-          matchers.push('mm.managerName LIKE :managerIdQuery');
-          params.managerIdQuery = `%${managerId}%`;
-        }
-        if (matchers.length > 0) {
-          query.andWhere(`(${matchers.join(' OR ')})`, params);
-        }
-
-        // Manager should NOT approve their own leave/client/WFH requests (handled by GM)
         const excludeIds = new Set<string>();
         if (managerId) excludeIds.add(managerId);
         const managerWhere: any[] = [];
@@ -891,10 +867,42 @@ export class LeaveRequestsService {
             if (m.internId) excludeIds.add(m.internId);
           });
         }
-        if (excludeIds.size > 0) {
-          query.andWhere('lr.employeeId NOT IN (:...excludeManagerIds)', {
-            excludeManagerIds: Array.from(excludeIds),
-          });
+
+        // Own Request Management asks for the manager's employee id. Show that history.
+        // Team Request Management has no employee id, so keep own leave out (GM reviews it).
+        const viewingOwnHistory =
+          !!employeeId && excludeIds.has(employeeId);
+
+        if (!viewingOwnHistory) {
+          const {
+            ManagerMapping,
+          } = require('../../managerMapping/entities/managerMapping.entity');
+          query.innerJoin(
+            ManagerMapping,
+            'mm',
+            'mm.employeeId = lr.employeeId AND mm.status = :mmStatus',
+            { mmStatus: ManagerMappingStatus.ACTIVE },
+          );
+          const matchers: string[] = [];
+          const params: Record<string, string> = {};
+          if (managerName) {
+            matchers.push('mm.managerName LIKE :managerNameQuery');
+            params.managerNameQuery = `%${managerName}%`;
+          }
+          if (managerId) {
+            matchers.push('mm.managerName LIKE :managerIdQuery');
+            params.managerIdQuery = `%${managerId}%`;
+          }
+          if (matchers.length > 0) {
+            query.andWhere(`(${matchers.join(' OR ')})`, params);
+          }
+
+          // Manager should NOT approve their own leave/client/WFH requests (handled by GM)
+          if (excludeIds.size > 0) {
+            query.andWhere('lr.employeeId NOT IN (:...excludeManagerIds)', {
+              excludeManagerIds: Array.from(excludeIds),
+            });
+          }
         }
       }
 
@@ -1675,14 +1683,11 @@ export class LeaveRequestsService {
       }[] = [];
       const now = dayjs();
 
-      const roleUpper = (user?.role || '').toUpperCase();
       const isPrivileged =
-        user &&
-        (hasAdminAccess(user) ||
-          user.userType === UserType.MANAGER ||
-          roleUpper.includes(UserType.ADMIN) ||
-          roleUpper.includes('MNG') ||
-          roleUpper.includes(UserType.MANAGER));
+        await this.employeeAttendanceService.canOverrideLockedTimesheet(
+          user,
+          employeeId,
+        );
 
       const statuses = [
         LeaveRequestStatus.REQUESTING_FOR_CANCELLATION,
@@ -3685,14 +3690,11 @@ export class LeaveRequestsService {
 
       const isPendingRequest = request.status === LeaveRequestStatus.PENDING;
 
-      const roleUpper = (user?.role || '').toUpperCase();
       const isPrivileged =
-        user &&
-        (hasAdminAccess(user) ||
-          user.userType === UserType.MANAGER ||
-          roleUpper.includes(UserType.ADMIN) ||
-          roleUpper.includes('MNG') ||
-          roleUpper.includes(UserType.MANAGER));
+        await this.employeeAttendanceService.canOverrideLockedTimesheet(
+          user,
+          employeeId,
+        );
 
       const sortedDates = datesToCancel.sort();
       const ranges: { start: string; end: string; count: number }[] = [];
@@ -3889,6 +3891,17 @@ export class LeaveRequestsService {
         }
       } else {
         // --- APPROVED REQUEST CANCELLATION ---
+        if (!isPrivileged) {
+          const now = dayjs();
+          const pastDeadline = datesToCancel.find((date) =>
+            !now.isBefore(dayjs(date).hour(18).minute(30).second(0)),
+          );
+          if (pastDeadline) {
+            throw new ForbiddenException(
+              'Approved leave can only be changed before 6:30 PM on that date. A manager can change approved leave only for employees mapped under them.',
+            );
+          }
+        }
 
         // Calculate total working days being cancelled in this batch
         let cancellingWorkingDays = 0;
