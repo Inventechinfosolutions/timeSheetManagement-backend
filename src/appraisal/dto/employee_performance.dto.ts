@@ -16,7 +16,7 @@ import {
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional, PartialType } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { QuaterlyEnum } from '../enums/quarterly_review.enums';
+import { QuaterlyEnum, ReviewPeriod } from '../enums/quarterly_review.enums';
 import {
   EmployeePerformanceStatus,
   RateCompanyEnvironmentEnum,
@@ -606,6 +606,11 @@ export class QueryEmployeePerformanceDto {
   @IsOptional()
   @IsEnum(QuaterlyEnum)
   quarter?: QuaterlyEnum;
+
+  @ApiPropertyOptional({ enum: ReviewPeriod, description: 'YEARLY returns the single yearly assignment with Q1-Q4 JSON' })
+  @IsOptional()
+  @IsEnum(ReviewPeriod)
+  reviewPeriod?: ReviewPeriod;
 
   @ApiPropertyOptional({ example: '2025-2026', description: 'Filter by financial year' })
   @IsOptional()

@@ -141,7 +141,28 @@ export class AnnualAppraisalService {
         const isReviewed =
           r.status === QuarterlyReviewStatus.REVIEWED ||
           r.status === QuarterlyReviewStatus.COMPLETED;
-        const quarter = String(r.quarter || '').toUpperCase();
+        const quarter = typeof r.quarter === 'string' ? r.quarter.toUpperCase() : '';
+
+        // Check if quarterly snapshots are in yearlyQuarterReviews or quarter
+        let quarterObj = (r as any).yearlyQuarterReviews || ((typeof r.quarter === 'object' && r.quarter !== null) ? r.quarter : null);
+        if (typeof quarterObj === 'string' && (quarterObj.startsWith('{') || quarterObj.startsWith('['))) {
+          try { quarterObj = JSON.parse(quarterObj); } catch { /* ignore */ }
+        }
+        if (quarterObj && typeof quarterObj === 'object') {
+          for (const slot of ['Q1', 'Q2', 'Q3', 'Q4'] as const) {
+            const snap = (quarterObj as any)[slot];
+            if (!snap || typeof snap !== 'object') continue;
+            const snapRating = snap.finalRating ?? snap.overallPerformanceRating;
+            const snapStatus = snap.status;
+            const num = snapRating == null || Number.isNaN(Number(snapRating)) ? null : Number(snapRating);
+            const isSnapReviewed = snapStatus === QuarterlyReviewStatus.REVIEWED || snapStatus === QuarterlyReviewStatus.COMPLETED;
+            if (slot === 'Q1') { q1Rating = num; q1Status = snapStatus; }
+            if (slot === 'Q2') { q2Rating = num; q2Status = snapStatus; }
+            if (slot === 'Q3') { q3Rating = num; q3Status = snapStatus; }
+            if (slot === 'Q4') { q4Rating = num; q4Status = snapStatus; }
+            if (isSnapReviewed && num !== null) completedRatings.push(num);
+          }
+        }
 
         if (quarter === QuaterlyEnum.Q1) {
           q1Rating = rating;

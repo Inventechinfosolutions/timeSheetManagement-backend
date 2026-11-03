@@ -9,6 +9,7 @@ import {
   IsBoolean,
   Min,
   Max,
+  ValidateIf,
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional, PartialType } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
@@ -17,6 +18,7 @@ import {
   ReviewAssignedBy,
   QuarterlyReviewStatus,
   QuaterlyEnum,
+  ReviewPeriod,
 } from '../enums/quarterly_review.enums';
 
 export class CreateQuarterlyReviewDto {
@@ -45,14 +47,24 @@ export class CreateQuarterlyReviewDto {
   @IsString()
   financialYear: string;
 
-  @ApiProperty({
+  @ApiPropertyOptional({
+    enum: ReviewPeriod,
+    example: ReviewPeriod.QUARTERLY,
+    description: 'QUARTERLY creates one quarter. YEARLY stores { Q1, Q2, Q3, Q4 } JSON in the quarter column.',
+  })
+  @IsOptional()
+  @IsEnum(ReviewPeriod)
+  reviewPeriod?: ReviewPeriod;
+
+  @ApiPropertyOptional({
     enum: QuaterlyEnum,
     example: QuaterlyEnum.Q1,
-    description: 'Quarter (Q1, Q2, Q3, Q4)',
+    description: 'Quarter (Q1, Q2, Q3, Q4). Required when reviewPeriod is QUARTERLY; omitted when reviewPeriod is YEARLY ({ Q1, Q2, Q3, Q4 } JSON is automatically stored in quarter column).',
   })
+  @ValidateIf((dto) => dto.reviewPeriod !== ReviewPeriod.YEARLY)
   @IsNotEmpty()
   @IsEnum(QuaterlyEnum)
-  quarter: QuaterlyEnum;
+  quarter?: QuaterlyEnum;
 
   @ApiPropertyOptional({
     example: '2025-04-01',
@@ -410,6 +422,14 @@ export class QueryQuarterlyReviewDto {
   @IsOptional()
   @IsEnum(QuaterlyEnum)
   quarter?: QuaterlyEnum;
+
+  @ApiPropertyOptional({
+    enum: ReviewPeriod,
+    description: 'Filter by review period. YEARLY returns the single yearly row with Q1-Q4 JSON.',
+  })
+  @IsOptional()
+  @IsEnum(ReviewPeriod)
+  reviewPeriod?: ReviewPeriod;
 
   @ApiPropertyOptional({ enum: ReviewAssignedBy, description: 'Filter by assignedBy role' })
   @IsOptional()

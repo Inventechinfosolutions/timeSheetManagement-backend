@@ -2,7 +2,6 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { MasterHolidays } from './models/master-holidays.entity';
 import { MasterDepartment } from './models/master-department.entity';
-import { MasterQuaterly } from './models/master-quaterly.entity';
 import { MasterFinancialYear } from './models/master-financialyear.entity';
 import { MasterHolidayService } from './service/master-holiday.service';
 import { MasterDepartmentService } from './service/master-department.service';
@@ -20,7 +19,6 @@ import { FileService } from '../common/core/utils/fileType.utils';
     TypeOrmModule.forFeature([
       MasterHolidays,
       MasterDepartment,
-      MasterQuaterly,
       MasterFinancialYear,
     ]),
     DocumentUploaderModule,

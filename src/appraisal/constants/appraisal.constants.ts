@@ -21,6 +21,12 @@ export const duplicateAssignmentMessage = (
   financialYear: string,
 ): string =>
   `${employeeId} already has a review for ${quarter} ${financialYear}. A different quarter or a different year can still be assigned.`;
+
+export const yearlyAlreadyAssignedMessage = (
+  employeeId: string,
+  financialYear: string,
+): string =>
+  `${employeeId} already has a yearly review for ${financialYear}.`;
 export const MILLISECONDS_PER_HOUR = 60 * 60 * 1000;
 
 export const appraisalWindowMs = (hours: number): number =>

@@ -1,20 +1,18 @@
-import { Entity, PrimaryGeneratedColumn, Column } from 'typeorm';
-import { BaseEntity } from '../../common/core/models/base.entity';
+import { ApiProperty } from '@nestjs/swagger';
 
-@Entity('quater')
-export class MasterQuaterly extends BaseEntity {
-  @PrimaryGeneratedColumn()
+export class MasterQuaterly {
+  @ApiProperty({ example: 1, description: 'Quarter index ID' })
   id: number;
 
-  @Column({ type: 'varchar', length: 50, unique: true, nullable: false })
+  @ApiProperty({ example: 'Q1', description: 'Quarter label (Q1, Q2, Q3, Q4)' })
   quaterLabel: string; // 'Q1', 'Q2', 'Q3', 'Q4'
 
-  @Column({ type: 'varchar', length: 50, nullable: false })
+  @ApiProperty({ example: 'April', description: 'Quarter starting month' })
   fromMonth: string; // 'April', 'July', 'October', 'January'
 
-  @Column({ type: 'varchar', length: 50, nullable: false })
+  @ApiProperty({ example: 'June', description: 'Quarter ending month' })
   toMonth: string; // 'June', 'September', 'December', 'March'
 
-  @Column({ type: 'varchar', length: 150, nullable: true })
-  description: string; // 'April to June'
+  @ApiProperty({ example: 'April to June', description: 'Description of quarter', required: false })
+  description?: string; // 'April to June'
 }

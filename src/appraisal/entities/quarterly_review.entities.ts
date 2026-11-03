@@ -1,15 +1,17 @@
-import { Entity, PrimaryGeneratedColumn, Column, Unique } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, Index } from 'typeorm';
 import { BaseEntity } from '../../common/core/models/base.entity';
 import {
   ReviewEmployeeType,
   ReviewAssignedBy,
   QuarterlyReviewStatus,
   QuaterlyEnum,
+  ReviewPeriod,
 } from '../enums/quarterly_review.enums';
 import { AppraisalAuditEntry } from '../interfaces/appraisal_audit.interface';
+import { YearlyQuarterReviews } from '../interfaces/yearly_quarter_reviews.interface';
 
 @Entity('quaterly_review')
-@Unique(['employeeId', 'quarter', 'financialYear'])
+@Index(['employeeId', 'financialYear'])
 export class QuarterlyReview extends BaseEntity {
   @PrimaryGeneratedColumn()
   id!: number;
@@ -38,11 +40,47 @@ export class QuarterlyReview extends BaseEntity {
   financialYear!: string; // e.g. '2025-2026'
 
   @Column({
+    type: 'longtext',
+    nullable: false,
+    transformer: {
+      to: (value: any) => {
+        if (value === null || value === undefined) return null;
+        return typeof value === 'object' ? JSON.stringify(value) : String(value);
+      },
+      from: (value: any) => {
+        if (typeof value === 'string') {
+          const trimmed = value.trim();
+          if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+            try {
+              return JSON.parse(trimmed);
+            } catch {
+              return value;
+            }
+          }
+          if (trimmed.startsWith('"') && trimmed.endsWith('"')) {
+            try {
+              return JSON.parse(trimmed);
+            } catch {
+              return value;
+            }
+          }
+        }
+        return value;
+      },
+    },
+  })
+  quarter!: any; // 'Q1'..'Q4' for quarterly; JSON { Q1, Q2, Q3, Q4 } for yearly
+
+  @Column({
     type: 'enum',
-    enum: QuaterlyEnum,
+    enum: ReviewPeriod,
+    default: ReviewPeriod.QUARTERLY,
     nullable: false,
   })
-  quarter!: QuaterlyEnum; // 'Q1', 'Q2', 'Q3', 'Q4'
+  reviewPeriod!: ReviewPeriod;
+
+  @Column({ type: 'json', nullable: true })
+  yearlyQuarterReviews!: YearlyQuarterReviews | null;
 
   @Column({ type: 'date', nullable: true })
   assignedDate!: Date | null;

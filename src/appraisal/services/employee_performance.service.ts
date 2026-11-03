@@ -26,10 +26,12 @@ import {
   UpdatePerformanceProjectDto,
 } from '../dto/employee_performance.dto';
 import { EmployeePerformanceStatus } from '../enums/employee_performance.enums';
+import { YearlyQuarterReviews } from '../interfaces/yearly_quarter_reviews.interface';
 import { UserType } from '../../users/enums/user-type.enum';
 import { isCeoUser } from '../../users/utils/admin-access';
-import { QuarterlyReviewStatus } from '../enums/quarterly_review.enums';
+import { QuarterlyReviewStatus, ReviewPeriod, QuaterlyEnum } from '../enums/quarterly_review.enums';
 import { AppraisalNoticeService } from './appraisal_notice.service';
+import { QuarterlyReviewService } from './quarterly_review.service';
 import { DocumentUploaderService } from '../../common/document-uploader/services/document-uploader.service';
 import { DocumentMetaInfo, EntityType, ReferenceType } from '../../common/document-uploader/models/documentmetainfo.model';
 import { BufferedFile } from '../../common/s3-client/file.model';
@@ -82,6 +84,31 @@ export interface EnrichedEmployeePerformance extends EmployeePerformance {
   deadlineDate?: Date | string | null;
   description?: string | null;
   reviewId?: number | null;
+  reviewPeriod?: ReviewPeriod;
+  yearlyQuarterReviews?: YearlyQuarterReviews | null;
+}
+
+const YEARLY_QUARTER_VALUE = { Q1: 'Q1', Q2: 'Q2', Q3: 'Q3', Q4: 'Q4' } as const;
+
+function isYearlyQuarterValue(quarter: unknown): boolean {
+  if (quarter == null) return false;
+  if (typeof quarter === 'object') return true;
+  const value = String(quarter).trim();
+  const upper = value.toUpperCase();
+  if (
+    upper === QuaterlyEnum.Q1 ||
+    upper === QuaterlyEnum.Q2 ||
+    upper === QuaterlyEnum.Q3 ||
+    upper === QuaterlyEnum.Q4
+  ) {
+    return false;
+  }
+  return (
+    upper === 'YEARLY' ||
+    upper === String(QuaterlyEnum.YEARLY).toUpperCase() ||
+    upper.includes('YEARLY') ||
+    (value.startsWith('{') && value.includes('Q1'))
+  );
 }
 
 @Injectable()
@@ -99,6 +126,7 @@ export class EmployeePerformanceService {
     private readonly managerMappingRepository: Repository<ManagerMapping>,
     private readonly noticeService: AppraisalNoticeService,
     private readonly documentUploaderService: DocumentUploaderService,
+    private readonly quarterlyReviewService: QuarterlyReviewService,
   ) { }
 
   /**
@@ -118,13 +146,26 @@ export class EmployeePerformanceService {
         `Saving performance for: ${dto.employeeId}, Quarter: ${dto.quarter}, FY: ${dto.financialYear}, draft: ${asDraft}`,
       );
 
-      let record = await this.performanceRepository.findOne({
-        where: {
-          employeeId: dto.employeeId,
-          quarter: dto.quarter,
-          financialYear: dto.financialYear,
-        },
-      });
+      const isYearly = isYearlyQuarterValue(dto.quarter);
+
+      let record: EmployeePerformance | null = null;
+      if (isYearly) {
+        const records = await this.performanceRepository.find({
+          where: {
+            employeeId: dto.employeeId,
+            financialYear: dto.financialYear,
+          },
+        });
+        record = records.find((r) => isYearlyQuarterValue(r.quarter)) || null;
+      } else {
+        record = await this.performanceRepository.findOne({
+          where: {
+            employeeId: dto.employeeId,
+            quarter: dto.quarter,
+            financialYear: dto.financialYear,
+          },
+        });
+      }
 
       const requestedStatus = dto.status;
       let nextStatus = requestedStatus || (asDraft ? EmployeePerformanceStatus.DRAFT : EmployeePerformanceStatus.NOT_STARTED);
@@ -155,13 +196,16 @@ export class EmployeePerformanceService {
         }
 
         applyPerformanceSteps(record, { ...dto });
+        if (isYearly) {
+          record.quarter = { ...YEARLY_QUARTER_VALUE };
+        }
         record.status = nextStatus;
         record.lastModifiedDate = new Date();
         record.lastModifiedBy = dto.employeeId;
       } else {
         record = this.performanceRepository.create({
           employeeId: dto.employeeId,
-          quarter: dto.quarter,
+          quarter: isYearly ? { ...YEARLY_QUARTER_VALUE } : dto.quarter,
           financialYear: dto.financialYear,
           status: nextStatus,
           lastModifiedDate: new Date(),
@@ -172,20 +216,30 @@ export class EmployeePerformanceService {
 
       const saved = await this.performanceRepository.save(record);
       await this.linkPerformanceToReview(saved.employeeId, saved.quarter, saved.financialYear, saved.id);
-      const reviewForDraft = await this.reviewRepository.findOne({
-        where: {
-          employeeId: saved.employeeId,
-          quarter: saved.quarter,
-          financialYear: saved.financialYear,
-        },
-      });
-      if (
-        reviewForDraft &&
-        (reviewForDraft.status === QuarterlyReviewStatus.DRAFT ||
-          reviewForDraft.status === QuarterlyReviewStatus.NOT_STARTED)
-      ) {
-        reviewForDraft.status = QuarterlyReviewStatus.ASSIGNED;
+      let reviewForDraft = await this.findReviewForPerformance(
+        saved.employeeId,
+        saved.quarter,
+        saved.financialYear,
+      );
+      if (reviewForDraft) {
+        if (isYearly) {
+          reviewForDraft.quarter = { ...YEARLY_QUARTER_VALUE };
+          reviewForDraft.reviewPeriod = ReviewPeriod.YEARLY;
+        }
+        if (
+          reviewForDraft.status === QuarterlyReviewStatus.DRAFT ||
+          reviewForDraft.status === QuarterlyReviewStatus.NOT_STARTED
+        ) {
+          reviewForDraft.status = QuarterlyReviewStatus.ASSIGNED;
+        }
         await this.reviewRepository.save(reviewForDraft);
+        if (isYearly) {
+          await this.removeDuplicateYearlyReviews(
+            reviewForDraft.employeeId,
+            reviewForDraft.financialYear,
+            reviewForDraft.id,
+          );
+        }
       }
 
       const draftAuditEntry = createAuditEntry({
@@ -226,6 +280,7 @@ export class EmployeePerformanceService {
         });
       }
 
+      await this.quarterlyReviewService.propagateYearlyPerformance(saved);
       const enriched = await this.enrichPerformancesWithEmployeeDetails([saved]);
       return enriched[0];
     } catch (error) {
@@ -256,9 +311,17 @@ export class EmployeePerformanceService {
           'No draft found for this quarter. Please fill in the submission before submitting.',
         );
       }
+      const isRecordYearly = isYearlyQuarterValue(record.quarter);
+      const isDtoYearly = isYearlyQuarterValue(dto.quarter);
+      const isYearly = isRecordYearly || isDtoYearly;
+
+      const quarterMatches =
+        record.quarter === dto.quarter ||
+        (isRecordYearly && isDtoYearly);
+
       if (
         record.employeeId !== dto.employeeId ||
-        record.quarter !== dto.quarter ||
+        !quarterMatches ||
         record.financialYear !== dto.financialYear
       ) {
         throw new BadRequestException('This submission does not match the selected quarter.');
@@ -304,6 +367,9 @@ export class EmployeePerformanceService {
       }
 
       const submittedAt = new Date();
+      if (isYearly) {
+        record.quarter = { ...YEARLY_QUARTER_VALUE };
+      }
       record.status = resubmitting
         ? EmployeePerformanceStatus.RE_SUBMITTED
         : EmployeePerformanceStatus.SUBMITTED;
@@ -314,14 +380,12 @@ export class EmployeePerformanceService {
 
       const saved = await this.performanceRepository.save(record);
 
-      // Sync with QuarterlyReview
-      let review = await this.reviewRepository.findOne({
-        where: {
-          employeeId: dto.employeeId,
-          quarter: dto.quarter,
-          financialYear: dto.financialYear,
-        },
-      });
+      // Always update the existing assigned review row (same table/columns). Never create a duplicate yearly row.
+      let review = await this.findReviewForPerformance(
+        dto.employeeId,
+        isYearly ? YEARLY_QUARTER_VALUE : dto.quarter,
+        dto.financialYear,
+      );
 
       const submitEntry = createAuditEntry({
         employeeId: saved.employeeId,
@@ -345,13 +409,24 @@ export class EmployeePerformanceService {
 
       const reviewStatus = QuarterlyReviewStatus.PERFORMANCE_RECEIVED;
       if (review) {
+        if (isYearly) {
+          review.quarter = { ...YEARLY_QUARTER_VALUE };
+          review.reviewPeriod = ReviewPeriod.YEARLY;
+        }
         review.submittedDate = submittedAt;
         review.performanceId = saved.id;
         review.status = reviewStatus;
         review.auditHistory = appendAuditEntry(review.auditHistory, submitEntry);
         await this.reviewRepository.save(review);
+        if (isYearly) {
+          await this.removeDuplicateYearlyReviews(
+            review.employeeId,
+            review.financialYear,
+            review.id,
+          );
+        }
       } else {
-        // Auto-create QuarterlyReview master if it wasn't pre-assigned
+        // Auto-create QuarterlyReview master only if manager never assigned one
         const emp = await this.employeeDetailsRepository.findOne({
           where: { employeeId: dto.employeeId },
         });
@@ -365,7 +440,8 @@ export class EmployeePerformanceService {
           department: emp?.department || '',
           designation: emp?.designation || '',
           financialYear: dto.financialYear,
-          quarter: dto.quarter,
+          quarter: isYearly ? { ...YEARLY_QUARTER_VALUE } : dto.quarter,
+          reviewPeriod: isYearly ? ReviewPeriod.YEARLY : ReviewPeriod.QUARTERLY,
           status: QuarterlyReviewStatus.PERFORMANCE_RECEIVED,
           submittedDate: submittedAt,
           performanceId: saved.id,
@@ -387,6 +463,7 @@ export class EmployeePerformanceService {
       };
       await this.noticeService.notifyEmployeeOfSubmission(notice);
       await this.noticeService.notifyManagerOfSubmission(notice);
+      await this.quarterlyReviewService.propagateYearlyPerformance(saved);
 
       const enriched = await this.enrichPerformancesWithEmployeeDetails([saved]);
       return enriched[0];
@@ -418,22 +495,37 @@ export class EmployeePerformanceService {
         : null;
 
       if (!record && review) {
-        record = await this.performanceRepository.findOne({
-          where: {
-            employeeId: review.employeeId,
-            quarter: review.quarter,
-            financialYear: review.financialYear,
-          },
-        });
+        const isYearlyReview = isYearlyQuarterValue(review.quarter) || review.reviewPeriod === ReviewPeriod.YEARLY;
+        if (isYearlyReview) {
+          const performances = await this.performanceRepository.find({
+            where: {
+              employeeId: review.employeeId,
+              financialYear: review.financialYear,
+            },
+          });
+          record = performances.find((r) => isYearlyQuarterValue(r.quarter)) || null;
+        } else {
+          record = await this.performanceRepository.findOne({
+            where: {
+              employeeId: review.employeeId,
+              quarter: review.quarter,
+              financialYear: review.financialYear,
+            },
+          });
+        }
         if (!record) {
           record = this.performanceRepository.create({
             employeeId: review.employeeId,
-            quarter: review.quarter,
+            quarter: isYearlyReview ? { ...YEARLY_QUARTER_VALUE } : review.quarter,
             financialYear: review.financialYear,
             status: EmployeePerformanceStatus.LOCKED,
           });
           record = await this.performanceRepository.save(record);
           review.performanceId = record.id;
+          if (isYearlyReview) {
+            review.quarter = { ...YEARLY_QUARTER_VALUE };
+            review.reviewPeriod = ReviewPeriod.YEARLY;
+          }
           await this.reviewRepository.save(review);
         }
       }
@@ -443,13 +535,11 @@ export class EmployeePerformanceService {
       }
 
       if (!review) {
-        review = await this.reviewRepository.findOne({
-          where: {
-            employeeId: record.employeeId,
-            quarter: record.quarter,
-            financialYear: record.financialYear,
-          },
-        });
+        review = await this.findReviewForPerformance(
+          record.employeeId,
+          record.quarter,
+          record.financialYear,
+        );
       }
 
       if (
@@ -856,7 +946,18 @@ export class EmployeePerformanceService {
         qb.andWhere('ep.employeeId IN (:...matchedIds)', { matchedIds });
       }
 
-      if (params?.quarter) {
+      if (params?.reviewPeriod === ReviewPeriod.YEARLY) {
+        qb.andWhere(
+          `EXISTS (
+            SELECT 1 FROM quaterly_review yr
+            WHERE yr.employeeId = ep.employeeId
+              AND yr.financialYear = ep.financialYear
+              AND yr.reviewPeriod = :yearlyPeriod
+              AND (yr.quarter = ep.quarter OR yr.performanceId = ep.id)
+          )`,
+          { yearlyPeriod: ReviewPeriod.YEARLY },
+        );
+      } else if (params?.quarter) {
         qb.andWhere('ep.quarter = :quarter', { quarter: params.quarter });
       }
 
@@ -1007,6 +1108,7 @@ export class EmployeePerformanceService {
       await this.reviewRepository.save(reviewForDraft);
     }
 
+    await this.quarterlyReviewService.propagateYearlyPerformance(updated);
     const enrichedList = await this.enrichPerformancesWithEmployeeDetails([updated]);
     return enrichedList[0];
   }
@@ -1310,6 +1412,46 @@ export class EmployeePerformanceService {
     }
   }
 
+  private async findReviewForPerformance(
+    employeeId: string,
+    quarter: EmployeePerformance['quarter'],
+    financialYear: string,
+  ): Promise<QuarterlyReview | null> {
+    if (isYearlyQuarterValue(quarter)) {
+      const reviews = await this.reviewRepository.find({
+        where: { employeeId, financialYear },
+      });
+      return (
+        reviews.find(
+          (r) =>
+            r.reviewPeriod === ReviewPeriod.YEARLY ||
+            isYearlyQuarterValue(r.quarter),
+        ) || null
+      );
+    }
+    return await this.reviewRepository.findOne({
+      where: { employeeId, quarter, financialYear },
+    });
+  }
+
+  private async removeDuplicateYearlyReviews(
+    employeeId: string,
+    financialYear: string,
+    keepId: number,
+  ): Promise<void> {
+    const reviews = await this.reviewRepository.find({
+      where: { employeeId, financialYear },
+    });
+    const duplicates = reviews.filter(
+      (r) =>
+        r.id !== keepId &&
+        (r.reviewPeriod === ReviewPeriod.YEARLY || isYearlyQuarterValue(r.quarter)),
+    );
+    if (duplicates.length) {
+      await this.reviewRepository.delete(duplicates.map((r) => r.id));
+    }
+  }
+
   private async setReviewStatus(
     employeeId: string,
     quarter: EmployeePerformance['quarter'],
@@ -1317,9 +1459,7 @@ export class EmployeePerformanceService {
     status: QuarterlyReviewStatus,
     performanceId: number,
   ): Promise<void> {
-    const review = await this.reviewRepository.findOne({
-      where: { employeeId, quarter, financialYear },
-    });
+    const review = await this.findReviewForPerformance(employeeId, quarter, financialYear);
     if (!review) {
       return;
     }
@@ -1334,9 +1474,7 @@ export class EmployeePerformanceService {
     financialYear: string,
     performanceId: number,
   ): Promise<void> {
-    const review = await this.reviewRepository.findOne({
-      where: { employeeId, quarter, financialYear },
-    });
+    const review = await this.findReviewForPerformance(employeeId, quarter, financialYear);
     if (!review || review.performanceId === performanceId) {
       return;
     }
@@ -1377,12 +1515,13 @@ export class EmployeePerformanceService {
       return records;
     }
 
+    const employeeIds = Array.from(new Set(records.map((record) => record.employeeId)));
+    const financialYears = Array.from(new Set(records.map((record) => record.financialYear)));
     const reviews = await this.reviewRepository.find({
-      where: records.map((record) => ({
-        employeeId: record.employeeId,
-        quarter: record.quarter,
-        financialYear: record.financialYear,
-      })),
+      where: {
+        employeeId: In(employeeIds),
+        financialYear: In(financialYears),
+      },
       select: [
         'id',
         'employeeId',
@@ -1398,6 +1537,8 @@ export class EmployeePerformanceService {
         'reassignCount',
         'submittedDate',
         'updatedAt',
+        'reviewPeriod',
+        'yearlyQuarterReviews',
       ],
     });
     const assignerIds = Array.from(new Set(reviews.map((review) => review.assignerId).filter(Boolean)));
@@ -1408,15 +1549,24 @@ export class EmployeePerformanceService {
       })
       : [];
     const nameById = new Map(assigners.map((person) => [person.employeeId, person.fullName]));
-    const reviewByKey = new Map(
-      reviews.map((review) => [`${review.employeeId}|${review.quarter}|${review.financialYear}`, review]),
-    );
+    const reviewsByEmployeeFy = new Map<string, QuarterlyReview[]>();
+    for (const review of reviews) {
+      const key = `${review.employeeId}|${review.financialYear}`;
+      const list = reviewsByEmployeeFy.get(key) || [];
+      list.push(review);
+      reviewsByEmployeeFy.set(key, list);
+    }
 
     const now = new Date();
     const requestWindowMs = appraisalWindowMs(APPRAISAL_EDIT_WINDOW_HOURS);
     const withAccess: EnrichedEmployeePerformance[] = [];
     for (const record of records) {
-      const review = reviewByKey.get(`${record.employeeId}|${record.quarter}|${record.financialYear}`);
+      const fyReviews = reviewsByEmployeeFy.get(`${record.employeeId}|${record.financialYear}`) || [];
+      const review = isYearlyQuarterValue(record.quarter)
+        ? fyReviews.find(
+            (r) => r.reviewPeriod === ReviewPeriod.YEARLY || isYearlyQuarterValue(r.quarter),
+          ) || fyReviews[0]
+        : fyReviews.find((r) => r.quarter === record.quarter);
       if (
         review &&
         shouldCloseRenewedAccess(review.reassignCount || 0, review.deadlineDate, record.status, now)
@@ -1467,6 +1617,8 @@ export class EmployeePerformanceService {
         deadlineDate: review?.deadlineDate ?? null,
         description: review?.description ?? null,
         reviewId: review?.id ?? null,
+        reviewPeriod: review?.reviewPeriod,
+        yearlyQuarterReviews: review?.yearlyQuarterReviews ?? null,
         canEdit: access ? access.canEdit : record.canEdit,
         canRequestEdit: access ? access.canRequestEdit : record.canRequestEdit,
         remainingRequestHours: access ? access.remainingRequestHours : record.remainingRequestHours,
