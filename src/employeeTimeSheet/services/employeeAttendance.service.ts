@@ -22,7 +22,9 @@ import { MonthStatus } from '../enums/month-status.enum';
 import { WorkLocation } from '../enums/work-location.enum';
 import { LeaveRequestType } from '../enums/leave-request-type.enum';
 import { UserStatus } from '../../users/enums/user-status.enum';
+import { UserType } from '../../users/enums/user-type.enum';
 import { User } from '../../users/entities/user.entity';
+import { hasAdminAccess } from '../../users/utils/admin-access';
 import { LeaveRequest } from '../entities/leave-request.entity';
 import { EmployeeAttendanceDto } from '../dto/employeeAttendance.dto';
 import { MasterHolidayService } from '../../master/service/master-holiday.service';
@@ -52,6 +54,8 @@ export class EmployeeAttendanceService {
     private readonly leaveRequestRepository: Repository<LeaveRequest>,
     @InjectRepository(EmployeeDetails)
     private readonly employeeDetailsRepository: Repository<EmployeeDetails>,
+    @InjectRepository(ManagerMapping)
+    private readonly managerMappingRepository: Repository<ManagerMapping>,
     private readonly masterHolidayService: MasterHolidayService,
     private readonly blockerService: TimesheetBlockerService,
     private readonly attendenceEditRequestService: AttendenceEditRequestService,
@@ -157,10 +161,17 @@ export class EmployeeAttendanceService {
     createEmployeeAttendanceDto: EmployeeAttendanceDto,
     isPrivileged: boolean = false,
     actorId?: string,
+    actor?: any,
   ): Promise<EmployeeAttendance | null> {
     try {
+      const canOverrideLocks = actor
+        ? await this.canOverrideLockedTimesheet(
+            actor,
+            createEmployeeAttendanceDto.employeeId,
+          )
+        : isPrivileged;
       if (
-        !isPrivileged &&
+        !canOverrideLocks &&
         !this.isEditableMonth(new Date(createEmployeeAttendanceDto.workingDate))
       ) {
         throw new BadRequestException('Attendance for this month is locked.');
@@ -193,7 +204,7 @@ export class EmployeeAttendanceService {
         createEmployeeAttendanceDto.employeeId &&
         createEmployeeAttendanceDto.workingDate &&
         !this.canBypassLocked(
-          isPrivileged,
+          canOverrideLocks,
           actorId,
           createEmployeeAttendanceDto.employeeId,
         )
@@ -294,12 +305,8 @@ export class EmployeeAttendanceService {
           `[ATTENDANCE_CREATE] Incoming sourceRequestId: ${createEmployeeAttendanceDto.sourceRequestId}`,
         );
 
-        // GUARD: Protect Approved Leaves for non-privileged users
-        if (
-          !isPrivileged &&
-          existingRecord.sourceRequestId &&
-          !createEmployeeAttendanceDto.sourceRequestId
-        ) {
+        // GUARD: Protect approved leave / WFH / client-visit days unless this actor may edit them
+        if (!canOverrideLocks && existingRecord.sourceRequestId) {
           this.logger.warn(
             `[ATTENDANCE_RESTRICTION] Blocking manual update for record ${existingRecord.id} because it is linked to Leave Request ${existingRecord.sourceRequestId}`,
           );
@@ -777,6 +784,7 @@ export class EmployeeAttendanceService {
     attendanceDtos: EmployeeAttendanceDto[],
     isPrivileged: boolean = false,
     actorId?: string,
+    actor?: any,
   ): Promise<EmployeeAttendance[]> {
     this.logger.log(
       `Starting bulk attendance process for ${attendanceDtos.length} items`,
@@ -788,10 +796,10 @@ export class EmployeeAttendanceService {
           let record;
           if (dto.id) {
             // Update existing
-            record = await this.update(dto.id, dto, isPrivileged, actorId);
+            record = await this.update(dto.id, dto, isPrivileged, actorId, actor);
           } else {
             // Create new
-            record = await this.create(dto, isPrivileged, actorId);
+            record = await this.create(dto, isPrivileged, actorId, actor);
           }
 
           if (record) {
@@ -1083,9 +1091,13 @@ export class EmployeeAttendanceService {
     updateDto: Partial<EmployeeAttendanceDto>,
     isPrivileged: boolean = false,
     actorId?: string,
+    actor?: any,
   ): Promise<EmployeeAttendance | null> {
     try {
       const attendance = await this.findOne(id);
+      const canOverrideLocks = actor
+        ? await this.canOverrideLockedTimesheet(actor, attendance.employeeId)
+        : isPrivileged;
 
       this.logger.log(`[ATTENDANCE_UPDATE] ===== START UPDATE =====`);
       this.logger.log(
@@ -1099,7 +1111,7 @@ export class EmployeeAttendanceService {
       );
 
       if (
-        !isPrivileged &&
+        !canOverrideLocks &&
         !this.isEditableMonth(new Date(attendance.workingDate))
       ) {
         throw new BadRequestException('Attendance for this month is locked.');
@@ -1152,7 +1164,7 @@ export class EmployeeAttendanceService {
       }
 
       if (
-        !this.canBypassLocked(isPrivileged, actorId, attendance.employeeId)
+        !this.canBypassLocked(canOverrideLocks, actorId, attendance.employeeId)
       ) {
         await this.attendenceEditRequestService.assertCanEditLockedDay(
           attendance.employeeId,
@@ -1204,12 +1216,8 @@ export class EmployeeAttendanceService {
           AttendanceStatus.HALF_DAY.toLowerCase();
       const isLocked = !!attendance.sourceRequestId && isHalfDayStatus;
 
-      // GUARD: Protect Approved Leaves for non-privileged users
-      if (
-        !isPrivileged &&
-        attendance.sourceRequestId &&
-        !(updateDto as any).sourceRequestId
-      ) {
+      // GUARD: Protect approved leave / WFH / client-visit days unless this actor may edit them
+      if (!canOverrideLocks && attendance.sourceRequestId) {
         this.logger.warn(
           `[ATTENDANCE_RESTRICTION] Blocking manual single-record update for record ${attendance.id} because it is linked to Leave Request ${attendance.sourceRequestId} (Locked State: ${isLocked})`,
         );
@@ -1899,6 +1907,63 @@ export class EmployeeAttendanceService {
     _employeeId?: string,
   ): boolean {
     return isPrivileged;
+  }
+
+  /**
+   * Admin, CEO, and General Manager can edit locked days and approved-leave days.
+   * A manager can do that only for an employee mapped under them, never for their own timesheet.
+   */
+  async canOverrideLockedTimesheet(
+    actor: any,
+    targetEmployeeId?: string | null,
+  ): Promise<boolean> {
+    if (!actor) return false;
+    if (hasAdminAccess(actor)) return true;
+
+    const roleUpper = String(actor.role || '').toUpperCase();
+    const isManager =
+      actor.userType === UserType.MANAGER ||
+      actor.userType === UserType.TEAMLEAD ||
+      roleUpper.includes('MNG') ||
+      roleUpper.includes(UserType.MANAGER) ||
+      roleUpper.includes('TEAM LEAD');
+    if (!isManager || !targetEmployeeId) return false;
+
+    const ownIds = new Set<string>();
+    if (actor.loginId) ownIds.add(String(actor.loginId));
+    if (actor.employeeId) ownIds.add(String(actor.employeeId));
+    const managerName = actor.aliasLoginName || actor.fullName;
+    const ownWhere: any[] = [];
+    if (actor.loginId) {
+      ownWhere.push(
+        { employeeId: actor.loginId },
+        { internId: actor.loginId },
+      );
+    }
+    if (managerName) ownWhere.push({ fullName: managerName });
+    if (ownWhere.length > 0) {
+      const rows = await this.employeeDetailsRepository.find({
+        where: ownWhere,
+        select: ['employeeId', 'internId'],
+      });
+      rows.forEach((row) => {
+        if (row.employeeId) ownIds.add(row.employeeId);
+        if (row.internId) ownIds.add(row.internId);
+      });
+    }
+    if (ownIds.has(String(targetEmployeeId))) return false;
+
+    const managerId = actor.loginId ? String(actor.loginId) : '';
+    const mapping = await this.managerMappingRepository
+      .createQueryBuilder('mm')
+      .where('mm.employeeId = :employeeId', { employeeId: targetEmployeeId })
+      .andWhere('mm.status = :status', { status: ManagerMappingStatus.ACTIVE })
+      .andWhere(
+        '(mm.managerId = :managerId OR mm.managerName = :managerName OR mm.managerName = :managerId)',
+        { managerId, managerName: managerName || '' },
+      )
+      .getOne();
+    return !!mapping;
   }
 
   private isEditableMonth(workingDate: Date): boolean {
