@@ -69,7 +69,7 @@ export class QuarterlyReview extends BaseEntity {
       },
     },
   })
-  quarter!: any; // 'Q1'..'Q4' for quarterly; JSON { Q1, Q2, Q3, Q4 } for yearly
+  quarter!: any; // 'Q1'..'Q4' for quarterly; ["Q1","Q2","Q3","Q4"] for yearly
 
   @Column({
     type: 'enum',

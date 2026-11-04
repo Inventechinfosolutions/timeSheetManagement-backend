@@ -50,7 +50,7 @@ export class CreateQuarterlyReviewDto {
   @ApiPropertyOptional({
     enum: ReviewPeriod,
     example: ReviewPeriod.QUARTERLY,
-    description: 'QUARTERLY creates one quarter. YEARLY stores { Q1, Q2, Q3, Q4 } JSON in the quarter column.',
+    description: 'QUARTERLY creates one quarter. YEARLY stores ["Q1","Q2","Q3","Q4"] once in the quarter column.',
   })
   @IsOptional()
   @IsEnum(ReviewPeriod)
@@ -59,7 +59,7 @@ export class CreateQuarterlyReviewDto {
   @ApiPropertyOptional({
     enum: QuaterlyEnum,
     example: QuaterlyEnum.Q1,
-    description: 'Quarter (Q1, Q2, Q3, Q4). Required when reviewPeriod is QUARTERLY; omitted when reviewPeriod is YEARLY ({ Q1, Q2, Q3, Q4 } JSON is automatically stored in quarter column).',
+    description: 'Quarter (Q1, Q2, Q3, Q4). Required when reviewPeriod is QUARTERLY; omitted when reviewPeriod is YEARLY (["Q1","Q2","Q3","Q4"] is stored once in quarter column).',
   })
   @ValidateIf((dto) => dto.reviewPeriod !== ReviewPeriod.YEARLY)
   @IsNotEmpty()

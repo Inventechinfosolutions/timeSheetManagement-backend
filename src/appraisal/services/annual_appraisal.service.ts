@@ -22,6 +22,7 @@ import {
 import {
   QuarterlyReviewStatus,
   QuaterlyEnum,
+  ReviewPeriod,
 } from '../enums/quarterly_review.enums';
 
 @Injectable()
@@ -107,9 +108,39 @@ export class AnnualAppraisalService {
     return loginId;
   }
 
+  private toRatingNumber(raw: unknown): number | null {
+    if (raw == null || raw === '') return null;
+    const num = Number(raw);
+    return Number.isFinite(num) && !Number.isNaN(num) ? num : null;
+  }
+
+  private isYearlyReviewRow(review: {
+    reviewPeriod?: string | null;
+    quarter?: unknown;
+  }): boolean {
+    if (review.reviewPeriod === ReviewPeriod.YEARLY) return true;
+    if (Array.isArray(review.quarter)) return true;
+    if (review.quarter != null && typeof review.quarter === 'object') return true;
+    const quarter = String(review.quarter || '').trim().toUpperCase();
+    return (
+      quarter === 'YEARLY' ||
+      quarter === String(QuaterlyEnum.YEARLY).toUpperCase() ||
+      quarter.includes('YEARLY') ||
+      (quarter.includes('Q1') && quarter.includes('Q2') && quarter.includes('Q3') && quarter.includes('Q4'))
+    );
+  }
+
+  private isCompletedReviewStatus(status: string | null | undefined): boolean {
+    return (
+      status === QuarterlyReviewStatus.REVIEWED ||
+      status === QuarterlyReviewStatus.COMPLETED
+    );
+  }
+
   /**
-   * Sync and calculate the annual rating for an employee in a financial year
-   * Aggregates Q1, Q2, Q3, Q4 scores and computes the overall annual average.
+   * Sync and calculate the annual rating for an employee in a financial year.
+   * Mode A (YEARLY): one yearly review → annualAverageRating = finalRating, mirror into Q1–Q4.
+   * Mode B (QUARTERLY): average only when all 4 quarter ratings exist.
    */
   async syncEmployeeAnnualRating(
     employeeId: string,
@@ -133,37 +164,66 @@ export class AnnualAppraisalService {
       let q4Rating: number | null = null;
       let q4Status: string | null = null;
 
+      let isYearlyReview = false;
+      let yearlyFinalRating: number | null = null;
+      let yearlyStatus: string | null = null;
       const completedRatings: number[] = [];
 
       for (const r of reviews) {
-        const rawRating = r.finalRating ?? r.overallPerformanceRating;
-        const rating = rawRating == null || Number.isNaN(Number(rawRating)) ? null : Number(rawRating);
-        const isReviewed =
-          r.status === QuarterlyReviewStatus.REVIEWED ||
-          r.status === QuarterlyReviewStatus.COMPLETED;
-        const quarter = typeof r.quarter === 'string' ? r.quarter.toUpperCase() : '';
+        const rating = this.toRatingNumber(r.finalRating ?? r.overallPerformanceRating);
+        const isReviewed = this.isCompletedReviewStatus(r.status);
 
-        // Check if quarterly snapshots are in yearlyQuarterReviews or quarter
-        let quarterObj = (r as any).yearlyQuarterReviews || ((typeof r.quarter === 'object' && r.quarter !== null) ? r.quarter : null);
-        if (typeof quarterObj === 'string' && (quarterObj.startsWith('{') || quarterObj.startsWith('['))) {
-          try { quarterObj = JSON.parse(quarterObj); } catch { /* ignore */ }
-        }
-        if (quarterObj && typeof quarterObj === 'object') {
-          for (const slot of ['Q1', 'Q2', 'Q3', 'Q4'] as const) {
-            const snap = (quarterObj as any)[slot];
-            if (!snap || typeof snap !== 'object') continue;
-            const snapRating = snap.finalRating ?? snap.overallPerformanceRating;
-            const snapStatus = snap.status;
-            const num = snapRating == null || Number.isNaN(Number(snapRating)) ? null : Number(snapRating);
-            const isSnapReviewed = snapStatus === QuarterlyReviewStatus.REVIEWED || snapStatus === QuarterlyReviewStatus.COMPLETED;
-            if (slot === 'Q1') { q1Rating = num; q1Status = snapStatus; }
-            if (slot === 'Q2') { q2Rating = num; q2Status = snapStatus; }
-            if (slot === 'Q3') { q3Rating = num; q3Status = snapStatus; }
-            if (slot === 'Q4') { q4Rating = num; q4Status = snapStatus; }
-            if (isSnapReviewed && num !== null) completedRatings.push(num);
+        if (this.isYearlyReviewRow(r)) {
+          isYearlyReview = true;
+          yearlyStatus = r.status || yearlyStatus;
+          if (rating !== null) {
+            yearlyFinalRating = rating;
           }
+
+          // Prefer structured yearlyQuarterReviews snapshots when present
+          let snapshots = (r as { yearlyQuarterReviews?: unknown }).yearlyQuarterReviews;
+          if (typeof snapshots === 'string' && (snapshots.startsWith('{') || snapshots.startsWith('['))) {
+            try {
+              snapshots = JSON.parse(snapshots);
+            } catch {
+              snapshots = null;
+            }
+          }
+          if (snapshots && typeof snapshots === 'object') {
+            for (const slot of ['Q1', 'Q2', 'Q3', 'Q4'] as const) {
+              const snap = (snapshots as Record<string, unknown>)[slot];
+              if (!snap || typeof snap !== 'object') continue;
+              const snapObj = snap as {
+                finalRating?: unknown;
+                overallPerformanceRating?: unknown;
+                status?: string;
+              };
+              const num = this.toRatingNumber(
+                snapObj.finalRating ?? snapObj.overallPerformanceRating,
+              );
+              const snapStatus = snapObj.status || null;
+              if (slot === 'Q1') {
+                q1Rating = num ?? q1Rating;
+                q1Status = snapStatus || q1Status;
+              }
+              if (slot === 'Q2') {
+                q2Rating = num ?? q2Rating;
+                q2Status = snapStatus || q2Status;
+              }
+              if (slot === 'Q3') {
+                q3Rating = num ?? q3Rating;
+                q3Status = snapStatus || q3Status;
+              }
+              if (slot === 'Q4') {
+                q4Rating = num ?? q4Rating;
+                q4Status = snapStatus || q4Status;
+              }
+            }
+          }
+          continue;
         }
 
+        const quarter = typeof r.quarter === 'string' ? r.quarter.toUpperCase() : '';
         if (quarter === QuaterlyEnum.Q1) {
           q1Rating = rating;
           q1Status = r.status;
@@ -183,13 +243,36 @@ export class AnnualAppraisalService {
         }
       }
 
+      // Mode A: one yearly appraisal — mirror final rating/status into Q1–Q4 for UI pills
+      if (isYearlyReview) {
+        q1Status = q1Status || yearlyStatus;
+        q2Status = q2Status || yearlyStatus;
+        q3Status = q3Status || yearlyStatus;
+        q4Status = q4Status || yearlyStatus;
+        if (yearlyFinalRating !== null) {
+          q1Rating = yearlyFinalRating;
+          q2Rating = yearlyFinalRating;
+          q3Rating = yearlyFinalRating;
+          q4Rating = yearlyFinalRating;
+        }
+      }
+
       const quarterRatings = [q1Rating, q2Rating, q3Rating, q4Rating].filter(
         (rating): rating is number => rating !== null,
       );
-      const annualAverageRating =
-        quarterRatings.length === 4
+      const annualAverageRating = isYearlyReview
+        ? yearlyFinalRating
+        : quarterRatings.length === 4
           ? Number((quarterRatings.reduce((sum, rating) => sum + rating, 0) / 4).toFixed(2))
           : null;
+
+      const completedQuartersCount = isYearlyReview
+        ? this.isCompletedReviewStatus(yearlyStatus) && yearlyFinalRating !== null
+          ? 4
+          : [q1Status, q2Status, q3Status, q4Status].filter((status) =>
+              this.isCompletedReviewStatus(status),
+            ).length
+        : completedRatings.length;
 
       // 4. Fetch employee & manager details
       const emp = await this.employeeRepo.findOne({ where: { employeeId } });
@@ -252,7 +335,7 @@ export class AnnualAppraisalService {
           q4Rating,
           q4Status,
           annualAverageRating,
-          completedRatings.length,
+          completedQuartersCount,
         ],
       );
 

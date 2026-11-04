@@ -28,10 +28,11 @@ import {
 import { EmployeePerformanceStatus } from '../enums/employee_performance.enums';
 import { YearlyQuarterReviews } from '../interfaces/yearly_quarter_reviews.interface';
 import { UserType } from '../../users/enums/user-type.enum';
-import { isCeoUser } from '../../users/utils/admin-access';
+import { isCeoOrGmUser } from '../../users/utils/admin-access';
 import { QuarterlyReviewStatus, ReviewPeriod, QuaterlyEnum } from '../enums/quarterly_review.enums';
 import { AppraisalNoticeService } from './appraisal_notice.service';
 import { QuarterlyReviewService } from './quarterly_review.service';
+import { AnnualAppraisalService } from './annual_appraisal.service';
 import { DocumentUploaderService } from '../../common/document-uploader/services/document-uploader.service';
 import { DocumentMetaInfo, EntityType, ReferenceType } from '../../common/document-uploader/models/documentmetainfo.model';
 import { BufferedFile } from '../../common/s3-client/file.model';
@@ -88,11 +89,15 @@ export interface EnrichedEmployeePerformance extends EmployeePerformance {
   yearlyQuarterReviews?: YearlyQuarterReviews | null;
 }
 
-const YEARLY_QUARTER_VALUE = { Q1: 'Q1', Q2: 'Q2', Q3: 'Q3', Q4: 'Q4' } as const;
+/** Yearly quarter column — each quarter listed once: ["Q1","Q2","Q3","Q4"]. */
+const YEARLY_QUARTER_VALUE = ['Q1', 'Q2', 'Q3', 'Q4'] as const;
 
 function isYearlyQuarterValue(quarter: unknown): boolean {
   if (quarter == null) return false;
-  if (typeof quarter === 'object') return true;
+  if (Array.isArray(quarter)) {
+    return quarter.some((item) => String(item).toUpperCase().includes('Q'));
+  }
+  if (typeof quarter === 'object') return true; // legacy { Q1: "Q1", ... }
   const value = String(quarter).trim();
   const upper = value.toUpperCase();
   if (
@@ -107,7 +112,9 @@ function isYearlyQuarterValue(quarter: unknown): boolean {
     upper === 'YEARLY' ||
     upper === String(QuaterlyEnum.YEARLY).toUpperCase() ||
     upper.includes('YEARLY') ||
-    (value.startsWith('{') && value.includes('Q1'))
+    (upper.includes('Q1') && upper.includes('Q2') && upper.includes('Q3') && upper.includes('Q4')) ||
+    (value.startsWith('{') && value.includes('Q1')) ||
+    (value.startsWith('[') && value.includes('Q1'))
   );
 }
 
@@ -127,6 +134,7 @@ export class EmployeePerformanceService {
     private readonly noticeService: AppraisalNoticeService,
     private readonly documentUploaderService: DocumentUploaderService,
     private readonly quarterlyReviewService: QuarterlyReviewService,
+    private readonly annualService: AnnualAppraisalService,
   ) { }
 
   /**
@@ -197,7 +205,7 @@ export class EmployeePerformanceService {
 
         applyPerformanceSteps(record, { ...dto });
         if (isYearly) {
-          record.quarter = { ...YEARLY_QUARTER_VALUE };
+          record.quarter = [...YEARLY_QUARTER_VALUE];
         }
         record.status = nextStatus;
         record.lastModifiedDate = new Date();
@@ -205,7 +213,7 @@ export class EmployeePerformanceService {
       } else {
         record = this.performanceRepository.create({
           employeeId: dto.employeeId,
-          quarter: isYearly ? { ...YEARLY_QUARTER_VALUE } : dto.quarter,
+          quarter: isYearly ? [...YEARLY_QUARTER_VALUE] : dto.quarter,
           financialYear: dto.financialYear,
           status: nextStatus,
           lastModifiedDate: new Date(),
@@ -223,7 +231,7 @@ export class EmployeePerformanceService {
       );
       if (reviewForDraft) {
         if (isYearly) {
-          reviewForDraft.quarter = { ...YEARLY_QUARTER_VALUE };
+          reviewForDraft.quarter = [...YEARLY_QUARTER_VALUE];
           reviewForDraft.reviewPeriod = ReviewPeriod.YEARLY;
         }
         if (
@@ -233,13 +241,6 @@ export class EmployeePerformanceService {
           reviewForDraft.status = QuarterlyReviewStatus.ASSIGNED;
         }
         await this.reviewRepository.save(reviewForDraft);
-        if (isYearly) {
-          await this.removeDuplicateYearlyReviews(
-            reviewForDraft.employeeId,
-            reviewForDraft.financialYear,
-            reviewForDraft.id,
-          );
-        }
       }
 
       const draftAuditEntry = createAuditEntry({
@@ -368,7 +369,7 @@ export class EmployeePerformanceService {
 
       const submittedAt = new Date();
       if (isYearly) {
-        record.quarter = { ...YEARLY_QUARTER_VALUE };
+        record.quarter = [...YEARLY_QUARTER_VALUE];
       }
       record.status = resubmitting
         ? EmployeePerformanceStatus.RE_SUBMITTED
@@ -410,7 +411,7 @@ export class EmployeePerformanceService {
       const reviewStatus = QuarterlyReviewStatus.PERFORMANCE_RECEIVED;
       if (review) {
         if (isYearly) {
-          review.quarter = { ...YEARLY_QUARTER_VALUE };
+          review.quarter = [...YEARLY_QUARTER_VALUE];
           review.reviewPeriod = ReviewPeriod.YEARLY;
         }
         review.submittedDate = submittedAt;
@@ -418,13 +419,6 @@ export class EmployeePerformanceService {
         review.status = reviewStatus;
         review.auditHistory = appendAuditEntry(review.auditHistory, submitEntry);
         await this.reviewRepository.save(review);
-        if (isYearly) {
-          await this.removeDuplicateYearlyReviews(
-            review.employeeId,
-            review.financialYear,
-            review.id,
-          );
-        }
       } else {
         // Auto-create QuarterlyReview master only if manager never assigned one
         const emp = await this.employeeDetailsRepository.findOne({
@@ -440,7 +434,7 @@ export class EmployeePerformanceService {
           department: emp?.department || '',
           designation: emp?.designation || '',
           financialYear: dto.financialYear,
-          quarter: isYearly ? { ...YEARLY_QUARTER_VALUE } : dto.quarter,
+          quarter: isYearly ? [...YEARLY_QUARTER_VALUE] : dto.quarter,
           reviewPeriod: isYearly ? ReviewPeriod.YEARLY : ReviewPeriod.QUARTERLY,
           status: QuarterlyReviewStatus.PERFORMANCE_RECEIVED,
           submittedDate: submittedAt,
@@ -464,6 +458,7 @@ export class EmployeePerformanceService {
       await this.noticeService.notifyEmployeeOfSubmission(notice);
       await this.noticeService.notifyManagerOfSubmission(notice);
       await this.quarterlyReviewService.propagateYearlyPerformance(saved);
+      await this.annualService.syncEmployeeAnnualRating(saved.employeeId, saved.financialYear);
 
       const enriched = await this.enrichPerformancesWithEmployeeDetails([saved]);
       return enriched[0];
@@ -516,14 +511,14 @@ export class EmployeePerformanceService {
         if (!record) {
           record = this.performanceRepository.create({
             employeeId: review.employeeId,
-            quarter: isYearlyReview ? { ...YEARLY_QUARTER_VALUE } : review.quarter,
+            quarter: isYearlyReview ? [...YEARLY_QUARTER_VALUE] : review.quarter,
             financialYear: review.financialYear,
             status: EmployeePerformanceStatus.LOCKED,
           });
           record = await this.performanceRepository.save(record);
           review.performanceId = record.id;
           if (isYearlyReview) {
-            review.quarter = { ...YEARLY_QUARTER_VALUE };
+            review.quarter = [...YEARLY_QUARTER_VALUE];
             review.reviewPeriod = ReviewPeriod.YEARLY;
           }
           await this.reviewRepository.save(review);
@@ -685,12 +680,14 @@ export class EmployeePerformanceService {
       const record = await this.performanceRepository.findOne({
         where: { id: targetId },
       });
-      if (record && isCeoUser(user)) {
+      if (record && isCeoOrGmUser(user)) {
         const employee = await this.employeeDetailsRepository.findOne({
           where: { employeeId: record.employeeId },
         });
         if (!employee || String(employee.role || '').toUpperCase() !== UserType.MANAGER) {
-          throw new ForbiddenException('CEO can assign and review appraisals only for managers');
+          throw new ForbiddenException(
+            'CEO / General Manager can assign and review appraisals only for managers',
+          );
         }
       }
 
@@ -1607,8 +1604,11 @@ export class EmployeePerformanceService {
         ...overlayPerformanceView(record),
         assignedBy: review
           ? nameById.get(review.assignerId) ||
-            (review.assignerId?.toLowerCase() === 'admin' ? 'Admin' : null) ||
-            (review.assignedBy?.toLowerCase() === 'admin' ? 'Admin' : null) ||
+            (review.managerName &&
+            String(review.managerName).toLowerCase() !== 'admin' &&
+            review.managerName !== 'Reporting Manager'
+              ? review.managerName
+              : null) ||
             review.managerName ||
             review.assignerId ||
             null
