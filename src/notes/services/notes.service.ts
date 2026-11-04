@@ -456,7 +456,7 @@ export class NotesService {
         throw new NotFoundException(`Note with ID ${id} not found`);
       }
 
-      await this.attachStoredFiles([note]);
+      await this.populateAttachments([note]);
 
       if (user) {
         const { userId, employeeId } = this.extractUserInfo(user);
@@ -542,6 +542,11 @@ export class NotesService {
       note.updatedBy = createdBy;
 
       await this.noteRepo.save(note);
+
+      if (updateDto.attachmentKeys && updateDto.attachmentKeys.length > 0) {
+        await this.linkAttachmentKeys(id, updateDto.attachmentKeys);
+      }
+
       return await this.findOne(id, user);
     } catch (error) {
       if (error instanceof NotFoundException || error instanceof ForbiddenException) throw error;
@@ -850,6 +855,9 @@ export class NotesService {
       } catch (err: any) {
         this.logger.error(
           `Failed to direct upload dropped file ${file.originalname}: ${err.message}`,
+        );
+        throw new BadRequestException(
+          `Failed to upload file ${file.originalname}: ${err.message}`,
         );
       }
     }
@@ -2057,6 +2065,9 @@ if (!doclingUrl) {
       } catch (err: any) {
         this.logger.error(
           `Failed to upload file ${file.originalname} to object_store: ${err.message}`,
+        );
+        throw new BadRequestException(
+          `Failed to upload file ${file.originalname}: ${err.message}`,
         );
       }
     }

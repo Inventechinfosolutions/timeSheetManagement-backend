@@ -144,6 +144,7 @@ export class S3ClientService implements OnModuleInit {
       this.logger.log(`File uploaded successfully with S3 Key: ${savedDoc.s3Key}`);
  
       return {
+        id: savedDoc.id,
         url: unqurl,
         fileName: file.originalname.replace(/[^a-zA-Z0-9.]/g, ''),
         key: savedDoc.s3Key,
