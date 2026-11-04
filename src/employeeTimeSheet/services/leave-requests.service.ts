@@ -65,6 +65,7 @@ import * as ExcelJS from 'exceljs';
 import { LeaveManager } from '../entities/leave-manager.entity';
 import { MasterDepartment } from '../../master/models/master-department.entity';
 import { LeaveCalculationType } from '../../master/enums/leave-calculation-type.enum';
+import { LeaveApprovalType } from '../../master/enums/leave-approval-type.enum';
 
 /** Admin-entered leaves taken for a MANUAL department; system usage after `asOfDate` is added on top. */
 export interface ManualLeaveOverride {
@@ -877,12 +878,6 @@ export class LeaveRequestsService {
           const {
             ManagerMapping,
           } = require('../../managerMapping/entities/managerMapping.entity');
-          query.innerJoin(
-            ManagerMapping,
-            'mm',
-            'mm.employeeId = lr.employeeId AND mm.status = :mmStatus',
-            { mmStatus: ManagerMappingStatus.ACTIVE },
-          );
           const matchers: string[] = [];
           const params: Record<string, string> = {};
           if (managerName) {
@@ -893,15 +888,40 @@ export class LeaveRequestsService {
             matchers.push('mm.managerName LIKE :managerIdQuery');
             params.managerIdQuery = `%${managerId}%`;
           }
-          if (matchers.length > 0) {
-            query.andWhere(`(${matchers.join(' OR ')})`, params);
-          }
 
-          // Manager should NOT approve their own leave/client/WFH requests (handled by GM)
-          if (excludeIds.size > 0) {
-            query.andWhere('lr.employeeId NOT IN (:...excludeManagerIds)', {
-              excludeManagerIds: Array.from(excludeIds),
-            });
+          const ownIds = Array.from(excludeIds);
+          const selfApprove = await this.isSelfApprovalAllowed(ownIds);
+
+          if (selfApprove && ownIds.length > 0) {
+            // AUTO department: team requests plus the manager's own requests
+            const matchSql = matchers.length > 0 ? ` AND (${matchers.join(' OR ')})` : '';
+            query.leftJoin(
+              ManagerMapping,
+              'mm',
+              `mm.employeeId = lr.employeeId AND mm.status = :mmStatus${matchSql}`,
+              { mmStatus: ManagerMappingStatus.ACTIVE, ...params },
+            );
+            query.andWhere(
+              '(mm.employeeId IS NOT NULL OR lr.employeeId IN (:...ownManagerIds))',
+              { ownManagerIds: ownIds },
+            );
+          } else {
+            query.innerJoin(
+              ManagerMapping,
+              'mm',
+              'mm.employeeId = lr.employeeId AND mm.status = :mmStatus',
+              { mmStatus: ManagerMappingStatus.ACTIVE },
+            );
+            if (matchers.length > 0) {
+              query.andWhere(`(${matchers.join(' OR ')})`, params);
+            }
+
+            // MANUAL department: manager's own requests are reviewed by GM only
+            if (ownIds.length > 0) {
+              query.andWhere('lr.employeeId NOT IN (:...excludeManagerIds)', {
+                excludeManagerIds: ownIds,
+              });
+            }
           }
         }
       }
@@ -2482,9 +2502,37 @@ export class LeaveRequestsService {
     }
   }
 
+  /** True when the department of any of these employee ids allows managers to approve their own requests. */
+  private async isSelfApprovalAllowed(employeeIds: string[]): Promise<boolean> {
+    if (!employeeIds.length) return false;
+    try {
+      const employees = await this.employeeDetailsRepository.find({
+        where: [{ employeeId: In(employeeIds) }, { internId: In(employeeIds) }],
+        select: ['employeeId', 'department'],
+      });
+      const departments = [...new Set(employees.map((e) => e.department).filter(Boolean))];
+      if (!departments.length) return false;
+      const count = await this.masterDepartmentRepository.count({
+        where: { departmentName: In(departments as string[]), leaveApproval: LeaveApprovalType.AUTO },
+      });
+      return count > 0;
+    } catch (error) {
+      this.logger.warn(`[SELF_APPROVAL] Could not resolve leave approval setting: ${error.message}`);
+      return false;
+    }
+  }
+
+  /** Whether the logged-in manager's department lets him approve his own requests. */
+  async canManagerSelfApprove(user: any): Promise<boolean> {
+    const managerId = user?.loginId || user?.employeeId;
+    if (!managerId) return false;
+    return this.isSelfApprovalAllowed([String(managerId)]);
+  }
+
   async assertManagerCannotReviewOwnRequests(user: any, requestIds: number[]): Promise<void> {
     const ids = requestIds.filter((id) => Number.isFinite(id));
     if (!ids.length) return;
+    if (await this.canManagerSelfApprove(user)) return;
     const managerId = user?.loginId || user?.employeeId;
     const managerName = user?.aliasLoginName || user?.fullName;
 
