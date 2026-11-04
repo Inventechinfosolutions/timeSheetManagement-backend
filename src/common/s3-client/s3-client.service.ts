@@ -124,20 +124,21 @@ export class S3ClientService implements OnModuleInit {
       this.logger.debug(`Document metadata updated with S3 Key: ${savedDoc.s3Key}`);
  
       this.logger.debug('Uploading file to S3');
+      // SDK adds the x-amz-meta- prefix — do not include it in these keys.
       await this.s3Client.send(
         new PutObjectCommand({
           Bucket: targetBucket,
           Key: savedDoc.s3Key,
           Body: file.buffer,
+          ContentType: file.mimetype,
           Metadata: {
-            'Content-Type': file.mimetype,
-            'x-amz-meta-filename': file.originalname.replace(/[^a-zA-Z0-9.]/g, ''),
-            'x-amz-meta-mimetype': file.mimetype,
-            'x-amz-meta-referenceid': String(fileDetails.refId),
-            'x-amz-meta-referencetype': fileDetails.refType,
-            'x-amz-meta-entityid': String(fileDetails.entityId),
-            'x-amz-meta-entitytype': fileDetails.entityType,
-            'x-amz-meta-id': savedDoc.id,
+            filename: file.originalname.replace(/[^a-zA-Z0-9.]/g, ''),
+            mimetype: file.mimetype,
+            referenceid: String(fileDetails.refId),
+            referencetype: fileDetails.refType,
+            entityid: String(fileDetails.entityId),
+            entitytype: fileDetails.entityType,
+            id: savedDoc.id,
           },
         }),
       );
@@ -213,20 +214,29 @@ export class S3ClientService implements OnModuleInit {
           Key: objetName,
         }),
       );
- 
-      if (!stat.Metadata) {
-        throw new HttpException('File not found in storage', HttpStatus.NOT_FOUND);
-      }
- 
+
+      // HeadObject success means the object exists. Some S3/MinIO setups return
+      // empty/undefined Metadata even for valid objects — that must NOT be a 404.
+      const meta = stat.Metadata || {};
+      const contentType =
+        meta['content-type'] ||
+        meta['mimetype'] ||
+        meta['x-amz-meta-mimetype'] ||
+        stat.ContentType ||
+        'application/octet-stream';
       const metaData = {
-        'Content-Type': stat.Metadata['content-type'] || 'application/octet-stream',
-        'filename': stat.Metadata['x-amz-meta-filename'] || 'unknown',
-        'mimetype': stat.Metadata['x-amz-meta-mimetype'] || 'application/octet-stream',
-        'referenceId': stat.Metadata['x-amz-meta-referenceid'] || '',
-        'referenceType': stat.Metadata['x-amz-meta-referencetype'] || '',
-        'entityId': stat.Metadata['x-amz-meta-entityid'] || '',
-        'entityType': stat.Metadata['x-amz-meta-entitytype'] || '',
-        'id': stat.Metadata['x-amz-meta-id'] || '',
+        'Content-Type': contentType,
+        filename:
+          meta['filename'] ||
+          meta['x-amz-meta-filename'] ||
+          objetName ||
+          'unknown',
+        mimetype: contentType,
+        referenceId: meta['referenceid'] || meta['x-amz-meta-referenceid'] || '',
+        referenceType: meta['referencetype'] || meta['x-amz-meta-referencetype'] || '',
+        entityId: meta['entityid'] || meta['x-amz-meta-entityid'] || '',
+        entityType: meta['entitytype'] || meta['x-amz-meta-entitytype'] || '',
+        id: meta['id'] || meta['x-amz-meta-id'] || objetName || '',
       };
  
       return metaData;
