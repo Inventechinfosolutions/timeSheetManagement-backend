@@ -6,12 +6,16 @@ import {
   UpdateDateColumn,
   ManyToOne,
   JoinColumn,
+  Index,
 } from 'typeorm';
 import { Note } from '../../notes/entities/note.entity';
 import { NotePermission } from '../../notes/enums/note-permission.enum';
 import { InboxFolder } from '../enums/note-permission.enum';
 
 @Entity('inbox')
+@Index('idx_inbox_employee', ['employeeId'])
+@Index('idx_inbox_note', ['notesId'])
+@Index('idx_inbox_to_mail', ['toMail'])
 export class Inbox {
   @PrimaryGeneratedColumn({ name: 'inbox_id', type: 'bigint' })
   inboxId: number;

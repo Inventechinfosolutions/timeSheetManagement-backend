@@ -33,6 +33,10 @@ import { AdminDashboardService } from './services/adminDashboard.service';
 import { AttendenceEditRequest } from './entities/attendence-edit-request.entity';
 import { AttendenceEditRequestController } from './controllers/attendence-edit-request.controller';
 import { AttendenceEditRequestService } from './services/attendence-edit-request.service';
+import { LeaveManager } from './entities/leave-manager.entity';
+import { LeaveManagerController } from './controllers/leave-manager.controller';
+import { LeaveManagerService } from './services/leave-manager.service';
+import { MasterDepartment } from '../master/models/master-department.entity';
 
 @Module({
   imports: [
@@ -48,6 +52,8 @@ import { AttendenceEditRequestService } from './services/attendence-edit-request
       ManagerMapping,
       MasterHolidays,
       Notification,
+      LeaveManager,
+      MasterDepartment,
     ]),
     UsersModule,
     AuthModule,
@@ -65,6 +71,7 @@ import { AttendenceEditRequestService } from './services/attendence-edit-request
     AdminDashboardController,
     ManagerDashboardController,
     AttendenceEditRequestController,
+    LeaveManagerController,
   ],
   providers: [
     EmployeeAttendanceService, 
@@ -75,6 +82,7 @@ import { AttendenceEditRequestService } from './services/attendence-edit-request
     AttendenceEditRequestService,
     FileService,
     AdminDashboardService,
+    LeaveManagerService,
   ],
   exports: [EmployeeDetailsService, EmployeeLinkService, AttendenceEditRequestService],
 })
