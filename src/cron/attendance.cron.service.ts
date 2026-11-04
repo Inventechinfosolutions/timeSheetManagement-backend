@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+﻿import { Injectable, Logger } from '@nestjs/common';
 import dayjs from 'dayjs';
 import { Cron } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -564,5 +564,26 @@ export class AttendanceCronService {
   async weekendReminder() {
     this.logger.debug('Running Weekend Reminder...');
     await this.notificationsService.sendWeekendReminder();
+  }
+
+
+  /**
+   * Daily 10:00 AM IST (all 365 days) — Birthday Wishes
+   * Checks dateOfBirth in employee_details for all active employees.
+   * Sends email + in-app notification to employees whose birthday is today.
+   * Deduplication handled via notifications DB table (same pattern as work anniversary).
+   */
+  @Cron('0 10 * * *', { timeZone: 'Asia/Kolkata' })
+  async dailyBirthdayCheck() {
+    this.logger.log('[BIRTHDAY] Running daily birthday check (10:00 AM IST)...');
+    try {
+      const result = await this.notificationsService.sendDailyBirthdayWishes();
+      this.logger.log(
+        `[BIRTHDAY] Done: ${result.sent} sent, ${result.skipped} skipped out of ${result.processed} eligible.`,
+      );
+      return result;
+    } catch (error) {
+      this.logger.error(`[BIRTHDAY] Error in dailyBirthdayCheck: ${error.message}`, error.stack);
+    }
   }
 }
