@@ -2,6 +2,7 @@ import { Entity, PrimaryGeneratedColumn, Column } from 'typeorm';
 import { BaseEntity } from '../../common/core/models/base.entity';
 import { LockType } from '../enums/lock-type.enum';
 import { LeaveCalculationType } from '../enums/leave-calculation-type.enum';
+import { LeaveApprovalType } from '../enums/leave-approval-type.enum';
 
 @Entity('master_department')
 export class MasterDepartment extends BaseEntity {
@@ -29,4 +30,12 @@ export class MasterDepartment extends BaseEntity {
     default: LeaveCalculationType.AUTO,
   })
   leaveCalculationType!: LeaveCalculationType;
+
+  @Column({
+    name: 'leave_approval',
+    type: 'enum',
+    enum: LeaveApprovalType,
+    default: LeaveApprovalType.MANUAL,
+  })
+  leaveApproval!: LeaveApprovalType;
 }

@@ -7,6 +7,7 @@ import { EmployeeDetails } from '../entities/employeeDetails.entity';
 import { LeaveRequest } from '../entities/leave-request.entity';
 import { MasterDepartment } from '../../master/models/master-department.entity';
 import { LeaveCalculationType } from '../../master/enums/leave-calculation-type.enum';
+import { LeaveApprovalType } from '../../master/enums/leave-approval-type.enum';
 import { UserStatus } from '../../users/enums/user-status.enum';
 import { LeaveRequestType } from '../enums/leave-request-type.enum';
 import { LeaveRequestStatus } from '../enums/leave-notification-status.enum';
@@ -67,6 +68,7 @@ export class LeaveManagerService {
         departmentName: d.departmentName,
         departmentCode: d.departmentCode,
         leaveCalculationType: d.leaveCalculationType || LeaveCalculationType.AUTO,
+        leaveApproval: d.leaveApproval || LeaveApprovalType.MANUAL,
         employeeCount: employeesByDept.get(key) || 0,
         manualEntriesCount: entriesByDept.get(key) || 0,
       };
@@ -85,6 +87,24 @@ export class LeaveManagerService {
     await this.departmentRepository.save(department);
     this.logger.log(`Department ${department.departmentName} leave calculation set to ${type} by ${actor || 'unknown'}`);
     return { id: department.id, departmentName: department.departmentName, leaveCalculationType: type };
+  }
+
+  async updateLeaveApproval(id: number, type: LeaveApprovalType, actor?: string) {
+    if (type !== LeaveApprovalType.AUTO && type !== LeaveApprovalType.MANUAL) {
+      throw new BadRequestException('leaveApproval must be AUTO or MANUAL');
+    }
+    const department = await this.departmentRepository.findOne({ where: { id } });
+    if (!department) throw new NotFoundException(`Department ${id} not found`);
+
+    department.leaveApproval = type;
+    department.updatedBy = actor || department.updatedBy;
+    await this.departmentRepository.save(department);
+    this.logger.log(`Department ${department.departmentName} manager leave approval set to ${type} by ${actor || 'unknown'}`);
+    return { id: department.id, departmentName: department.departmentName, leaveApproval: type };
+  }
+
+  async getSelfApproval(user: any) {
+    return { allowed: await this.leaveRequestsService.canManagerSelfApprove(user) };
   }
 
   async getEmployees(departmentName: string, year: number) {
