@@ -1,4 +1,4 @@
-import { Controller, Post, Get, Patch, Param, Logger } from '@nestjs/common';
+import { Controller, Post, Get, Patch, Param, Logger, Body, Query, BadRequestException } from '@nestjs/common';
 import { NotificationsService } from '../Services/notifications.service';
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
 
@@ -58,6 +58,101 @@ export class AttendanceNotificationController {
       return { message: 'Month-end 1PM manager reports dispatched' };
     } catch (error) {
       this.logger.error(`Error in monthEnd1PM: ${error.message}`, error.stack);
+      throw error;
+    }
+  }
+
+  // ─── Birthday Endpoints ─────────────────────────────────────────────────────
+
+  @Get('birthday/today')
+  @Post('birthday/today')
+  @ApiOperation({ summary: 'List all active employees having their birthday today and automatically send birthday wishes' })
+  async getTodayBirthdays() {
+    try {
+      this.logger.log('Fetching today birthdays and sending birthday wishes...');
+      const list = await this.notificationService.getTodayBirthdays();
+      
+      const sentResults: any[] = [];
+      for (const emp of list) {
+        try {
+          const res = await this.notificationService.sendBirthdayWish(emp);
+          sentResults.push(res);
+          if (res.emailSent) {
+            this.logger.log(`[BIRTHDAY] Wish sent successfully to ${emp.fullName} <${emp.email}>`);
+          } else {
+            this.logger.log(`[BIRTHDAY] Wish already sent to ${emp.fullName} <${emp.email}> today. Skipping resend.`);
+          }
+        } catch (err) {
+          this.logger.error(`[BIRTHDAY] Failed to send wish to ${emp.fullName}: ${err?.message}`);
+        }
+      }
+
+      const sentCount = sentResults.filter((r) => r.emailSent).length;
+      const skippedCount = sentResults.length - sentCount;
+
+      if (sentCount === 0) {
+        return {
+          message: 'birthday check completed',
+          processed: list.length,
+          sent: 0,
+          skipped: skippedCount,
+          recipients: [],
+        };
+      }
+
+      return {
+        success: true,
+        date: new Date().toISOString().split('T')[0],
+        count: list.length,
+        sentCount,
+        message: `Birthday wish sent successfully to ${sentResults.filter((r) => r.emailSent).map((r) => r.employeeName).join(', ')}`,
+        employees: list.map((e: any) => ({
+          id: e.id,
+          employeeId: e.employeeId,
+          fullName: e.fullName,
+          email: e.email,
+          designation: e.designation,
+          dateOfBirth: e.dateOfBirth,
+        })),
+      };
+    } catch (error) {
+      this.logger.error(`Error processing today birthdays: ${error.message}`, error.stack);
+      throw error;
+    }
+  }
+
+  @Get('birthday/trigger')
+  @Post('birthday/trigger')
+  @ApiOperation({ summary: 'Check today for birthdays and send in-app notification & email' })
+  async triggerDailyBirthdayWishes(@Query('force') forceParam?: string) {
+    const force = forceParam === 'true' || forceParam === '1';
+    try {
+      this.logger.log('Triggering daily birthday check');
+      const result = await this.notificationService.sendDailyBirthdayWishes(force);
+      return { message: 'Birthday check completed', ...result };
+    } catch (error) {
+      this.logger.error(`Error in triggerDailyBirthdayWishes: ${error.message}`, error.stack);
+      throw error;
+    }
+  }
+
+  @Get(['birthday/send', 'birthday/send/:employeeId'])
+  @Post(['birthday/send', 'birthday/send/:employeeId'])
+  @ApiOperation({ summary: 'Send birthday wish (notification & email) to a specific employee' })
+  async sendBirthdayWishToEmployee(
+    @Param('employeeId') paramId?: string,
+    @Body('employeeId') bodyId?: string,
+    @Query('employeeId') queryId?: string,
+  ) {
+    const targetId = paramId || bodyId || queryId;
+    if (!targetId || targetId.trim() === '' || targetId === ':employeeId') {
+      throw new BadRequestException('Please provide a valid employee ID');
+    }
+    try {
+      this.logger.log(`Sending birthday wish to employee: ${targetId}`);
+      return await this.notificationService.sendBirthdayWish(targetId.trim());
+    } catch (error) {
+      this.logger.error(`Error sending birthday wish to ${targetId}: ${error.message}`, error.stack);
       throw error;
     }
   }
