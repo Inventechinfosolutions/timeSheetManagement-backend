@@ -13,9 +13,12 @@ import { MailService } from '../../common/mail/mail.service';
 import {
   getGeneralNotificationTemplate,
   getBirthdayNotificationTemplate,
+  getColleagueBirthdayTemplate,
 } from '../../common/mail/templates';
 import { ManagerMapping, ManagerMappingStatus } from '../../managerMapping/entities/managerMapping.entity';
 import { UserStatus } from '../../users/enums/user-status.enum';
+import { UserType } from '../../users/enums/user-type.enum';
+import { Department } from '../../employeeTimeSheet/enums/department.enum';
 import { MonthStatus } from '../../employeeTimeSheet/enums/month-status.enum';
 
 @Injectable()
@@ -530,6 +533,15 @@ export class NotificationsService {
       this.logger.warn(`[BIRTHDAY] No email configured for ${emp.fullName} (${emp.employeeId})`);
     }
 
+    // Broadcast announcement to all colleagues (excluding birthday employees)
+    try {
+      await this.notifyColleaguesOfBirthday(emp);
+    } catch (colleagueErr) {
+      this.logger.error(
+        `[BIRTHDAY] Failed to notify colleagues for ${emp.fullName}: ${colleagueErr?.message || colleagueErr}`,
+      );
+    }
+
     return {
       success: true,
       employeeId: emp.employeeId,
@@ -539,6 +551,120 @@ export class NotificationsService {
       notificationCreated: !!notif,
       message: `Birthday wish sent to ${emp.fullName}`,
     };
+  }
+
+  /**
+   * Broadcasts birthday announcement email to all colleagues across the company.
+   * - Uses baseLayout with Worksphere header and footer.
+   * - Dynamically pulls employee details, department, and role from the database.
+   * - Excludes the birthday employee and anyone else celebrating a birthday today.
+   * - Deduplicates via notifications table so colleagues are never spammed twice.
+   */
+  async notifyColleaguesOfBirthday(birthdayEmp: EmployeeDetails): Promise<number> {
+    const today = dayjs();
+    const currentMonth = today.month();
+    const currentDate = today.date();
+    const startOfToday = today.startOf('day').toDate();
+
+    this.logger.log(
+      `[COLLEAGUE_BIRTHDAY] Broadcasting birthday of ${birthdayEmp.fullName} (${birthdayEmp.department || 'General'}) to colleagues...`,
+    );
+
+    // 1. Fetch all active employees from the database
+    const allEmployees = await this.employeeRepo.find({
+      where: { userStatus: UserStatus.ACTIVE } as any,
+    });
+
+    // 2. Filter colleagues: active employees & managers, excluding the celebrant, anyone with birthday today, and excluding CEO & General Manager
+    const colleagues = allEmployees.filter((emp) => {
+      if (!emp.email || emp.email.trim() === '') return false;
+      if (emp.employeeId === birthdayEmp.employeeId || emp.id === birthdayEmp.id) return false;
+
+      // Exclude anyone whose birthday is also today
+      if (emp.dateOfBirth) {
+        const dob = dayjs(emp.dateOfBirth);
+        if (dob.isValid() && dob.month() === currentMonth && dob.date() === currentDate) {
+          return false;
+        }
+      }
+
+      // Explicitly exclude CEO and General Manager (by role, department, employeeId, or designation)
+      const isCEO =
+        emp.role === UserType.CEO ||
+        emp.department === Department.CEO ||
+        emp.employeeId?.toUpperCase() === 'CEO' ||
+        emp.designation?.toLowerCase().includes('ceo') ||
+        emp.designation?.toLowerCase().includes('chief executive officer');
+
+      const isGeneralManager =
+        emp.role === UserType.GENERAL_MANAGER ||
+        emp.department === Department.GENERAL_MANAGER ||
+        emp.employeeId?.toUpperCase() === 'GM' ||
+        emp.designation?.toLowerCase().includes('general manager');
+
+      if (isCEO || isGeneralManager) {
+        return false;
+      }
+
+      return true;
+    });
+
+    let sentCount = 0;
+
+    for (const colleague of colleagues) {
+      try {
+        // 3. Deduplicate: check if this colleague was already notified about this birthday today
+        const alreadyNotified = await this.notificationRepo.findOne({
+          where: {
+            employeeId: colleague.employeeId,
+            title: Like(`%${birthdayEmp.fullName}%Birthday%`),
+            createdAt: MoreThanOrEqual(startOfToday),
+          },
+        });
+
+        if (alreadyNotified) {
+          continue;
+        }
+
+        // 4. Save in-app notification in database
+        const rawDept = birthdayEmp.department || 'our';
+        const deptText = rawDept.toLowerCase().includes('department') ? rawDept : `${rawDept} department`;
+        const birthdayMsg = `Today is your colleague ${birthdayEmp.fullName}'s birthday from the ${deptText}! Please take a moment to wish them a very happy birthday and share your warm wishes to make their day special.`;
+
+        const notif = this.notificationRepo.create({
+          employeeId: colleague.employeeId,
+          title: `🎉 Today is ${birthdayEmp.fullName}'s Birthday!`,
+          message: birthdayMsg,
+          type: 'COLLEAGUE_BIRTHDAY',
+          isRead: false,
+        });
+        await this.notificationRepo.save(notif);
+
+        // 5. Generate email using base layout and dynamic DB data
+        const html = getColleagueBirthdayTemplate({
+          recipientName: colleague.fullName || 'Colleague',
+          birthdayEmployeeName: birthdayEmp.fullName,
+          department: birthdayEmp.department,
+          designation: birthdayEmp.designation,
+        });
+
+        const subject = `🎂 Today is ${birthdayEmp.fullName}'s Birthday! - Worksphere`;
+        const plain = `Dear ${colleague.fullName},\n\n${birthdayMsg}\n\nWarmest Regards,\nWorksphere Team\nInvenTech Info Solutions`;
+
+        // 6. Queue email asynchronously
+        await this.mailService.sendMailAsync(colleague.email, subject, plain, html);
+        sentCount++;
+      } catch (err) {
+        this.logger.error(
+          `[COLLEAGUE_BIRTHDAY] Failed sending colleague wish to ${colleague.email}: ${err?.message || err}`,
+        );
+      }
+    }
+
+    this.logger.log(
+      `[COLLEAGUE_BIRTHDAY] Successfully queued ${sentCount} colleague announcements for ${birthdayEmp.fullName}`,
+    );
+    return sentCount;
   }
 
   /**
