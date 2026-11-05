@@ -204,10 +204,50 @@ export class BirthdayNotificationService {
   }
 
   /**
+   * CEO, General Manager, and Manager do not get the colleague birthday mail.
+   * Matched on role, department, employee id, and designation so a mismatched
+   * role string still keeps them out before production.
+   */
+  private isLeadershipExcludedFromColleagueMail(emp: EmployeeDetails): boolean {
+    const role = String(emp.role || '').trim().toUpperCase();
+    const department = String(emp.department || '').trim().toLowerCase();
+    const designation = String(emp.designation || '').trim().toLowerCase();
+    const employeeId = String(emp.employeeId || '').trim().toUpperCase();
+
+    const isCEO =
+      role === UserType.CEO ||
+      department === Department.CEO.toLowerCase() ||
+      department === 'ceo' ||
+      employeeId === 'CEO' ||
+      designation.includes('ceo') ||
+      designation.includes('chief executive');
+
+    const isGeneralManager =
+      role === UserType.GENERAL_MANAGER ||
+      role === 'GENERAL MANAGER' ||
+      department === Department.GENERAL_MANAGER.toLowerCase() ||
+      employeeId === 'GM' ||
+      designation.includes('general manager');
+
+    // Managers get their own employee birthday mail, not the colleague announcement.
+    const isManager =
+      !isGeneralManager &&
+      (role === UserType.MANAGER ||
+        role.includes('MNG') ||
+        designation === 'manager' ||
+        designation.includes('manager'));
+
+    return isCEO || isGeneralManager || isManager;
+  }
+
+  /**
    * Broadcasts birthday announcement email to all colleagues across the company.
    * - Uses baseLayout with Worksphere header and footer.
    * - Dynamically pulls employee details, department, and role from the database.
    * - Excludes the birthday employee and anyone else celebrating a birthday today.
+   * - Colleague mail goes only to active employees (and other non-leadership roles).
+   * - CEO, General Manager, and Manager do not receive the colleague announcement.
+   *   Their own birthday still uses the employee birthday mail.
    * - Deduplicates via notifications table so colleagues are never spammed twice.
    */
   async notifyColleaguesOfBirthday(birthdayEmp: EmployeeDetails): Promise<number> {
@@ -225,7 +265,9 @@ export class BirthdayNotificationService {
       where: { userStatus: UserStatus.ACTIVE } as any,
     });
 
-    // 2. Filter colleagues: active employees & managers, excluding the celebrant, anyone with birthday today, and excluding CEO & General Manager
+    // Colleague mail: active employees only.
+    // CEO, General Manager, and Manager are not colleagues for this mail.
+    // If it is their birthday, sendBirthdayWish still sends the employee birthday mail.
     const colleagues = allEmployees.filter((emp) => {
       if (!emp.email || emp.email.trim() === '') return false;
 
@@ -242,21 +284,7 @@ export class BirthdayNotificationService {
         }
       }
 
-      // Explicitly exclude CEO and General Manager (by role, department, employeeId, or designation)
-      const isCEO =
-        emp.role === UserType.CEO ||
-        emp.department === Department.CEO ||
-        emp.employeeId?.toUpperCase() === 'CEO' ||
-        emp.designation?.toLowerCase().includes('ceo') ||
-        emp.designation?.toLowerCase().includes('chief executive officer');
-
-      const isGeneralManager =
-        emp.role === UserType.GENERAL_MANAGER ||
-        emp.department === Department.GENERAL_MANAGER ||
-        emp.employeeId?.toUpperCase() === 'GM' ||
-        emp.designation?.toLowerCase().includes('general manager');
-
-      if (isCEO || isGeneralManager) {
+      if (this.isLeadershipExcludedFromColleagueMail(emp)) {
         return false;
       }
 
