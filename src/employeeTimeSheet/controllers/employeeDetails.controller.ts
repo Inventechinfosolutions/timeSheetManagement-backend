@@ -1,4 +1,4 @@
-import { NotificationsService } from '../../notifications/Services/notifications.service';
+import { BirthdayNotificationService } from '../../notifications/Services/birthday-notification.service';
 import dayjs from 'dayjs';
 import {
   Body,
@@ -54,10 +54,10 @@ export class EmployeeDetailsController {
   logger = new Logger('EmployeeDetails');
   constructor(
     private readonly employeeDetailsService: EmployeeDetailsService,
-    private readonly notificationsService: NotificationsService,
+    private readonly birthdayService: BirthdayNotificationService,
   ) { }
 
-  // ─── Birthday Endpoints ───────────────────────────────────────────────────
+  // â”€â”€â”€ Birthday Endpoints â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   @Get(['birthdays/today', 'birthday/today'])
   @Post(['birthdays/today', 'birthday/today'])
@@ -65,12 +65,12 @@ export class EmployeeDetailsController {
   async getTodayBirthdays() {
     try {
       this.logger.log('Fetching today birthdays and sending birthday wishes...');
-      const list = await this.notificationsService.getTodayBirthdays();
+      const list = await this.birthdayService.getTodayBirthdays();
 
       const sentResults: any[] = [];
       for (const emp of list) {
         try {
-          const res = await this.notificationsService.sendBirthdayWish(emp);
+          const res = await this.birthdayService.sendBirthdayWish(emp);
           sentResults.push(res);
           if (res.emailSent) {
             this.logger.log(`[BIRTHDAY] Wish sent successfully to ${emp.fullName} <${emp.email}>`);
@@ -121,7 +121,7 @@ export class EmployeeDetailsController {
   async triggerTodayBirthdays() {
     try {
       this.logger.log('Manually triggering daily birthday check');
-      const result = await this.notificationsService.sendDailyBirthdayWishes();
+      const result = await this.birthdayService.sendDailyBirthdayWishes();
       return {
         message: 'Birthday check executed successfully',
         ...result,
@@ -147,7 +147,7 @@ export class EmployeeDetailsController {
     }
     try {
       this.logger.log(`Sending birthday wish to employee: ${targetId}`);
-      return await this.notificationsService.sendBirthdayWish(targetId.trim());
+      return await this.birthdayService.sendBirthdayWish(targetId.trim());
     } catch (error) {
       this.logger.error(`Error sending birthday wish to ${targetId}: ${error.message}`, error.stack);
       throw error;
