@@ -62,8 +62,8 @@ export interface StepEnvironment {
 
 export interface StepFinalReview {
   overallSelfRating?: number | null;
-  overallEmployeeComments?: string;
-  careerGrowthInterests?: string;
+  overallEmployeeComments?: string | null;
+  careerGrowthInterests?: string | null;
   confirmationAccepted?: boolean;
 }
 
