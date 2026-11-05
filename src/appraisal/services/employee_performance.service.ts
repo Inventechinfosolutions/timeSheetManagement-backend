@@ -33,6 +33,7 @@ import { QuarterlyReviewStatus, ReviewPeriod, QuaterlyEnum } from '../enums/quar
 import { AppraisalNoticeService } from './appraisal_notice.service';
 import { QuarterlyReviewService } from './quarterly_review.service';
 import { AnnualAppraisalService } from './annual_appraisal.service';
+import { MasterQuaterlyService } from '../../master/service/master-quaterly.service';
 import { DocumentUploaderService } from '../../common/document-uploader/services/document-uploader.service';
 import { DocumentMetaInfo, EntityType, ReferenceType } from '../../common/document-uploader/models/documentmetainfo.model';
 import { BufferedFile } from '../../common/s3-client/file.model';
@@ -56,12 +57,28 @@ import { createAuditEntry, appendAuditEntry } from '../utils/audit-history.helpe
 import { AppraisalAuditEntry } from '../interfaces/appraisal_audit.interface';
 import {
   applyPerformanceSteps,
+  applyStepPatch,
   clearPerformanceSteps,
+  computeResumeStep,
   overlayPerformanceView,
+  PerformanceStepSlug,
+  PERFORMANCE_STEP_SLUGS,
   readPerformanceProjects,
+  readStepData,
   savePerformanceProjects,
   stepText,
 } from '../utils/performance-steps';
+
+export interface PerformanceStepApiResponse {
+  id: number;
+  status: EmployeePerformanceStatus;
+  canEdit?: boolean;
+  canRequestEdit?: boolean;
+  /** First incomplete step (1–6) from DB. */
+  step?: number;
+  /** Step payload. For final-review, also includes prior steps for the review summary. */
+  data: ReturnType<typeof readStepData> | Record<string, unknown> | null;
+}
 
 export interface PerformanceListMeta {
   totalItems: number;
@@ -87,6 +104,8 @@ export interface EnrichedEmployeePerformance extends EmployeePerformance {
   reviewId?: number | null;
   reviewPeriod?: ReviewPeriod;
   yearlyQuarterReviews?: YearlyQuarterReviews | null;
+  /** First incomplete appraisal step (1–6), derived from saved step JSON in DB. */
+  step?: number;
 }
 
 /** Yearly quarter column — each quarter listed once: ["Q1","Q2","Q3","Q4"]. */
@@ -135,7 +154,59 @@ export class EmployeePerformanceService {
     private readonly documentUploaderService: DocumentUploaderService,
     private readonly quarterlyReviewService: QuarterlyReviewService,
     private readonly annualService: AnnualAppraisalService,
+    private readonly masterQuaterlyService: MasterQuaterlyService,
   ) { }
+
+  /** Format YYYY-MM-DD (or Date) → DD-MM-YYYY for overview review-period banner. */
+  private toDisplayDate(value?: string | Date | null): string {
+    if (!value) return '';
+    if (value instanceof Date) {
+      if (Number.isNaN(value.getTime())) return '';
+      const day = String(value.getDate()).padStart(2, '0');
+      const month = String(value.getMonth() + 1).padStart(2, '0');
+      return `${day}-${month}-${value.getFullYear()}`;
+    }
+    const text = String(value).trim();
+    const iso = /^(\d{4})-(\d{2})-(\d{2})/.exec(text);
+    if (iso) return `${iso[3]}-${iso[2]}-${iso[1]}`;
+    return text;
+  }
+
+  /**
+   * Resolve default Q start/end from master quarters + financial year.
+   * Used when stepOverview is null so GET /overview still returns period dates.
+   */
+  private async resolveDefaultReviewPeriod(
+    quarter: unknown,
+    financialYear: string,
+  ): Promise<{ reviewPeriodStart: string; reviewPeriodEnd: string }> {
+    const fromYearMatch = String(financialYear || '').match(/^(\d{4})/);
+    const fromYear = fromYearMatch ? parseInt(fromYearMatch[1], 10) : new Date().getFullYear();
+    const toYear = fromYear + 1;
+
+    if (isYearlyQuarterValue(quarter)) {
+      return {
+        reviewPeriodStart: `01-04-${fromYear}`,
+        reviewPeriodEnd: `31-03-${toYear}`,
+      };
+    }
+
+    const label = String(quarter || '').trim().toUpperCase();
+    try {
+      const master = await this.masterQuaterlyService.findByQuarter(label, fromYear);
+      return {
+        reviewPeriodStart: this.toDisplayDate(master.startDate),
+        reviewPeriodEnd: this.toDisplayDate(master.endDate),
+      };
+    } catch {
+      // Fiscal-year fallback if master lookup fails
+      if (label === 'Q1') return { reviewPeriodStart: `01-04-${fromYear}`, reviewPeriodEnd: `30-06-${fromYear}` };
+      if (label === 'Q2') return { reviewPeriodStart: `01-07-${fromYear}`, reviewPeriodEnd: `30-09-${fromYear}` };
+      if (label === 'Q3') return { reviewPeriodStart: `01-10-${fromYear}`, reviewPeriodEnd: `31-12-${fromYear}` };
+      if (label === 'Q4') return { reviewPeriodStart: `01-01-${toYear}`, reviewPeriodEnd: `31-03-${toYear}` };
+      return { reviewPeriodStart: '', reviewPeriodEnd: '' };
+    }
+  }
 
   /**
    * FR-03: Save Draft (Create or Resume Draft)
@@ -1033,6 +1104,143 @@ export class EmployeePerformanceService {
     return withReview;
   }
 
+  private assertValidStepSlug(step: string): PerformanceStepSlug {
+    if (!PERFORMANCE_STEP_SLUGS.includes(step as PerformanceStepSlug)) {
+      throw new BadRequestException(
+        `Unknown step "${step}". Use one of: ${PERFORMANCE_STEP_SLUGS.join(', ')}`,
+      );
+    }
+    return step as PerformanceStepSlug;
+  }
+
+  /** Resolve overview period dates (saved step or master quarter defaults). */
+  private async withOverviewPeriodDates(
+    enriched: EnrichedEmployeePerformance,
+    overviewData: Record<string, unknown> | null,
+  ): Promise<Record<string, unknown>> {
+    const overview = { ...(overviewData || {}) };
+    const hasStart = Boolean(String(overview.reviewPeriodStart || '').trim());
+    const hasEnd = Boolean(String(overview.reviewPeriodEnd || '').trim());
+    if (!hasStart || !hasEnd) {
+      const defaults = await this.resolveDefaultReviewPeriod(
+        enriched.quarter,
+        enriched.financialYear,
+      );
+      if (!hasStart) overview.reviewPeriodStart = defaults.reviewPeriodStart;
+      if (!hasEnd) overview.reviewPeriodEnd = defaults.reviewPeriodEnd;
+    }
+    return overview;
+  }
+
+  /**
+   * GET one step.
+   * Steps 1–5: that step only.
+   * Step 6 (final-review): final fields + prior steps so the review summary can render.
+   */
+  async getStep(id: number, stepSlug: string): Promise<PerformanceStepApiResponse> {
+    const step = this.assertValidStepSlug(stepSlug);
+    const enriched = await this.findOne(id);
+    let data: PerformanceStepApiResponse['data'] = readStepData(enriched, step);
+
+    // Overview: always include review period dates (from saved step or master quarter defaults)
+    if (step === 'overview') {
+      data = await this.withOverviewPeriodDates(
+        enriched,
+        (data as Record<string, unknown>) || null,
+      );
+    }
+
+    // Final review page shows steps 1–5 summary + step 6 inputs — return the full package.
+    if (step === 'final-review') {
+      const final = (readStepData(enriched, 'final-review') as Record<string, unknown>) || {};
+      const overview = await this.withOverviewPeriodDates(
+        enriched,
+        (enriched.stepOverview as Record<string, unknown>) || null,
+      );
+      data = {
+        overallSelfRating: final.overallSelfRating ?? null,
+        overallEmployeeComments: final.overallEmployeeComments ?? null,
+        careerGrowthInterests: final.careerGrowthInterests ?? null,
+        confirmationAccepted: Boolean(final.confirmationAccepted),
+        stepOverview: overview,
+        stepAchievements: enriched.stepAchievements ?? null,
+        stepTeamwork: enriched.stepTeamwork ?? null,
+        stepLearning: enriched.stepLearning ?? null,
+        stepEnvironment: enriched.stepEnvironment ?? null,
+      };
+    }
+
+    return {
+      id: enriched.id,
+      status: enriched.status,
+      canEdit: enriched.canEdit,
+      canRequestEdit: enriched.canRequestEdit,
+      step: computeResumeStep(enriched),
+      data,
+    };
+  }
+
+  /**
+   * PATCH one step — merges only fields present in the body into that step JSON.
+   * Does not replace other steps or untouched fields on this step.
+   */
+  async patchStep(
+    id: number,
+    stepSlug: string,
+    patchDto: Record<string, unknown>,
+  ): Promise<PerformanceStepApiResponse> {
+    const step = this.assertValidStepSlug(stepSlug);
+    const keys = Object.keys(patchDto || {}).filter((key) => patchDto[key] !== undefined);
+    if (keys.length === 0) {
+      return this.getStep(id, step);
+    }
+
+    let record = await this.performanceRepository.findOne({ where: { id } });
+    if (!record) {
+      throw new NotFoundException(`Employee performance record with ID ${id} not found`);
+    }
+
+    record = await this.lockIfGrantExpired(record);
+
+    if (LOCKED_PERFORMANCE_STATUSES.includes(record.status)) {
+      throw new BadRequestException(
+        'Submission is locked. You cannot edit a submitted or reviewed evaluation without manager approval.',
+      );
+    }
+
+    applyStepPatch(record, step, patchDto);
+
+    if (record.status === EmployeePerformanceStatus.NOT_STARTED) {
+      record.status = EmployeePerformanceStatus.DRAFT;
+    } else if (DRAFT_ON_SAVE_STATUSES.includes(record.status)) {
+      record.status = EmployeePerformanceStatus.DRAFT;
+    }
+    record.lastModifiedDate = new Date();
+
+    const updated = await this.performanceRepository.save(record);
+
+    await this.linkPerformanceToReview(updated.employeeId, updated.quarter, updated.financialYear, updated.id);
+    const reviewForDraft = await this.reviewRepository.findOne({
+      where: {
+        employeeId: updated.employeeId,
+        quarter: updated.quarter,
+        financialYear: updated.financialYear,
+      },
+    });
+    if (
+      reviewForDraft &&
+      (reviewForDraft.status === QuarterlyReviewStatus.DRAFT ||
+        reviewForDraft.status === QuarterlyReviewStatus.NOT_STARTED)
+    ) {
+      reviewForDraft.status = QuarterlyReviewStatus.ASSIGNED;
+      await this.reviewRepository.save(reviewForDraft);
+    }
+
+    await this.quarterlyReviewService.propagateYearlyPerformance(updated);
+    // Return via getStep so overview always includes resolved period dates
+    return this.getStep(id, step);
+  }
+
   /**
    * Update an employee performance record (Guarded by Submission Lock)
    */
@@ -1185,7 +1393,7 @@ export class EmployeePerformanceService {
    * Remove one project from the employee performance record by index.
    * Also deletes any MinIO attachments associated with that project.
    */
-  async removeProject(id: number, projectIndex: number): Promise<EmployeePerformance> {
+  async removeProject(id: number, projectIndex: number): Promise<PerformanceStepApiResponse> {
     let record = await this.performanceRepository.findOne({ where: { id } });
     if (!record) {
       throw new NotFoundException(`Employee performance record with ID ${id} not found`);
@@ -1216,9 +1424,11 @@ export class EmployeePerformanceService {
 
     const nextProjects = currentProjects.filter((_, idx) => idx !== projectIndex);
     savePerformanceProjects(record, nextProjects);
+    this.markDraftIfUntouched(record);
     record.lastModifiedDate = new Date();
-
-    return await this.performanceRepository.save(record);
+    await this.performanceRepository.save(record);
+    // Achievements step response only — not the full performance document
+    return this.getStep(id, 'achievements');
   }
 
   private async editablePerformance(id: number): Promise<EmployeePerformance> {
@@ -1241,21 +1451,21 @@ export class EmployeePerformanceService {
     }
   }
 
-  async addProject(id: number, project: PerformanceProjectDto): Promise<EnrichedEmployeePerformance> {
+  async addProject(id: number, project: PerformanceProjectDto): Promise<PerformanceStepApiResponse> {
     const record = await this.editablePerformance(id);
     savePerformanceProjects(record, [...readPerformanceProjects(record), project as PerformanceProject]);
     this.markDraftIfUntouched(record);
     record.lastModifiedDate = new Date();
-    const saved = await this.performanceRepository.save(record);
-    const [enriched] = await this.enrichPerformancesWithEmployeeDetails([saved]);
-    return enriched;
+    await this.performanceRepository.save(record);
+    // Achievements step response only — not the full performance document
+    return this.getStep(id, 'achievements');
   }
 
   async patchProject(
     id: number,
     projectIndex: number,
     patch: UpdatePerformanceProjectDto,
-  ): Promise<EnrichedEmployeePerformance> {
+  ): Promise<PerformanceStepApiResponse> {
     const record = await this.editablePerformance(id);
     const currentProjects = [...readPerformanceProjects(record)];
     if (projectIndex < 0 || projectIndex >= currentProjects.length) {
@@ -1271,9 +1481,9 @@ export class EmployeePerformanceService {
     savePerformanceProjects(record, currentProjects);
     this.markDraftIfUntouched(record);
     record.lastModifiedDate = new Date();
-    const saved = await this.performanceRepository.save(record);
-    const [enriched] = await this.enrichPerformancesWithEmployeeDetails([saved]);
-    return enriched;
+    await this.performanceRepository.save(record);
+    // Achievements step response only — not the full performance document
+    return this.getStep(id, 'achievements');
   }
 
   /**
@@ -1623,6 +1833,7 @@ export class EmployeePerformanceService {
         canRequestEdit: access ? access.canRequestEdit : record.canRequestEdit,
         remainingRequestHours: access ? access.remainingRequestHours : record.remainingRequestHours,
         isEditWindowActive: access ? access.isEditWindowActive : record.isEditWindowActive,
+        step: computeResumeStep(record),
       });
     }
     return withAccess;

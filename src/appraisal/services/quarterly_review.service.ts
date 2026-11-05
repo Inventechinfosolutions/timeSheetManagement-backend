@@ -59,7 +59,7 @@ import { MasterFinancialYearService } from '../../master/service/master-financia
 import { UsersService } from '../../users/service/user.service';
 import { RevealedEvaluationDto } from '../dto/reveal_rating.dto';
 import { createAuditEntry, appendAuditEntry } from '../utils/audit-history.helper';
-import { overlayPerformanceView } from '../utils/performance-steps';
+import { computeResumeStep, overlayPerformanceView } from '../utils/performance-steps';
 import { AppraisalAuditEntry } from '../interfaces/appraisal_audit.interface';
 import {
   YearlyQuarterReviewSnapshot,
@@ -72,6 +72,7 @@ export interface EnrichedQuarterlyReview extends QuarterlyReview {
     remainingRequestHours?: number;
     canEdit?: boolean;
     isEditWindowActive?: boolean;
+    step?: number;
   }) | null;
   canRequestEdit?: boolean;
   remainingRequestHours?: number;
@@ -2016,6 +2017,7 @@ export class QuarterlyReviewService implements OnModuleInit {
         remainingRequestHours?: number;
         canEdit?: boolean;
         isEditWindowActive?: boolean;
+        step?: number;
       }) | null = null;
 
       if (rawPerf) {
@@ -2025,6 +2027,7 @@ export class QuarterlyReviewService implements OnModuleInit {
           remainingRequestHours,
           isEditWindowActive,
           canEdit,
+          step: computeResumeStep(rawPerf),
         };
       }
 
