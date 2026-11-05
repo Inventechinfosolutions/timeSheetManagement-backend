@@ -11,6 +11,7 @@ import { MasterDepartment } from '../master/models/master-department.entity';
 import { LockType } from '../master/enums/lock-type.enum';
 import { MasterHolidayService } from '../master/service/master-holiday.service';
 import { NotificationsService } from '../notifications/Services/notifications.service';
+import { WorkAnniversaryService } from '../notifications/Services/work-anniversary.service';
 import { UserStatus } from '../users/enums/user-status.enum';
 import { MonthStatus } from '../employeeTimeSheet/enums/month-status.enum';
 
@@ -33,6 +34,7 @@ export class AttendanceCronService {
 
     private readonly masterHolidayService: MasterHolidayService,
     private readonly notificationsService: NotificationsService,
+    private readonly workAnniversaryService: WorkAnniversaryService,
   ) { }
 
   // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -577,7 +579,7 @@ export class AttendanceCronService {
   async dailyWorkAnniversaryCheck() {
     this.logger.log('Running daily work anniversary check (9 AM)...');
     try {
-      const result = await this.notificationsService.sendDailyWorkAnniversaryWishes();
+      const result = await this.workAnniversaryService.sendDailyWorkAnniversaryWishes();
       this.logger.log(
         `Daily work anniversary check completed: ${result.sent} sent out of ${result.processed} eligible.`,
       );

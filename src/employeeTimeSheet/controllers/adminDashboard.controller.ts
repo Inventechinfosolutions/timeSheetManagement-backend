@@ -20,6 +20,7 @@ import { UserType } from '../../users/enums/user-type.enum';
 import { hasAdminAccess } from '../../users/utils/admin-access';
 import { AdminDashboardService } from '../services/adminDashboard.service';
 import { NotificationsService } from '../../notifications/Services/notifications.service';
+import { WorkAnniversaryService } from '../../notifications/Services/work-anniversary.service';
 
 @ApiTags('Admin Dashboard')
 @Controller('admin-dashboard')
@@ -30,6 +31,7 @@ export class AdminDashboardController {
   constructor(
     private readonly adminDashboardService: AdminDashboardService,
     private readonly notificationsService: NotificationsService,
+    private readonly workAnniversaryService: WorkAnniversaryService,
   ) {}
 
   @Get('summary')
@@ -61,7 +63,7 @@ export class AdminDashboardController {
   async sendAnniversaryWish(@Req() req: any, @Param('employeeId') employeeId: string) {
     this.assertAdmin(req);
     this.logger.log(`Admin triggered work anniversary wish for employee ${employeeId}`);
-    return this.notificationsService.sendWorkAnniversaryWish(employeeId);
+    return this.workAnniversaryService.sendWorkAnniversaryWish(employeeId);
   }
 
   @Post('anniversary/process-today')
@@ -69,7 +71,7 @@ export class AdminDashboardController {
   async processAnniversariesToday(@Req() req: any) {
     this.assertAdmin(req);
     this.logger.log("Admin triggered batch processing of today's work anniversaries");
-    return this.notificationsService.sendDailyWorkAnniversaryWishes();
+    return this.workAnniversaryService.sendDailyWorkAnniversaryWishes();
   }
 
   private assertAdmin(req: any) {

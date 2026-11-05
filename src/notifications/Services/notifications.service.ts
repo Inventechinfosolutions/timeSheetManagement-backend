@@ -1,15 +1,11 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, MoreThanOrEqual, Like } from 'typeorm';
+import { Repository } from 'typeorm';
 import dayjs from 'dayjs';
 import { EmployeeDetails } from '../../employeeTimeSheet/entities/employeeDetails.entity';
 import { Notification } from '../entities/notification.entity';
 import { MailService } from '../../common/mail/mail.service';
-import {
-  getGeneralNotificationTemplate,
-  getWorkAnniversaryTemplate,
-  getWorkAnniversarySubject,
-} from '../../common/mail/templates';
+import { getGeneralNotificationTemplate } from '../../common/mail/templates';
 import { ManagerMapping, ManagerMappingStatus } from '../../managerMapping/entities/managerMapping.entity';
 import { UserStatus } from '../../users/enums/user-status.enum';
 import { MonthStatus } from '../../employeeTimeSheet/enums/month-status.enum';
@@ -25,8 +21,8 @@ export class NotificationsService {
     private readonly notificationRepo: Repository<Notification>,
     @InjectRepository(ManagerMapping)
     private readonly managerMappingRepo: Repository<ManagerMapping>,
-    private readonly mailService: MailService,
-  ) { }
+    private readonly mailService: MailService
+  ) {}
 
   async sendWeeklyReminder(): Promise<number> {
     this.logger.log('Starting Weekly Attendance Reminder broadcast...');
@@ -368,189 +364,4 @@ export class NotificationsService {
       this.logger.error(`sendManagerPendingReportAll failed: ${error.message}`, error.stack);
     }
   }
-
-  // ─── Work Anniversary Notifications & Emails ─────────────────────────────────
-
-  private toYmd(val: unknown): string {
-    if (!val) return '';
-    if (val instanceof Date) return dayjs(val).format('YYYY-MM-DD');
-    return String(val).slice(0, 10);
-  }
-
-  private nextOccurrence(ymd: string, today: dayjs.Dayjs): dayjs.Dayjs | null {
-    const source = dayjs(ymd);
-    if (!source.isValid()) return null;
-    const build = (year: number) => {
-      const daysInMonth = dayjs(new Date(year, source.month(), 1)).daysInMonth();
-      const safeDay = Math.min(source.date(), daysInMonth);
-      return dayjs(new Date(year, source.month(), safeDay)).startOf('day');
-    };
-    const thisYear = build(today.year());
-    if (!thisYear.isBefore(today, 'day')) return thisYear;
-    return build(today.year() + 1);
-  }
-
-  /**
-   * Send work anniversary wish (specifically 1st year or milestone) to a particular employee.
-   * Dispatches both an in-app notification and a styled celebratory HTML email.
-   *
-   * @param employeeIdOrEmp employee ID string or EmployeeDetails object
-   * @param forceYears optional manual override for completed years (defaults to calculation based on joining date)
-   */
-  async sendWorkAnniversaryWish(
-    employeeIdOrEmp: string | EmployeeDetails,
-    forceYears?: number,
-  ): Promise<{
-    success: boolean;
-    employeeId: string;
-    employeeName: string;
-    email?: string;
-    years: number;
-    emailSent: boolean;
-    notificationCreated: boolean;
-    message?: string;
-  }> {
-    let emp: EmployeeDetails | null = null;
-    if (typeof employeeIdOrEmp === 'string') {
-      emp = await this.employeeRepo.findOne({ where: { employeeId: employeeIdOrEmp } });
-      if (!emp) {
-        throw new Error(`Employee with ID "${employeeIdOrEmp}" not found`);
-      }
-    } else {
-      emp = employeeIdOrEmp;
-    }
-
-    if (!emp.joiningDate) {
-      throw new Error(`Employee ${emp.fullName} (${emp.employeeId}) does not have a joining date configured.`);
-    }
-
-    const today = dayjs().startOf('day');
-    const joinedStr = this.toYmd(emp.joiningDate);
-    const joinedDay = dayjs(joinedStr).startOf('day');
-    const diffYears = today.diff(joinedDay, 'year');
-    const years = forceYears && forceYears > 0 ? forceYears : Math.max(1, diffYears);
-
-    const milestoneTitle = years === 1 ? '1st Work Anniversary' : `${years} Year Work Anniversary`;
-    const notificationTitle = `🎉 Happy ${milestoneTitle}!`;
-    const notificationMessage = years === 1
-      ? `Congratulations ${emp.fullName}! Today marks your 1st work anniversary at InvenTech. Thank you for 1 year (365 days) of incredible dedication, passion, and excellence!`
-      : `Congratulations ${emp.fullName}! Celebrating ${years} wonderful years with InvenTech. Thank you for your continued dedication, leadership, and excellence!`;
-
-    // 1. Create In-App Notification in DB
-    const notif = await this.notificationRepo.save({
-      employeeId: emp.employeeId,
-      title: notificationTitle,
-      message: notificationMessage,
-      type: 'celebration',
-      isRead: false,
-    });
-
-    // 2. Prepare & Send Rich Email
-    let emailSent = false;
-    if (emp.email) {
-      const subject = getWorkAnniversarySubject(emp.fullName, years);
-      const html = getWorkAnniversaryTemplate({
-        employeeName: emp.fullName,
-        employeeId: emp.employeeId,
-        designation: emp.designation,
-        department: emp.department,
-        joiningDate: emp.joiningDate,
-        anniversaryDate: new Date(),
-        years,
-      });
-
-      await this.mailService.sendMailAsync(
-        emp.email,
-        subject,
-        notificationMessage,
-        html,
-      );
-      emailSent = true;
-      this.logger.log(`Anniversary email queued for ${emp.fullName} (${emp.email}) - ${years} year(s) completed`);
-    } else {
-      this.logger.warn(`Employee ${emp.fullName} (${emp.employeeId}) has no email address configured.`);
-    }
-
-    return {
-      success: true,
-      employeeId: emp.employeeId,
-      employeeName: emp.fullName,
-      email: emp.email,
-      years,
-      emailSent,
-      notificationCreated: !!notif,
-      message: `Anniversary wish sent successfully to ${emp.fullName}`,
-    };
-  }
-
-  /**
-   * Daily check: Checks all active employees. For any employee whose work anniversary is TODAY
-   * and who has completed >= 1 year (e.g. 1-year completed), sends the notification & email.
-   * Skips employees who already received anniversary wishes this calendar year.
-   */
-  async sendDailyWorkAnniversaryWishes(): Promise<{
-    processed: number;
-    sent: number;
-    skipped: number;
-    recipients: Array<{ employeeId: string; name: string; years: number }>;
-  }> {
-    this.logger.log('Starting daily work anniversary check for eligible employees...');
-    const today = dayjs().startOf('day');
-    const startOfYear = today.startOf('year').toDate();
-
-    const employees = await this.employeeRepo.find({
-      where: { userStatus: UserStatus.ACTIVE },
-    } as any);
-
-    let processed = 0;
-    let sent = 0;
-    let skipped = 0;
-    const recipients: Array<{ employeeId: string; name: string; years: number }> = [];
-
-    for (const emp of employees) {
-      if (!emp.joiningDate) continue;
-
-      const joinedStr = this.toYmd(emp.joiningDate);
-      const next = this.nextOccurrence(joinedStr, today);
-      if (!next) continue;
-
-      // Anniversary is today
-      if (next.isSame(today, 'day')) {
-        const years = next.year() - dayjs(joinedStr).year();
-        if (years >= 1) {
-          processed++;
-
-          // Duplicate check via notifications table:
-          // If a 'Work Anniversary' notification already exists for this employee
-          // in the current calendar year, skip sending another one.
-          const alreadySent = await this.notificationRepo.findOne({
-            where: {
-              employeeId: emp.employeeId,
-              title: Like(`%Work Anniversary%`),
-              createdAt: MoreThanOrEqual(startOfYear),
-            },
-          });
-
-          if (alreadySent) {
-            this.logger.log(`Anniversary wish already sent to ${emp.fullName} (${emp.employeeId}) this year. Skipping.`);
-            skipped++;
-            continue;
-          }
-
-          try {
-            await this.sendWorkAnniversaryWish(emp, years);
-            sent++;
-            recipients.push({ employeeId: emp.employeeId, name: emp.fullName, years });
-            this.logger.log(`Successfully sent ${years}-year anniversary wish to ${emp.fullName} (${emp.employeeId})`);
-          } catch (err) {
-            this.logger.error(`Error sending anniversary wish to ${emp.fullName}: ${err.message}`, err.stack);
-          }
-        }
-      }
-    }
-
-    this.logger.log(`Daily work anniversary check completed: ${processed} eligible, ${sent} sent, ${skipped} skipped.`);
-    return { processed, sent, skipped, recipients };
-  }
 }
-

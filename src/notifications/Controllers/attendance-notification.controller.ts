@@ -62,32 +62,7 @@ export class AttendanceNotificationController {
     }
   }
 
-  // ─── Work Anniversary Triggers ──────────────────────────────────────────────
-
-  @Post('work-anniversary/check-and-send')
-  @ApiOperation({ summary: 'Check today for 1-year (and milestone) work anniversaries and send notification & email' })
-  async triggerDailyAnniversaryWishes() {
-    try {
-      this.logger.log('Triggering daily work anniversary check');
-      const result = await this.notificationService.sendDailyWorkAnniversaryWishes();
-      return { message: 'Work anniversary check completed', ...result };
-    } catch (error) {
-      this.logger.error(`Error in triggerDailyAnniversaryWishes: ${error.message}`, error.stack);
-      throw error;
-    }
-  }
-
-  @Post('work-anniversary/send/:employeeId')
-  @ApiOperation({ summary: 'Send 1-year work anniversary celebration email and notification to a specific employee' })
-  async sendAnniversaryWishToEmployee(@Param('employeeId') employeeId: string) {
-    try {
-      this.logger.log(`Sending work anniversary wish to employee: ${employeeId}`);
-      return await this.notificationService.sendWorkAnniversaryWish(employeeId);
-    } catch (error) {
-      this.logger.error(`Error sending anniversary wish to ${employeeId}: ${error.message}`, error.stack);
-      throw error;
-    }
-  }
+  // ─── Notification Inbox Endpoints ───────────────────────────────────────────
 
   @Get(':employeeId/inbox')
   @ApiOperation({ summary: 'Get unread notifications for an employee' })
