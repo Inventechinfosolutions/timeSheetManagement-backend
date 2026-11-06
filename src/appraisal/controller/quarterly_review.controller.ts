@@ -164,6 +164,21 @@ export class QuarterlyReviewController {
     return await this.reviewService.revealRating(id, employeeId, password, req.user);
   }
 
+  @Get(':id/evaluation')
+  @UseGuards(JwtAuthGuard)
+  @Header('Cache-Control', 'no-store')
+  @ApiOperation({
+    summary: 'Manager evaluation fields only',
+    description: 'Scores and comments for the evaluation matrix. Does not include the employee self-review.',
+  })
+  @ApiOkResponse({ type: RevealedEvaluationDto })
+  async getEvaluation(
+    @Param('id', ParseIntPipe) id: number,
+    @Req() req: { user: User },
+  ) {
+    return await this.reviewService.getManagerEvaluation(id, req.user);
+  }
+
   /**
    * Manager View with full submission, remarks and attachments
    * GET /api/quarterly-review/:id/manager-view?managerId=...
