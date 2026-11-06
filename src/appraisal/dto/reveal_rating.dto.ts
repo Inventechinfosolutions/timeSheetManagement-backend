@@ -66,5 +66,8 @@ export class RevealedEvaluationDto {
 
   @ApiProperty()
   passwordVerified: boolean;
+
+  @ApiProperty({ required: false })
+  status?: string;
 }
 

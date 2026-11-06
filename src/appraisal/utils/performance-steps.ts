@@ -58,6 +58,23 @@ const FINAL_KEYS: (keyof StepFinalReview)[] = [
   'confirmationAccepted',
 ];
 
+export type PerformanceStepSlug =
+  | 'overview'
+  | 'achievements'
+  | 'teamwork'
+  | 'learning'
+  | 'environment'
+  | 'final-review';
+
+export const PERFORMANCE_STEP_SLUGS: PerformanceStepSlug[] = [
+  'overview',
+  'achievements',
+  'teamwork',
+  'learning',
+  'environment',
+  'final-review',
+];
+
 /** Saves only the step JSON that was sent. */
 export function readPerformanceProjects(record: { stepAchievements?: StepAchievements | null }): PerformanceProject[] {
   return record.stepAchievements?.projects || [];
@@ -65,6 +82,104 @@ export function readPerformanceProjects(record: { stepAchievements?: StepAchieve
 
 export function savePerformanceProjects(record: EmployeePerformance, projects: PerformanceProject[]): void {
   record.stepAchievements = { projects };
+}
+
+/** Merge only defined keys from patch into existing step JSON (PATCH semantics). */
+export function mergeStepPatch<T extends object>(
+  existing: T | null | undefined,
+  patch: Partial<T> | Record<string, unknown>,
+): T {
+  const next = { ...(existing || {}) } as Record<string, unknown>;
+  Object.entries(patch || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      next[key] = value;
+    }
+  });
+  return next as T;
+}
+
+export function readStepData(
+  record: EmployeePerformance,
+  step: PerformanceStepSlug,
+): StepOverview | StepAchievements | StepTeamwork | StepLearning | StepEnvironment | StepFinalReview | null {
+  switch (step) {
+    case 'overview':
+      return record.stepOverview ?? null;
+    case 'achievements':
+      return record.stepAchievements ?? null;
+    case 'teamwork':
+      return record.stepTeamwork ?? null;
+    case 'learning':
+      return record.stepLearning ?? null;
+    case 'environment':
+      return record.stepEnvironment ?? null;
+    case 'final-review':
+      return record.stepFinalReview ?? null;
+    default:
+      return null;
+  }
+}
+
+/** Keep only known keys for a step so PATCH cannot write other steps into this JSON. */
+function pickStepKeys(
+  patch: Record<string, unknown>,
+  keys: string[],
+): Record<string, unknown> {
+  const next: Record<string, unknown> = {};
+  keys.forEach((key) => {
+    if (patch[key] !== undefined) {
+      next[key] = patch[key];
+    }
+  });
+  return next;
+}
+
+/** Apply a partial step PATCH onto the matching JSON column. */
+export function applyStepPatch(
+  record: EmployeePerformance,
+  step: PerformanceStepSlug,
+  patch: Record<string, unknown>,
+): void {
+  switch (step) {
+    case 'overview':
+      record.stepOverview = mergeStepPatch(
+        record.stepOverview,
+        pickStepKeys(patch, OVERVIEW_KEYS as string[]),
+      );
+      break;
+    case 'achievements':
+      if (patch.projects !== undefined) {
+        savePerformanceProjects(record, (patch.projects as PerformanceProject[]) || []);
+      } else {
+        record.stepAchievements = mergeStepPatch(record.stepAchievements, patch);
+      }
+      break;
+    case 'teamwork':
+      record.stepTeamwork = mergeStepPatch(
+        record.stepTeamwork,
+        pickStepKeys(patch, TEAMWORK_KEYS as string[]),
+      );
+      break;
+    case 'learning':
+      record.stepLearning = mergeStepPatch(
+        record.stepLearning,
+        pickStepKeys(patch, LEARNING_KEYS as string[]),
+      );
+      break;
+    case 'environment':
+      record.stepEnvironment = mergeStepPatch(
+        record.stepEnvironment,
+        pickStepKeys(patch, ENVIRONMENT_KEYS as string[]),
+      );
+      break;
+    case 'final-review':
+      // Only step-6 fields — ignore any nested prior-step keys from the GET package shape.
+      record.stepFinalReview = mergeStepPatch(
+        record.stepFinalReview,
+        pickStepKeys(patch, FINAL_KEYS as string[]),
+      );
+      break;
+  }
 }
 
 export function applyPerformanceSteps(record: EmployeePerformance, dto: Record<string, unknown>): void {
@@ -130,4 +245,74 @@ export function stepText(...values: Array<string | null | undefined>): string {
     }
   }
   return '';
+}
+
+const hasText = (value?: string | null): boolean => Boolean((value || '').trim());
+
+/** First incomplete step (1–6) from saved DB step JSON — used for Edit resume. */
+export function computeResumeStep(record: {
+  stepOverview?: StepOverview | null;
+  stepAchievements?: StepAchievements | null;
+  stepTeamwork?: StepTeamwork | null;
+  stepLearning?: StepLearning | null;
+  stepEnvironment?: StepEnvironment | null;
+  stepFinalReview?: StepFinalReview | null;
+}): number {
+  const overview = record.stepOverview;
+  const summary = (overview?.overallPerformanceSummary || '').trim();
+  if (!summary) return 1;
+
+  const projects = record.stepAchievements?.projects || [];
+  if (projects.length === 0) return 2;
+
+  const team = record.stepTeamwork;
+  const ratings = team?.teamRatings || {};
+  const teamDone =
+    (ratings.communication || 0) > 0 &&
+    hasText(team?.communicationDescription) &&
+    (ratings.ownership || 0) > 0 &&
+    hasText(team?.ownershipDescription) &&
+    (ratings.collaboration || 0) > 0 &&
+    hasText(team?.collaborationDescription) &&
+    (ratings.problemSolving || 0) > 0 &&
+    hasText(team?.problemSolvingDescription) &&
+    (ratings.leadership || 0) > 0 &&
+    hasText(team?.leadershipDescription) &&
+    (ratings.adaptability || 0) > 0 &&
+    hasText(team?.adaptabilityDescription);
+  if (!teamDone) return 3;
+
+  const learning = record.stepLearning;
+  const learningDone =
+    hasText(learning?.skillsAcquired) ||
+    hasText(learning?.certificationsOrCourses) ||
+    hasText(learning?.skillsToImprove) ||
+    hasText(learning?.supportOrTrainingRequired) ||
+    hasText(learning?.nextQuarterLearningGoals);
+  if (!learningDone) return 4;
+
+  const env = record.stepEnvironment;
+  const envDone =
+    hasText(env?.feedbackOnWorkCulture) ||
+    hasText(env?.workLifeBalance) ||
+    hasText(env?.suggestionsForImprovement) ||
+    hasText(env?.challengesAffectingProductivity) ||
+    (env?.workEnvironmentRating || 0) > 0 ||
+    (env?.toolsResourcesRating || 0) > 0 ||
+    (env?.managerSupportRating || 0) > 0;
+  if (!envDone) return 5;
+
+  return 6;
+}
+
+export function slugForResumeStep(step: number): PerformanceStepSlug {
+  const map: Record<number, PerformanceStepSlug> = {
+    1: 'overview',
+    2: 'achievements',
+    3: 'teamwork',
+    4: 'learning',
+    5: 'environment',
+    6: 'final-review',
+  };
+  return map[step] || 'overview';
 }

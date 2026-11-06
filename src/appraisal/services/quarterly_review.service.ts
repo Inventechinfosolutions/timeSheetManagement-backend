@@ -59,7 +59,7 @@ import { MasterFinancialYearService } from '../../master/service/master-financia
 import { UsersService } from '../../users/service/user.service';
 import { RevealedEvaluationDto } from '../dto/reveal_rating.dto';
 import { createAuditEntry, appendAuditEntry } from '../utils/audit-history.helper';
-import { overlayPerformanceView } from '../utils/performance-steps';
+import { computeResumeStep, overlayPerformanceView } from '../utils/performance-steps';
 import { AppraisalAuditEntry } from '../interfaces/appraisal_audit.interface';
 import {
   YearlyQuarterReviewSnapshot,
@@ -72,6 +72,7 @@ export interface EnrichedQuarterlyReview extends QuarterlyReview {
     remainingRequestHours?: number;
     canEdit?: boolean;
     isEditWindowActive?: boolean;
+    step?: number;
   }) | null;
   canRequestEdit?: boolean;
   remainingRequestHours?: number;
@@ -803,7 +804,7 @@ export class QuarterlyReviewService implements OnModuleInit {
     id: number,
     evalDto: ManagerEvaluationDto,
     user?: User,
-  ): Promise<EnrichedQuarterlyReview> {
+  ): Promise<Partial<RevealedEvaluationDto> & { status: string; isDraft?: boolean }> {
     try {
       const review = await this.reviewRepository.findOne({
         where: { id },
@@ -907,8 +908,7 @@ export class QuarterlyReviewService implements OnModuleInit {
         await this.markPerformanceEvaluationInProgress(saved);
         await this.propagateYearlyReview(saved);
         await this.annualService.syncEmployeeAnnualRating(saved.employeeId, saved.financialYear);
-        const enrichedList = await this.enrichReviewsWithDetails([saved]);
-        return enrichedList[0];
+        return this.toEvaluationPatchResponse(saved, evalDto, anyScoreSent);
       }
 
       review.status = QuarterlyReviewStatus.COMPLETED;
@@ -945,8 +945,7 @@ export class QuarterlyReviewService implements OnModuleInit {
         financialYear: saved.financialYear,
       });
 
-      const enrichedList = await this.enrichReviewsWithDetails([saved]);
-      return enrichedList[0];
+      return this.toEvaluationPatchResponse(saved, evalDto, anyScoreSent);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error';
       const stack = error instanceof Error ? error.stack : undefined;
@@ -1203,6 +1202,121 @@ export class QuarterlyReviewService implements OnModuleInit {
       passwordVerified: true,
     };
     return revealed;
+  }
+
+  /** Manager matrix: scores and comments only. No employee self-review body. */
+  async getManagerEvaluation(id: number, user?: User): Promise<RevealedEvaluationDto> {
+    const review = await this.reviewRepository.findOne({ where: { id } });
+    if (!review) {
+      throw new NotFoundException(`Quarterly review with ID ${id} not found.`);
+    }
+    await this.assertCanEvaluateReview(review.employeeId, user);
+    return this.toRevealedEvaluation(review);
+  }
+
+  private toRevealedEvaluation(review: QuarterlyReview): RevealedEvaluationDto {
+    const quarterValue = review.quarter as unknown;
+    const quarter = Array.isArray(quarterValue)
+      ? quarterValue.join(',')
+      : String(quarterValue || '');
+    const asNumber = (value: unknown) => {
+      const parsed = Number(value);
+      return Number.isFinite(parsed) ? parsed : 0;
+    };
+    return {
+      quarter,
+      financialYear: review.financialYear,
+      finalRating: asNumber(review.finalRating),
+      ratingDescription: review.ratingDescription || '',
+      productivity: asNumber(review.productivity),
+      qualityOfWork: asNumber(review.qualityOfWork),
+      ownershipResponsibility: asNumber(review.ownershipResponsibility),
+      communication: asNumber(review.communication),
+      teamCollaboration: asNumber(review.teamCollaboration),
+      innovationProblemSolving: asNumber(review.innovationProblemSolving),
+      technicalJobSkills: asNumber(review.technicalJobSkills),
+      overallPerformanceRating: asNumber(review.overallPerformanceRating),
+      performanceStrengths: review.performanceStrengths || '',
+      areasOfImprovement: review.areasOfImprovement || '',
+      managerComment: review.managerComment || '',
+      goalsForNextReviewPeriod: review.goalsForNextReviewPeriod || '',
+      trainingDevelopmentRecommendations: review.trainingDevelopmentRecommendations || '',
+      careerGrowthRecommendation: review.careerGrowthRecommendation || '',
+      reviewOutcome: review.reviewOutcome || '',
+      performanceAction: review.performanceAction || '',
+      managerConfirmation: Boolean(review.managerConfirmation),
+      passwordVerified: true,
+      status: review.status,
+    };
+  }
+
+  /** PATCH evaluate response: only fields that were sent, plus status (and derived scores when recalculated). */
+  private toEvaluationPatchResponse(
+    review: QuarterlyReview,
+    evalDto: ManagerEvaluationDto,
+    scoresRecalculated: boolean,
+  ): Partial<RevealedEvaluationDto> & { status: string; isDraft?: boolean } {
+    const asNumber = (value: unknown) => {
+      const parsed = Number(value);
+      return Number.isFinite(parsed) ? parsed : 0;
+    };
+    const response: Partial<RevealedEvaluationDto> & { status: string; isDraft?: boolean } = {
+      status: review.status,
+    };
+
+    if (evalDto.isDraft !== undefined) response.isDraft = Boolean(evalDto.isDraft);
+    if (evalDto.productivity !== undefined) response.productivity = asNumber(review.productivity);
+    if (evalDto.qualityOfWork !== undefined) response.qualityOfWork = asNumber(review.qualityOfWork);
+    if (evalDto.ownership !== undefined || evalDto.ownershipResponsibility !== undefined) {
+      response.ownershipResponsibility = asNumber(review.ownershipResponsibility);
+    }
+    if (evalDto.communication !== undefined) response.communication = asNumber(review.communication);
+    if (evalDto.teamCollaboration !== undefined) {
+      response.teamCollaboration = asNumber(review.teamCollaboration);
+    }
+    if (evalDto.innovation !== undefined || evalDto.innovationProblemSolving !== undefined) {
+      response.innovationProblemSolving = asNumber(review.innovationProblemSolving);
+    }
+    if (evalDto.technicalJobSkills !== undefined) {
+      response.technicalJobSkills = asNumber(review.technicalJobSkills);
+    }
+    if (evalDto.performanceStrengths !== undefined) {
+      response.performanceStrengths = review.performanceStrengths || '';
+    }
+    if (evalDto.areasOfImprovement !== undefined) {
+      response.areasOfImprovement = review.areasOfImprovement || '';
+    }
+    if (evalDto.managerComment !== undefined) {
+      response.managerComment = review.managerComment || '';
+    }
+    if (evalDto.goalsForNextReviewPeriod !== undefined) {
+      response.goalsForNextReviewPeriod = review.goalsForNextReviewPeriod || '';
+    }
+    if (evalDto.trainingDevelopmentRecommendations !== undefined) {
+      response.trainingDevelopmentRecommendations = review.trainingDevelopmentRecommendations || '';
+    }
+    if (evalDto.careerGrowthRecommendation !== undefined) {
+      response.careerGrowthRecommendation = review.careerGrowthRecommendation || '';
+    }
+    if (evalDto.reviewOutcome !== undefined) response.reviewOutcome = review.reviewOutcome || '';
+    if (evalDto.performanceAction !== undefined) {
+      response.performanceAction = review.performanceAction || '';
+    }
+    if (evalDto.managerConfirmation !== undefined) {
+      response.managerConfirmation = Boolean(review.managerConfirmation);
+    }
+
+    if (
+      scoresRecalculated ||
+      evalDto.finalRating !== undefined ||
+      evalDto.overallPerformanceRating !== undefined
+    ) {
+      response.finalRating = asNumber(review.finalRating);
+      response.overallPerformanceRating = asNumber(review.overallPerformanceRating);
+      response.ratingDescription = review.ratingDescription || '';
+    }
+
+    return response;
   }
 
   private async resolveSessionEmployeeId(loginId: string): Promise<string> {
@@ -2016,6 +2130,7 @@ export class QuarterlyReviewService implements OnModuleInit {
         remainingRequestHours?: number;
         canEdit?: boolean;
         isEditWindowActive?: boolean;
+        step?: number;
       }) | null = null;
 
       if (rawPerf) {
@@ -2025,6 +2140,7 @@ export class QuarterlyReviewService implements OnModuleInit {
           remainingRequestHours,
           isEditWindowActive,
           canEdit,
+          step: computeResumeStep(rawPerf),
         };
       }
 

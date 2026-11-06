@@ -45,6 +45,23 @@ import {
   PerformanceProjectDto,
   UpdatePerformanceProjectDto,
 } from '../dto/employee_performance.dto';
+import {
+  OverviewStepRequestDto,
+  AchievementsStepRequestDto,
+  TeamworkStepRequestDto,
+  LearningStepRequestDto,
+  EnvironmentStepRequestDto,
+  FinalReviewStepRequestDto,
+} from '../dto/request';
+import {
+  OverviewStepResponseDto,
+  AchievementsStepResponseDto,
+  TeamworkStepResponseDto,
+  LearningStepResponseDto,
+  EnvironmentStepResponseDto,
+  FinalReviewStepResponseDto,
+  PerformanceFullResponseDto,
+} from '../dto/response';
 import { EmployeePerformance } from '../entities/employee_performance.entity';
 
 @ApiTags('Employee Performance')
@@ -236,12 +253,127 @@ export class EmployeePerformanceController {
     return await this.performanceService.streamAttachment(objectKey, res, true);
   }
 
+  /** Step 1 — Overview (declared before :id so paths resolve correctly) */
+  @Get(':id/overview')
+  @ApiOperation({ summary: 'Get Step 1 overview only' })
+  @ApiOkResponse({ type: OverviewStepResponseDto })
+  async getOverview(@Param('id', ParseIntPipe) id: number) {
+    return await this.performanceService.getStep(id, 'overview');
+  }
+
+  @Patch(':id/overview')
+  @ApiOperation({ summary: 'PATCH Step 1 overview — send only changed fields' })
+  @ApiBody({ type: OverviewStepRequestDto })
+  @ApiOkResponse({ type: OverviewStepResponseDto })
+  async patchOverview(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() body: OverviewStepRequestDto,
+  ) {
+    return await this.performanceService.patchStep(id, 'overview', body as Record<string, unknown>);
+  }
+
+  /** Step 2 — Achievements */
+  @Get(':id/achievements')
+  @ApiOperation({ summary: 'Get Step 2 achievements / projects only' })
+  @ApiOkResponse({ type: AchievementsStepResponseDto })
+  async getAchievements(@Param('id', ParseIntPipe) id: number) {
+    return await this.performanceService.getStep(id, 'achievements');
+  }
+
+  @Patch(':id/achievements')
+  @ApiOperation({ summary: 'PATCH Step 2 achievements — send only changed fields' })
+  @ApiBody({ type: AchievementsStepRequestDto })
+  @ApiOkResponse({ type: AchievementsStepResponseDto })
+  async patchAchievements(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() body: AchievementsStepRequestDto,
+  ) {
+    return await this.performanceService.patchStep(id, 'achievements', body as Record<string, unknown>);
+  }
+
+  /** Step 3 — Teamwork */
+  @Get(':id/teamwork')
+  @ApiOperation({ summary: 'Get Step 3 teamwork only' })
+  @ApiOkResponse({ type: TeamworkStepResponseDto })
+  async getTeamwork(@Param('id', ParseIntPipe) id: number) {
+    return await this.performanceService.getStep(id, 'teamwork');
+  }
+
+  @Patch(':id/teamwork')
+  @ApiOperation({ summary: 'PATCH Step 3 teamwork — send only changed fields' })
+  @ApiBody({ type: TeamworkStepRequestDto })
+  @ApiOkResponse({ type: TeamworkStepResponseDto })
+  async patchTeamwork(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() body: TeamworkStepRequestDto,
+  ) {
+    return await this.performanceService.patchStep(id, 'teamwork', body as Record<string, unknown>);
+  }
+
+  /** Step 4 — Learning */
+  @Get(':id/learning')
+  @ApiOperation({ summary: 'Get Step 4 learning only' })
+  @ApiOkResponse({ type: LearningStepResponseDto })
+  async getLearning(@Param('id', ParseIntPipe) id: number) {
+    return await this.performanceService.getStep(id, 'learning');
+  }
+
+  @Patch(':id/learning')
+  @ApiOperation({ summary: 'PATCH Step 4 learning — send only changed fields' })
+  @ApiBody({ type: LearningStepRequestDto })
+  @ApiOkResponse({ type: LearningStepResponseDto })
+  async patchLearning(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() body: LearningStepRequestDto,
+  ) {
+    return await this.performanceService.patchStep(id, 'learning', body as Record<string, unknown>);
+  }
+
+  /** Step 5 — Environment */
+  @Get(':id/environment')
+  @ApiOperation({ summary: 'Get Step 5 environment only' })
+  @ApiOkResponse({ type: EnvironmentStepResponseDto })
+  async getEnvironment(@Param('id', ParseIntPipe) id: number) {
+    return await this.performanceService.getStep(id, 'environment');
+  }
+
+  @Patch(':id/environment')
+  @ApiOperation({ summary: 'PATCH Step 5 environment — send only changed fields' })
+  @ApiBody({ type: EnvironmentStepRequestDto })
+  @ApiOkResponse({ type: EnvironmentStepResponseDto })
+  async patchEnvironment(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() body: EnvironmentStepRequestDto,
+  ) {
+    return await this.performanceService.patchStep(id, 'environment', body as Record<string, unknown>);
+  }
+
+  /** Step 6 — Final review */
+  @Get(':id/final-review')
+  @ApiOperation({ summary: 'Get Step 6 final review only' })
+  @ApiOkResponse({ type: FinalReviewStepResponseDto })
+  async getFinalReview(@Param('id', ParseIntPipe) id: number) {
+    return await this.performanceService.getStep(id, 'final-review');
+  }
+
+  @Patch(':id/final-review')
+  @ApiOperation({ summary: 'PATCH Step 6 final review — send only changed fields' })
+  @ApiBody({ type: FinalReviewStepRequestDto })
+  @ApiOkResponse({ type: FinalReviewStepResponseDto })
+  async patchFinalReview(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() body: FinalReviewStepRequestDto,
+  ) {
+    return await this.performanceService.patchStep(id, 'final-review', body as Record<string, unknown>);
+  }
+
   /**
-   * GET BY ID: Fetch single record
+   * GET BY ID: Full appraisal (all 6 steps + assignment meta) — +1 overall API
    * GET /api/employee-performance/:id
    */
   @Get(':id')
-  @ApiOperation({ summary: 'Get an employee performance record by ID' })
+  @ApiOperation({ summary: 'Get full employee performance record by ID (all steps)' })
+  @ApiOkResponse({ type: PerformanceFullResponseDto })
   async getById(@Param('id', ParseIntPipe) id: number) {
     return await this.performanceService.findOne(id);
   }
@@ -290,9 +422,10 @@ export class EmployeePerformanceController {
    * DELETE /api/employee-performance/:id/projects/:index
    */
   @Delete(':id/projects/:index')
-  @ApiOperation({ summary: 'Delete a project from performance record by index' })
+  @ApiOperation({ summary: 'Delete a project — returns achievements step only' })
   @ApiParam({ name: 'id', type: Number })
   @ApiParam({ name: 'index', type: Number })
+  @ApiOkResponse({ type: AchievementsStepResponseDto })
   async removeProject(
     @Param('id', ParseIntPipe) id: number,
     @Param('index', ParseIntPipe) index: number,
@@ -301,9 +434,10 @@ export class EmployeePerformanceController {
   }
 
   @Delete(':id/projects')
-  @ApiOperation({ summary: 'Delete a project from performance record by query index' })
+  @ApiOperation({ summary: 'Delete a project by query index — returns achievements step only' })
   @ApiParam({ name: 'id', type: Number })
   @ApiQuery({ name: 'index', type: Number })
+  @ApiOkResponse({ type: AchievementsStepResponseDto })
   async removeProjectByQuery(
     @Param('id', ParseIntPipe) id: number,
     @Query('index', ParseIntPipe) index: number,
@@ -313,7 +447,10 @@ export class EmployeePerformanceController {
 
   @Post(':id/projects')
   @HttpCode(HttpStatus.CREATED)
-  @ApiOperation({ summary: 'Add one project to the performance record' })
+  @ApiOperation({
+    summary: 'Add one project — returns achievements step only (not full performance)',
+  })
+  @ApiOkResponse({ type: AchievementsStepResponseDto })
   async addProject(
     @Param('id', ParseIntPipe) id: number,
     @Body() project: PerformanceProjectDto,
@@ -322,7 +459,10 @@ export class EmployeePerformanceController {
   }
 
   @Patch(':id/projects/:index')
-  @ApiOperation({ summary: 'Update one project. Body contains only the changed fields.' })
+  @ApiOperation({
+    summary: 'Update one project (changed fields only) — returns achievements step only',
+  })
+  @ApiOkResponse({ type: AchievementsStepResponseDto })
   async patchProject(
     @Param('id', ParseIntPipe) id: number,
     @Param('index', ParseIntPipe) index: number,
