@@ -938,7 +938,9 @@ export class NotesService {
           (uploadRes as any)?.fileKey ||
           (uploadRes as any)?.documentKey;
 
+        // Put uploadRes first so our explicit key/fileKey always win
         results.push({
+          ...(typeof uploadRes === 'object' ? uploadRes : {}),
           id: (uploadRes as any)?.id || 0,
           key: fileKey,
           fileKey,
@@ -947,7 +949,6 @@ export class NotesService {
           fileSize: file.size,
           size: file.size,
           mimeType: file.mimetype,
-          ...(typeof uploadRes === 'object' ? uploadRes : {}),
         });
       } catch (err: any) {
         this.logger.error(
