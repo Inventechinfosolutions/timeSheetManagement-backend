@@ -33,6 +33,8 @@ import { QuarterlyReviewStatus, ReviewPeriod, QuaterlyEnum } from '../enums/quar
 import { AppraisalNoticeService } from './appraisal_notice.service';
 import { QuarterlyReviewService } from './quarterly_review.service';
 import { AnnualAppraisalService } from './annual_appraisal.service';
+import { AppraisalMappingService } from './appraisal_mapping.service';
+import { AppraisalAssignerType } from '../entities/appraisal_mapping.entity';
 import { MasterQuaterlyService } from '../../master/service/master-quaterly.service';
 import { DocumentUploaderService } from '../../common/document-uploader/services/document-uploader.service';
 import { DocumentMetaInfo, EntityType, ReferenceType } from '../../common/document-uploader/models/documentmetainfo.model';
@@ -155,6 +157,7 @@ export class EmployeePerformanceService {
     private readonly quarterlyReviewService: QuarterlyReviewService,
     private readonly annualService: AnnualAppraisalService,
     private readonly masterQuaterlyService: MasterQuaterlyService,
+    private readonly appraisalMappingService: AppraisalMappingService,
   ) { }
 
   /** Format YYYY-MM-DD (or Date) → DD-MM-YYYY for overview review-period banner. */
@@ -527,7 +530,19 @@ export class EmployeePerformanceService {
         financialYear: dto.financialYear,
       };
       await this.noticeService.notifyEmployeeOfSubmission(notice);
-      await this.noticeService.notifyManagerOfSubmission(notice);
+      // Appraisal mapping: employee-assigner gets submission notice; otherwise keep old manager notice.
+      const appraisalMapping = await this.appraisalMappingService.findActiveByEmployeeId(dto.employeeId);
+      if (
+        appraisalMapping &&
+        appraisalMapping.assignerType === AppraisalAssignerType.EMPLOYEE
+      ) {
+        await this.noticeService.notifyAssignerOfSubmission({
+          ...notice,
+          assignerId: appraisalMapping.assignerId,
+        });
+      } else {
+        await this.noticeService.notifyManagerOfSubmission(notice);
+      }
       await this.quarterlyReviewService.propagateYearlyPerformance(saved);
       await this.annualService.syncEmployeeAnnualRating(saved.employeeId, saved.financialYear);
 
@@ -715,18 +730,25 @@ export class EmployeePerformanceService {
         saved.id,
       );
       const enriched = await this.enrichPerformancesWithEmployeeDetails([saved]);
-      await this.noticeService.notifyManagerOfEditRequest({
+      const editNotice = {
         employeeId: saved.employeeId,
         employeeName: enriched[0].employeeName || saved.employeeId,
         quarter: saved.quarter,
         financialYear: saved.financialYear,
-      });
-      await this.noticeService.notifyEmployeeOfEditRequestSent({
-        employeeId: saved.employeeId,
-        employeeName: enriched[0].employeeName || saved.employeeId,
-        quarter: saved.quarter,
-        financialYear: saved.financialYear,
-      });
+      };
+      const appraisalMapping = await this.appraisalMappingService.findActiveByEmployeeId(saved.employeeId);
+      if (
+        appraisalMapping &&
+        appraisalMapping.assignerType === AppraisalAssignerType.EMPLOYEE
+      ) {
+        await this.noticeService.notifyAssignerOfEditRequest({
+          ...editNotice,
+          assignerId: appraisalMapping.assignerId,
+        });
+      } else {
+        await this.noticeService.notifyManagerOfEditRequest(editNotice);
+      }
+      await this.noticeService.notifyEmployeeOfEditRequestSent(editNotice);
       return enriched[0];
     } catch (error) {
       const caught = this.caughtError(error);

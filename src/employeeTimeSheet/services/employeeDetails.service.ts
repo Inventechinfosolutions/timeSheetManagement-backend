@@ -379,6 +379,7 @@ export class EmployeeDetailsService {
     department?: string,
     role?: string,
     search?: string,
+    excludeMapped: boolean = true,
   ): Promise<any[]> {
     try {
       const query = this.employeeDetailsRepository
@@ -409,12 +410,12 @@ export class EmployeeDetailsService {
       }
 
       if (role) {
-        const roles = role.split(',');
+        const roles = role.split(',').map((r) => r.trim()).filter(Boolean);
         query.andWhere('employee.role IN (:...roles)', { roles });
 
-        // If fetching employees, exclude those who are already mapped to a manager
-        // UNLESS the manager they are mapped to is INACTIVE.
-        if (roles.includes(UserType.EMPLOYEE)) {
+        // Manager Mapping only: hide employees already under an active manager.
+        // Appraisal Mapping passes excludeMapped=false so managers/employees stay visible.
+        if (excludeMapped && roles.includes(UserType.EMPLOYEE)) {
           query.leftJoin(ManagerMapping, 'mm', 'mm.employeeId = employee.employeeId AND mm.status = :mappingStatus', { mappingStatus: ManagerMappingStatus.ACTIVE });
 
           // Join to check manager status using Entity classes
