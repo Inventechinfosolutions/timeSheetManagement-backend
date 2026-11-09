@@ -209,6 +209,7 @@ export class QuarterlyReviewService {
       reviewOutcome: review.reviewOutcome,
       performanceAction: review.performanceAction,
       managerConfirmation: Boolean(review.managerConfirmation),
+      assignerConfirmation: Boolean(review.assignerConfirmation),
       description: review.description,
       performanceId: performance?.id ?? review.performanceId,
       performance: performance
@@ -793,7 +794,52 @@ export class QuarterlyReviewService {
       if (evalDto.careerGrowthRecommendation !== undefined) review.careerGrowthRecommendation = evalDto.careerGrowthRecommendation;
       if (evalDto.reviewOutcome !== undefined) review.reviewOutcome = evalDto.reviewOutcome;
       if (evalDto.performanceAction !== undefined) review.performanceAction = evalDto.performanceAction;
-      if (evalDto.managerConfirmation !== undefined) review.managerConfirmation = evalDto.managerConfirmation;
+      // Dual flow (safe default = old COMPLETED path when no employee-assigner mapping):
+      // EMPLOYEE assigner first submit → AWAITING_MANAGER_FINAL_REVIEW (+ notify manager).
+      // Manager final (or manager-assigner / no mapping) → COMPLETED as before.
+      const appraisalMapping = await this.appraisalMappingService.findActiveByEmployeeId(
+        review.employeeId,
+      );
+      const alreadyAwaitingManager =
+        review.status === QuarterlyReviewStatus.AWAITING_MANAGER_FINAL_REVIEW;
+      const evaluationFinished = this.isEvaluationFinished(review.status);
+      const sessionEmployeeId = user?.loginId
+        ? await this.resolveSessionEmployeeId(String(user.loginId))
+        : null;
+      // Employee-assigner cannot edit after forward or after manager completes.
+      if (
+        appraisalMapping?.assignerType === AppraisalAssignerType.EMPLOYEE &&
+        sessionEmployeeId &&
+        sessionEmployeeId === appraisalMapping.assignerId &&
+        (alreadyAwaitingManager || evaluationFinished)
+      ) {
+        throw new ForbiddenException(
+          alreadyAwaitingManager
+            ? 'Evaluation is awaiting manager final comment. Only the manager can complete it.'
+            : 'Evaluation is completed. Only the manager can edit it.',
+        );
+      }
+      const isEmployeeAssignerFlow =
+        !!appraisalMapping &&
+        appraisalMapping.assignerType === AppraisalAssignerType.EMPLOYEE &&
+        !alreadyAwaitingManager &&
+        !evaluationFinished;
+
+      // Confirmations: assigner first-pass → assignerConfirmation; manager final → managerConfirmation.
+      if (isEmployeeAssignerFlow) {
+        if (evalDto.assignerConfirmation !== undefined) {
+          review.assignerConfirmation = evalDto.assignerConfirmation;
+        } else if (evalDto.managerConfirmation) {
+          review.assignerConfirmation = true;
+        }
+      } else {
+        if (evalDto.assignerConfirmation !== undefined) {
+          review.assignerConfirmation = evalDto.assignerConfirmation;
+        }
+        if (evalDto.managerConfirmation !== undefined) {
+          review.managerConfirmation = evalDto.managerConfirmation;
+        }
+      }
 
       if (evalDto.isDraft) {
         review.status = QuarterlyReviewStatus.EVALUATION_IN_PROGRESS;
@@ -821,37 +867,12 @@ export class QuarterlyReviewService {
         return this.toEvaluationPatchResponse(saved, evalDto, anyScoreSent);
       }
 
-      // Dual flow (safe default = old COMPLETED path when no employee-assigner mapping):
-      // EMPLOYEE assigner first submit → AWAITING_MANAGER_FINAL_REVIEW (+ notify manager).
-      // Manager final (or manager-assigner / no mapping) → COMPLETED as before.
-      const appraisalMapping = await this.appraisalMappingService.findActiveByEmployeeId(
-        review.employeeId,
-      );
-      const alreadyAwaitingManager =
-        review.status === QuarterlyReviewStatus.AWAITING_MANAGER_FINAL_REVIEW;
-      const sessionEmployeeId = user?.loginId
-        ? await this.resolveSessionEmployeeId(String(user.loginId))
-        : null;
-      if (
-        alreadyAwaitingManager &&
-        appraisalMapping?.assignerType === AppraisalAssignerType.EMPLOYEE &&
-        sessionEmployeeId &&
-        sessionEmployeeId === appraisalMapping.assignerId
-      ) {
-        throw new ForbiddenException(
-          'Evaluation is awaiting manager final comment. Only the manager can complete it.',
-        );
-      }
-      const isEmployeeAssignerFlow =
-        !!appraisalMapping &&
-        appraisalMapping.assignerType === AppraisalAssignerType.EMPLOYEE &&
-        !alreadyAwaitingManager;
-
       if (isEmployeeAssignerFlow) {
         // Strip manager comment if an employee-assigner somehow sent it.
         if (evalDto.managerComment !== undefined) {
           review.managerComment = null;
         }
+        review.managerConfirmation = false;
         review.status = QuarterlyReviewStatus.AWAITING_MANAGER_FINAL_REVIEW;
         review.reviewedDate = null;
         const awaitEntry = createAuditEntry({
@@ -880,6 +901,7 @@ export class QuarterlyReviewService {
           employeeName: saved.employeeName || saved.employeeId,
           quarter: saved.quarter,
           financialYear: saved.financialYear,
+          assignerName: appraisalMapping.assignerName || appraisalMapping.assignerId,
         });
         return this.toEvaluationPatchResponse(saved, evalDto, anyScoreSent);
       }
@@ -1025,8 +1047,17 @@ export class QuarterlyReviewService {
       });
     }
 
-    // Deduplicate by ID
-    const uniqueReviews = Array.from(new Map(reviews.map((r) => [r.id, r])).values());
+    // Deduplicate by ID; hide other-assigner team rows until awaiting manager final / completed.
+    const managerVisibleFromOtherAssigner = new Set<string>([
+      QuarterlyReviewStatus.AWAITING_MANAGER_FINAL_REVIEW,
+      QuarterlyReviewStatus.COMPLETED,
+      QuarterlyReviewStatus.REVIEWED,
+    ]);
+    const uniqueReviews = Array.from(new Map(reviews.map((r) => [r.id, r])).values()).filter(
+      (r) =>
+        r.assignerId === managerId ||
+        managerVisibleFromOtherAssigner.has(String(r.status || '')),
+    );
 
     const completed = uniqueReviews.filter((r) => this.isEvaluationFinished(r.status));
     const pending = uniqueReviews.filter((r) => !this.isEvaluationFinished(r.status));
@@ -1172,6 +1203,7 @@ export class QuarterlyReviewService {
       reviewOutcome: review.reviewOutcome || '',
       performanceAction: review.performanceAction || '',
       managerConfirmation: Boolean(review.managerConfirmation),
+      assignerConfirmation: Boolean(review.assignerConfirmation),
       passwordVerified: true,
     };
     return revealed;
@@ -1232,6 +1264,7 @@ export class QuarterlyReviewService {
       reviewOutcome: review.reviewOutcome || '',
       performanceAction: review.performanceAction || '',
       managerConfirmation: Boolean(review.managerConfirmation),
+      assignerConfirmation: Boolean(review.assignerConfirmation),
       passwordVerified: true,
       status: review.status,
     };
@@ -1291,6 +1324,9 @@ export class QuarterlyReviewService {
     }
     if (evalDto.managerConfirmation !== undefined) {
       response.managerConfirmation = Boolean(review.managerConfirmation);
+    }
+    if (evalDto.assignerConfirmation !== undefined) {
+      response.assignerConfirmation = Boolean(review.assignerConfirmation);
     }
 
     if (
@@ -1498,10 +1534,21 @@ export class QuarterlyReviewService {
           .map((m) => m.employeeId)
           .filter((id): id is string => Boolean(id) && id !== assignerId);
 
+        // Own assignments always visible. Team rows assigned by someone else (employee assigner)
+        // only after AWAITING_MANAGER_FINAL_REVIEW or finished (COMPLETED/REVIEWED).
+        const managerVisibleFromOtherAssigner = [
+          QuarterlyReviewStatus.AWAITING_MANAGER_FINAL_REVIEW,
+          QuarterlyReviewStatus.COMPLETED,
+          QuarterlyReviewStatus.REVIEWED,
+        ];
         if (teamEmployeeIds.length > 0) {
           qb.andWhere(
-            '(review.assignerId = :assignerId OR review.employeeId IN (:...teamEmployeeIds))',
-            { assignerId, teamEmployeeIds },
+            `(review.assignerId = :assignerId OR (
+              review.employeeId IN (:...teamEmployeeIds)
+              AND review.assignerId != :assignerId
+              AND review.status IN (:...managerVisibleFromOtherAssigner)
+            ))`,
+            { assignerId, teamEmployeeIds, managerVisibleFromOtherAssigner },
           );
         } else {
           qb.andWhere('review.assignerId = :assignerId', { assignerId });
@@ -1629,6 +1676,7 @@ export class QuarterlyReviewService {
       'reviewOutcome',
       'performanceAction',
       'managerConfirmation',
+      'assignerConfirmation',
     ] as const;
     hidden.forEach((key) => {
       delete (copy as any)[key];
@@ -1656,6 +1704,7 @@ export class QuarterlyReviewService {
               reviewOutcome: null,
               performanceAction: null,
               managerConfirmation: false,
+              assignerConfirmation: false,
             }
           : null;
       copy.yearlyQuarterReviews = {
@@ -2228,13 +2277,13 @@ export class QuarterlyReviewService {
     review.deadlineDate = this.calendarDate(newDeadlineStr);
     review.status = wasSubmitted
       ? QuarterlyReviewStatus.EDIT_GRANTED
-      : QuarterlyReviewStatus.ASSIGNED;
+      : QuarterlyReviewStatus.REASSIGNED;
     if (!wasSubmitted) {
       review.reassignCount = (review.reassignCount || 0) + 1;
     }
     if (dto.reason?.trim()) {
-      const note = `[Re-assigned on ${todayDateStr}]: ${dto.reason.trim()}`;
-      review.description = review.description ? `${review.description}\n${note}` : note;
+      // Keep only the latest reassignment note in description (no prior text).
+      review.description = `[Re-assigned on ${todayDateStr}]: ${dto.reason.trim()}`;
     }
     const reassignEntry = createAuditEntry({
       employeeId: review.employeeId,
@@ -2264,6 +2313,7 @@ export class QuarterlyReviewService {
         const [year, month, day] = newDeadlineStr.split('-').map(Number);
         performance.editAllowedUntil = new Date(year, month - 1, day, 23, 59, 59, 0);
       } else {
+        // Employee self-review side stays NOT_STARTED so they can fill again.
         performance.status = EmployeePerformanceStatus.NOT_STARTED;
         performance.editAllowedUntil = null;
       }

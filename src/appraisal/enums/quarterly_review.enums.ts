@@ -29,6 +29,8 @@ export enum QuarterlyReviewStatus {
   APPROVED = 'APPROVED',
   EDIT_GRANTED = 'EDIT_GRANTED',
   ASSIGNED = 'ASSIGNED',
+  /** Reopened after deadline miss / unlock — employee can submit again. */
+  REASSIGNED = 'REASSIGNED',
   PERFORMANCE_RECEIVED = 'PERFORMANCE_RECEIVED',
   REQUESTED_FOR_EDIT = 'REQUESTED_FOR_EDIT',
   APPROVED_FOR_EDITING = 'APPROVED_FOR_EDITING',

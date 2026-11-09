@@ -162,12 +162,16 @@ export class AppraisalNoticeService {
     );
   }
 
-  async notifyManagerOfFinalReviewNeeded(input: AppraisalNoticeInput): Promise<void> {
+  async notifyManagerOfFinalReviewNeeded(
+    input: AppraisalNoticeInput & { assignerName?: string | null },
+  ): Promise<void> {
+    const employeeName = String(input.employeeName || input.employeeId || 'Employee').trim();
+    const assignerName = String(input.assignerName || 'the assigner').trim() || 'the assigner';
     const content: AppraisalNoticeContent = {
       title: `Appraisal ready for final review (${input.quarter} ${input.financialYear})`,
       message:
-        `${input.employeeName}'s evaluation was submitted by the assigner. ` +
-        `Please add the manager final comment and complete the appraisal.`,
+        `${employeeName}'s appraisal has been reviewed and forwarded by assigner ${assignerName} ` +
+        `and is now awaiting your final review. Please do final review, add your comment, and complete the appraisal.`,
     };
     await this.notifyManager(input, content, AppraisalNoticeType.ASSIGNER_EVALUATION_SUBMITTED);
   }

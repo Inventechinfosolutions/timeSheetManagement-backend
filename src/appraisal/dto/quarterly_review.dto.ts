@@ -270,6 +270,11 @@ export class ManagerEvaluationDto {
   @IsBoolean()
   managerConfirmation?: boolean;
 
+  @ApiPropertyOptional({ description: 'Assigner Confirmation Checkbox (employee-assigner first pass)' })
+  @IsOptional()
+  @IsBoolean()
+  assignerConfirmation?: boolean;
+
   @ApiPropertyOptional({ description: 'Flag to save as draft instead of finalizing' })
   @IsOptional()
   @IsBoolean()
@@ -377,6 +382,11 @@ export class UpdateQuarterlyReviewDto extends PartialType(CreateQuarterlyReviewD
   @IsOptional()
   @IsBoolean()
   managerConfirmation?: boolean;
+
+  @ApiPropertyOptional({ description: 'Assigner Confirmation' })
+  @IsOptional()
+  @IsBoolean()
+  assignerConfirmation?: boolean;
 
   @ApiPropertyOptional({ example: 4.5, description: 'Manager-entered average score from 1 to 5' })
   @IsOptional()
