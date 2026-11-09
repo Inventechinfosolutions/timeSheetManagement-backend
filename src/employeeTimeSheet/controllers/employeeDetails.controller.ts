@@ -100,24 +100,33 @@ export class EmployeeDetailsController {
     name: 'excludeMapped',
     required: false,
     type: Boolean,
-    description: 'When false, skip manager-mapping exclusion (appraisal mapping). Default true.',
+    description: 'When false, skip manager-mapping exclusion (Manager Mapping). Default true. Ignored when employeeId is set.',
+  })
+  @ApiQuery({
+    name: 'employeeId',
+    required: false,
+    type: String,
+    description:
+      'Appraisal assigner id. When set, returns { mappedToAssigner, unmappedInDepartment } for that department.',
   })
   async getListSelect(
     @Query('department') department: string,
     @Query('role') role: string,
     @Query('search') search: string,
     @Query('excludeMapped') excludeMapped?: string,
+    @Query('employeeId') employeeId?: string,
   ) {
     try {
       const shouldExcludeMapped = excludeMapped !== 'false' && excludeMapped !== '0';
       this.logger.log(
-        `Fetching employee selection list - Dept: ${department}, Role: ${role}, Search: ${search}, excludeMapped: ${shouldExcludeMapped}`,
+        `Fetching employee selection list - Dept: ${department}, Role: ${role}, Search: ${search}, excludeMapped: ${shouldExcludeMapped}, employeeId: ${employeeId || '-'}`,
       );
       return await this.employeeDetailsService.getListSelect(
         department,
         role,
         search,
         shouldExcludeMapped,
+        employeeId,
       );
     } catch (error) {
       this.logger.error(`Error fetching employee selection list: ${error.message}`, error.stack);

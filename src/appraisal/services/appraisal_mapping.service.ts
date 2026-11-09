@@ -12,6 +12,7 @@ import {
   AppraisalMappingStatus,
 } from '../entities/appraisal_mapping.entity';
 import {
+  AppraisalAssignerListItemDto,
   AppraisalMappingResponseDto,
   CreateAppraisalMappingDto,
 } from '../dto/appraisal_mapping.dto';
@@ -49,25 +50,15 @@ export class AppraisalMappingService {
     });
   }
 
-  async findAll(query: {
-    page?: number;
-    limit?: number;
-    search?: string;
-    department?: string;
-    assignerId?: string;
-    status?: string;
-    paginate?: boolean;
-  }): Promise<{
-    items: AppraisalMappingResponseDto[];
-    total: number;
-    page: number;
-    limit: number;
-    mappedEmployeeIds: string[];
-  }> {
-    const page = query.page && query.page > 0 ? query.page : 1;
-    const limit = query.limit && query.limit > 0 ? query.limit : 50;
-    const qb = this.mappingRepo.createQueryBuilder('m');
-
+  private applyListFilters(
+    qb: ReturnType<Repository<AppraisalMapping>['createQueryBuilder']>,
+    query: {
+      search?: string;
+      department?: string;
+      assignerId?: string;
+      status?: string;
+    },
+  ) {
     if (query.status) {
       qb.andWhere('m.status = :status', { status: query.status });
     } else {
@@ -86,34 +77,127 @@ export class AppraisalMappingService {
         { term },
       );
     }
+  }
 
-    qb.orderBy('m.createdAt', 'DESC');
+  /** Build one history row per assigner+department with mapped count + employee ids. */
+  private async buildAssignerListItems(
+    query: {
+      search?: string;
+      department?: string;
+      assignerId?: string;
+      status?: string;
+    },
+    groups: Array<{ assignerId: string; department: string | null }>,
+  ): Promise<AppraisalAssignerListItemDto[]> {
+    if (!groups.length) return [];
 
-    // All active mapped employee IDs (for available-to-map filtering) — one response, no second API.
-    const mappedEmployeeIds = await this.getMappedEmployeeIds();
+    const rowsQb = this.mappingRepo.createQueryBuilder('m');
+    this.applyListFilters(rowsQb, query);
+    rowsQb.andWhere(
+      groups
+        .map((_, i) => {
+          const dept = groups[i].department;
+          if (dept == null || dept === '') {
+            return `(m.assigner_id = :aid${i} AND (m.department IS NULL OR m.department = ''))`;
+          }
+          return `(m.assigner_id = :aid${i} AND m.department = :dept${i})`;
+        })
+        .join(' OR '),
+      Object.fromEntries(
+        groups.flatMap((g, i) => {
+          const entries: [string, string][] = [[`aid${i}`, g.assignerId]];
+          if (g.department != null && g.department !== '') {
+            entries.push([`dept${i}`, g.department]);
+          }
+          return entries;
+        }),
+      ),
+    );
+    rowsQb.orderBy('m.createdAt', 'DESC');
+    const rows = await rowsQb.getMany();
 
-    if (query.paginate === false) {
-      const items = await qb.getMany();
-      return {
-        items: items.map((e) => this.toDto(e)),
-        total: items.length,
-        page: 1,
-        limit: items.length,
-        mappedEmployeeIds,
-      };
+    const byKey = new Map<string, AppraisalAssignerListItemDto>();
+    for (const row of rows) {
+      const key = `${row.assignerId}::${row.department || ''}`;
+      const existing = byKey.get(key);
+      if (existing) {
+        existing.mappedCount += 1;
+        if (!existing.mappedEmployeeIds.includes(row.employeeId)) {
+          existing.mappedEmployeeIds.push(row.employeeId);
+        }
+      } else {
+        byKey.set(key, {
+          department: row.department,
+          assignerId: row.assignerId,
+          assignerName: row.assignerName,
+          assignerType: row.assignerType,
+          status: row.status,
+          mappedCount: 1,
+          mappedEmployeeIds: [row.employeeId],
+        });
+      }
     }
 
-    const [rows, total] = await qb
-      .skip((page - 1) * limit)
-      .take(limit)
-      .getManyAndCount();
+    // Preserve group order from pagination query
+    return groups
+      .map((g) => byKey.get(`${g.assignerId}::${g.department || ''}`))
+      .filter((item): item is AppraisalAssignerListItemDto => Boolean(item));
+  }
+
+  async findAll(query: {
+    page?: number;
+    limit?: number;
+    search?: string;
+    department?: string;
+    assignerId?: string;
+    status?: string;
+    paginate?: boolean;
+  }): Promise<{
+    items: AppraisalAssignerListItemDto[];
+    total: number;
+    page: number;
+    limit: number;
+  }> {
+    const page = query.page && query.page > 0 ? query.page : 1;
+    const limit = query.limit && query.limit > 0 ? query.limit : 10;
+
+    const countQb = this.mappingRepo
+      .createQueryBuilder('m')
+      .select(
+        `COUNT(DISTINCT CONCAT(m.assigner_id, '::', COALESCE(m.department, '')))`,
+        'cnt',
+      );
+    this.applyListFilters(countQb, query);
+    const total = Number((await countQb.getRawOne())?.cnt || 0);
+
+    const groupsQb = this.mappingRepo
+      .createQueryBuilder('m')
+      .select('m.assigner_id', 'assignerId')
+      .addSelect('m.department', 'department')
+      .addSelect('MAX(m.createdAt)', 'latest');
+    this.applyListFilters(groupsQb, query);
+    groupsQb
+      .groupBy('m.assigner_id')
+      .addGroupBy('m.department')
+      .orderBy('latest', 'DESC');
+
+    if (query.paginate !== false) {
+      groupsQb.offset((page - 1) * limit).limit(limit);
+    }
+
+    const groups = await groupsQb.getRawMany<{
+      assignerId: string;
+      department: string | null;
+      latest: Date;
+    }>();
+
+    const items = await this.buildAssignerListItems(query, groups);
 
     return {
-      items: rows.map((e) => this.toDto(e)),
+      items,
       total,
-      page,
-      limit,
-      mappedEmployeeIds,
+      page: query.paginate === false ? 1 : page,
+      limit: query.paginate === false ? total : limit,
     };
   }
 
@@ -161,14 +245,16 @@ export class AppraisalMappingService {
     return results;
   }
 
+  /** Unmap: hard-delete the row (do not soft-set INACTIVE). */
   async deactivate(id: number): Promise<AppraisalMappingResponseDto> {
     const entity = await this.mappingRepo.findOne({ where: { id } });
     if (!entity) {
       throw new NotFoundException(`Appraisal mapping ${id} not found`);
     }
-    entity.status = AppraisalMappingStatus.INACTIVE;
-    const saved = await this.mappingRepo.save(entity);
-    return this.toDto(saved);
+    const dto = this.toDto(entity);
+    await this.mappingRepo.remove(entity);
+    this.logger.log(`Appraisal mapping deleted id=${id} employee=${dto.employeeId}`);
+    return dto;
   }
 
   async findByAssigner(

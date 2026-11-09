@@ -79,3 +79,27 @@ export class AppraisalMappingResponseDto {
   @ApiPropertyOptional()
   updatedAt?: Date;
 }
+
+/** One history-table row: assigner + mapped people summary */
+export class AppraisalAssignerListItemDto {
+  @ApiPropertyOptional()
+  department?: string | null;
+
+  @ApiProperty()
+  assignerId: string;
+
+  @ApiProperty()
+  assignerName: string;
+
+  @ApiProperty({ enum: AppraisalAssignerType })
+  assignerType: AppraisalAssignerType;
+
+  @ApiProperty({ enum: AppraisalMappingStatus })
+  status: AppraisalMappingStatus;
+
+  @ApiProperty({ description: 'Number of people mapped under this assigner' })
+  mappedCount: number;
+
+  @ApiProperty({ type: [String], description: 'Employee IDs mapped under this assigner' })
+  mappedEmployeeIds: string[];
+}

@@ -39,7 +39,7 @@ export class AppraisalMappingController {
   ) {
     return this.mappingService.findAll({
       page: page ? parseInt(page, 10) : 1,
-      limit: limit ? parseInt(limit, 10) : 50,
+      limit: limit ? parseInt(limit, 10) : 10,
       search,
       department,
       assignerId,
@@ -97,7 +97,7 @@ export class AppraisalMappingController {
   }
 
   @Delete(':id')
-  @ApiOperation({ summary: 'Deactivate an appraisal mapping' })
+  @ApiOperation({ summary: 'Delete an appraisal mapping (hard delete on unmap)' })
   async deactivate(@Param('id', ParseIntPipe) id: number) {
     return this.mappingService.deactivate(id);
   }
