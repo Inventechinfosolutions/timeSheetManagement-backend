@@ -57,7 +57,13 @@ export class AppraisalMappingService {
     assignerId?: string;
     status?: string;
     paginate?: boolean;
-  }): Promise<{ items: AppraisalMappingResponseDto[]; total: number; page: number; limit: number }> {
+  }): Promise<{
+    items: AppraisalMappingResponseDto[];
+    total: number;
+    page: number;
+    limit: number;
+    mappedEmployeeIds: string[];
+  }> {
     const page = query.page && query.page > 0 ? query.page : 1;
     const limit = query.limit && query.limit > 0 ? query.limit : 50;
     const qb = this.mappingRepo.createQueryBuilder('m');
@@ -83,9 +89,18 @@ export class AppraisalMappingService {
 
     qb.orderBy('m.createdAt', 'DESC');
 
+    // All active mapped employee IDs (for available-to-map filtering) — one response, no second API.
+    const mappedEmployeeIds = await this.getMappedEmployeeIds();
+
     if (query.paginate === false) {
       const items = await qb.getMany();
-      return { items: items.map((e) => this.toDto(e)), total: items.length, page: 1, limit: items.length };
+      return {
+        items: items.map((e) => this.toDto(e)),
+        total: items.length,
+        page: 1,
+        limit: items.length,
+        mappedEmployeeIds,
+      };
     }
 
     const [rows, total] = await qb
@@ -98,6 +113,7 @@ export class AppraisalMappingService {
       total,
       page,
       limit,
+      mappedEmployeeIds,
     };
   }
 
