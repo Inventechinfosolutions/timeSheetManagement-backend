@@ -642,6 +642,101 @@ export class NotesService {
   }
 
   /**
+   * Retrieve paginated child sub-notes for a specific parent note without any DB changes.
+   */
+  async findSubNotes(
+    parentId: number,
+    query: QueryNotesDto,
+    user: any,
+  ): Promise<{ data: Note[]; total: number; page: number; limit: number; totalPages: number; pageSize: number; currentPage: number }> {
+    try {
+      const parentNote = await this.noteRepo.findOne({ where: { id: parentId } });
+      if (!parentNote) {
+        throw new NotFoundException(`Parent note with ID ${parentId} not found`);
+      }
+
+      if (user) {
+        const { userId, employeeId } = this.extractUserInfo(user);
+        const isOwner =
+          (userId && parentNote.userId === userId) ||
+          (employeeId && parentNote.employeeId === employeeId);
+
+        if (!isOwner) {
+          const perms = await resolveInboxPermissionsForUser(this.inboxRepo, parentId, {
+            employeeId,
+            email: user?.email || '',
+          });
+          if (!perms) {
+            throw new ForbiddenException('You do not have access to view sub-notes for this note');
+          }
+        }
+      }
+
+      const page = query.page && Number(query.page) > 0 ? Number(query.page) : 1;
+      const rawLimit = query.limit !== undefined && query.limit !== null ? query.limit : query.pageSize;
+      const limit = rawLimit !== undefined && rawLimit !== null ? Number(rawLimit) : 3;
+      const skip = (page - 1) * limit;
+
+      const qb = this.noteRepo.createQueryBuilder('subNote');
+      qb.where('subNote.parentId = :parentId', { parentId });
+
+      if (query.search && query.search.trim()) {
+        const searchVal = `%${query.search.trim().toLowerCase()}%`;
+        qb.andWhere(
+          '(LOWER(subNote.title) LIKE :searchVal OR LOWER(subNote.createdBy) LIKE :searchVal OR CAST(subNote.id AS CHAR) LIKE :searchVal)',
+          { searchVal },
+        );
+      }
+
+      if (query.fromDate || query.toDate) {
+        const fromStart = query.fromDate ? `${query.fromDate} 00:00:00` : undefined;
+        const toEnd = query.toDate ? `${query.toDate} 23:59:59` : undefined;
+        if (fromStart && toEnd) {
+          qb.andWhere('subNote.createdAt BETWEEN :fromStart AND :toEnd', { fromStart, toEnd });
+        } else if (fromStart) {
+          qb.andWhere('subNote.createdAt >= :fromStart', { fromStart });
+        } else if (toEnd) {
+          qb.andWhere('subNote.createdAt <= :toEnd', { toEnd });
+        }
+      }
+
+      qb.orderBy('subNote.orderIndex', 'ASC')
+        .addOrderBy('subNote.createdAt', 'ASC');
+
+      if (limit > 0) {
+        qb.skip(skip).take(limit);
+      }
+
+      const [data, total] = await qb.getManyAndCount();
+
+      for (const item of data) {
+        item.attachments = await this.documentUploaderService.getAllDocs(
+          EntityType.NOTE,
+          item.id,
+          ReferenceType.NOTE_ATTACHMENT,
+          item.id,
+        );
+      }
+
+      const totalPages = Math.ceil(total / limit) || 1;
+
+      return {
+        data,
+        total,
+        page,
+        limit,
+        totalPages,
+        pageSize: limit,
+        currentPage: page,
+      };
+    } catch (error) {
+      if (error instanceof NotFoundException || error instanceof ForbiddenException) throw error;
+      this.logger.error(`Failed to retrieve sub-notes for note ${parentId}: ${error.message}`, error.stack);
+      throw new InternalServerErrorException('Failed to retrieve sub-notes');
+    }
+  }
+
+  /**
    * Create a sub-note under a specified parent note.
    */
   async createSubNote(

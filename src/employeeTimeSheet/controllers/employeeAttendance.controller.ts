@@ -193,7 +193,7 @@ export class EmployeeAttendanceController {
       const user = req.user;
       const roleUpper = (user?.role || '').toUpperCase();
       const isPrivileged = user && (hasAdminAccess(user) || user.userType === UserType.MANAGER || roleUpper.includes('MNG') || roleUpper.includes(UserType.MANAGER));
-      return await this.employeeAttendanceService.create(createEmployeeAttendanceDto, isPrivileged, user?.loginId);
+      return await this.employeeAttendanceService.create(createEmployeeAttendanceDto, isPrivileged, user?.loginId, user);
     } catch (error) {
       this.logger.error(`Error creating attendance record: ${error.message}`, error.stack);
       throw error;
@@ -568,7 +568,8 @@ export class EmployeeAttendanceController {
         id,
         updateEmployeeAttendanceDto,
         isPrivileged,
-        user?.loginId
+        user?.loginId,
+        user,
       );
     } catch (error) {
       this.logger.error(`Error updating attendance record ${id}: ${error.message}`, error.stack);
@@ -601,7 +602,7 @@ export class EmployeeAttendanceController {
       const user = req.user;
       const roleUpper = (user?.role || '').toUpperCase();
       const isPrivileged = user && (hasAdminAccess(user) || user.userType === UserType.MANAGER || roleUpper.includes('MNG') || roleUpper.includes(UserType.MANAGER));
-      return await this.employeeAttendanceService.createBulk(createDtos, isPrivileged, user?.loginId);
+      return await this.employeeAttendanceService.createBulk(createDtos, isPrivileged, user?.loginId, user);
     } catch (error) {
       this.logger.error(`Error in bulk create/update: ${error.message}`, error.stack);
       throw error;

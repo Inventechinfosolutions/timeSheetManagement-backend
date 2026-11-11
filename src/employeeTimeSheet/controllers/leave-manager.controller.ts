@@ -16,6 +16,7 @@ import dayjs from 'dayjs';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { hasAdminAccess, isCeoUser } from '../../users/utils/admin-access';
 import { LeaveCalculationType } from '../../master/enums/leave-calculation-type.enum';
+import { LeaveApprovalType } from '../../master/enums/leave-approval-type.enum';
 import { LeaveManagerEntryInput, LeaveManagerService } from '../services/leave-manager.service';
 
 @ApiTags('Leave Manager')
@@ -41,6 +42,23 @@ export class LeaveManagerController {
   ) {
     this.assertAdmin(req, true);
     return this.leaveManagerService.updateDepartmentType(id, body?.leaveCalculationType, this.actor(req));
+  }
+
+  @Patch('departments/:id/leave-approval')
+  @ApiOperation({ summary: "Choose who approves a department manager's own requests (AUTO = manager himself too, MANUAL = GM only)" })
+  async updateLeaveApproval(
+    @Req() req: any,
+    @Param('id', ParseIntPipe) id: number,
+    @Body() body: { leaveApproval: LeaveApprovalType },
+  ) {
+    this.assertAdmin(req, true);
+    return this.leaveManagerService.updateLeaveApproval(id, body?.leaveApproval, this.actor(req));
+  }
+
+  @Get('self-approval')
+  @ApiOperation({ summary: 'Whether the logged-in manager can approve his own requests' })
+  async getSelfApproval(@Req() req: any) {
+    return this.leaveManagerService.getSelfApproval(req.user);
   }
 
   @Get('employees')
