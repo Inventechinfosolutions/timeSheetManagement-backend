@@ -7,7 +7,9 @@ import { EmployeeDetails } from '../entities/employeeDetails.entity';
 import { LeaveRequest } from '../entities/leave-request.entity';
 import { MasterDepartment } from '../../master/models/master-department.entity';
 import { LeaveCalculationType } from '../../master/enums/leave-calculation-type.enum';
+import { LeaveApprovalType } from '../../master/enums/leave-approval-type.enum';
 import { UserStatus } from '../../users/enums/user-status.enum';
+import { User } from '../../users/entities/user.entity';
 import { LeaveRequestType } from '../enums/leave-request-type.enum';
 import { LeaveRequestStatus } from '../enums/leave-notification-status.enum';
 import { AttendanceStatus } from '../enums/attendance-status.enum';
@@ -39,19 +41,23 @@ export class LeaveManagerService {
 
     const employeeCounts: { department: string; count: string }[] = await this.employeeDetailsRepository
       .createQueryBuilder('e')
+      .innerJoin(User, 'u', 'u.loginId = e.employeeId')
       .select('e.department', 'department')
       .addSelect('COUNT(*)', 'count')
       .where('e.userStatus = :status', { status: UserStatus.ACTIVE })
+      .andWhere('u.status = :status')
       .groupBy('e.department')
       .getRawMany();
 
     const entryCounts: { department: string; count: string }[] = await this.leaveManagerRepository
       .createQueryBuilder('lm')
       .innerJoin(EmployeeDetails, 'e', 'e.employeeId = lm.employeeId')
+      .innerJoin(User, 'u', 'u.loginId = e.employeeId')
       .select('e.department', 'department')
       .addSelect('COUNT(*)', 'count')
       .where('lm.year = :year', { year })
       .andWhere('e.userStatus = :status', { status: UserStatus.ACTIVE })
+      .andWhere('u.status = :status')
       .groupBy('e.department')
       .getRawMany();
 
@@ -67,6 +73,7 @@ export class LeaveManagerService {
         departmentName: d.departmentName,
         departmentCode: d.departmentCode,
         leaveCalculationType: d.leaveCalculationType || LeaveCalculationType.AUTO,
+        leaveApproval: d.leaveApproval || LeaveApprovalType.MANUAL,
         employeeCount: employeesByDept.get(key) || 0,
         manualEntriesCount: entriesByDept.get(key) || 0,
       };
@@ -87,26 +94,48 @@ export class LeaveManagerService {
     return { id: department.id, departmentName: department.departmentName, leaveCalculationType: type };
   }
 
+  async updateLeaveApproval(id: number, type: LeaveApprovalType, actor?: string) {
+    if (type !== LeaveApprovalType.AUTO && type !== LeaveApprovalType.MANUAL) {
+      throw new BadRequestException('leaveApproval must be AUTO or MANUAL');
+    }
+    const department = await this.departmentRepository.findOne({ where: { id } });
+    if (!department) throw new NotFoundException(`Department ${id} not found`);
+
+    department.leaveApproval = type;
+    department.updatedBy = actor || department.updatedBy;
+    await this.departmentRepository.save(department);
+    this.logger.log(`Department ${department.departmentName} manager leave approval set to ${type} by ${actor || 'unknown'}`);
+    return { id: department.id, departmentName: department.departmentName, leaveApproval: type };
+  }
+
+  async getSelfApproval(user: any) {
+    return { allowed: await this.leaveRequestsService.canManagerSelfApprove(user) };
+  }
+
   async getEmployees(departmentName: string, year: number) {
     const name = (departmentName || '').trim();
     if (!name) throw new BadRequestException('department is required');
     this.assertYear(year);
 
     const department = await this.departmentRepository.findOne({ where: { departmentName: name } });
-    const employees = await this.employeeDetailsRepository.find({
-      where: { department: name as any, userStatus: UserStatus.ACTIVE },
-      select: [
-        'id',
-        'employeeId',
-        'fullName',
-        'designation',
-        'department',
-        'employmentType',
-        'joiningDate',
-        'conversionDate',
-      ],
-      order: { fullName: 'ASC' },
-    });
+    const employees = await this.employeeDetailsRepository
+      .createQueryBuilder('e')
+      .innerJoin(User, 'u', 'u.loginId = e.employeeId')
+      .select([
+        'e.id',
+        'e.employeeId',
+        'e.fullName',
+        'e.designation',
+        'e.department',
+        'e.employmentType',
+        'e.joiningDate',
+        'e.conversionDate',
+      ])
+      .where('e.department = :department', { department: name })
+      .andWhere('e.userStatus = :status', { status: UserStatus.ACTIVE })
+      .andWhere('u.status = :status')
+      .orderBy('e.fullName', 'ASC')
+      .getMany();
 
     const employeeIds = employees.map((e) => e.employeeId);
     const entries = employeeIds.length

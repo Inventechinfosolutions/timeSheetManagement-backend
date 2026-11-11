@@ -65,6 +65,7 @@ import * as ExcelJS from 'exceljs';
 import { LeaveManager } from '../entities/leave-manager.entity';
 import { MasterDepartment } from '../../master/models/master-department.entity';
 import { LeaveCalculationType } from '../../master/enums/leave-calculation-type.enum';
+import { LeaveApprovalType } from '../../master/enums/leave-approval-type.enum';
 
 /** Admin-entered leaves taken for a MANUAL department; system usage after `asOfDate` is added on top. */
 export interface ManualLeaveOverride {
@@ -848,25 +849,81 @@ export class LeaveRequestsService {
 
       // 2. Manager Filter (from Upstream)
       if (managerName || managerId) {
-        const {
-          ManagerMapping,
-        } = require('../../managerMapping/entities/managerMapping.entity');
-        query.leftJoin(ManagerMapping, 'mm', 'mm.employeeId = lr.employeeId');
-        query.andWhere(
-          '(lr.employeeId = :exactManagerId OR (mm.managerName LIKE :managerNameQuery OR mm.managerName LIKE :managerIdQuery))',
-          {
-            exactManagerId: managerId,
-            managerNameQuery: `%${managerName}%`,
-            managerIdQuery: `%${managerId}%`,
-          },
-        );
-        query.andWhere(
-          '(mm.status = :mmStatus OR lr.employeeId = :exactManagerId)',
-          {
-            mmStatus: ManagerMappingStatus.ACTIVE,
-            exactManagerId: managerId,
-          },
-        );
+        const excludeIds = new Set<string>();
+        if (managerId) excludeIds.add(managerId);
+        const managerWhere: any[] = [];
+        if (managerId) {
+          managerWhere.push({ employeeId: managerId }, { internId: managerId });
+        }
+        if (managerName) {
+          managerWhere.push({ fullName: managerName });
+        }
+        if (managerWhere.length > 0) {
+          const mgrEmps = await this.employeeDetailsRepository.find({
+            where: managerWhere,
+            select: ['employeeId', 'internId'],
+          });
+          mgrEmps.forEach((m) => {
+            if (m.employeeId) excludeIds.add(m.employeeId);
+            if (m.internId) excludeIds.add(m.internId);
+          });
+        }
+
+        // Own Request Management asks for the manager's employee id. Show that history.
+        // Team Request Management has no employee id, so keep own leave out (GM reviews it).
+        const viewingOwnHistory =
+          !!employeeId && excludeIds.has(employeeId);
+
+        if (!viewingOwnHistory) {
+          const {
+            ManagerMapping,
+          } = require('../../managerMapping/entities/managerMapping.entity');
+          const matchers: string[] = [];
+          const params: Record<string, string> = {};
+          if (managerName) {
+            matchers.push('mm.managerName LIKE :managerNameQuery');
+            params.managerNameQuery = `%${managerName}%`;
+          }
+          if (managerId) {
+            matchers.push('mm.managerName LIKE :managerIdQuery');
+            params.managerIdQuery = `%${managerId}%`;
+          }
+
+          const ownIds = Array.from(excludeIds);
+          const selfApprove = await this.isSelfApprovalAllowed(ownIds);
+
+          if (selfApprove && ownIds.length > 0) {
+            // AUTO department: team requests plus the manager's own requests
+            const matchSql = matchers.length > 0 ? ` AND (${matchers.join(' OR ')})` : '';
+            query.leftJoin(
+              ManagerMapping,
+              'mm',
+              `mm.employeeId = lr.employeeId AND mm.status = :mmStatus${matchSql}`,
+              { mmStatus: ManagerMappingStatus.ACTIVE, ...params },
+            );
+            query.andWhere(
+              '(mm.employeeId IS NOT NULL OR lr.employeeId IN (:...ownManagerIds))',
+              { ownManagerIds: ownIds },
+            );
+          } else {
+            query.innerJoin(
+              ManagerMapping,
+              'mm',
+              'mm.employeeId = lr.employeeId AND mm.status = :mmStatus',
+              { mmStatus: ManagerMappingStatus.ACTIVE },
+            );
+            if (matchers.length > 0) {
+              query.andWhere(`(${matchers.join(' OR ')})`, params);
+            }
+
+            // MANUAL department: manager's own requests are reviewed by GM only
+            if (ownIds.length > 0) {
+              query.andWhere('lr.employeeId NOT IN (:...excludeManagerIds)', {
+                excludeManagerIds: ownIds,
+              });
+            }
+          }
+        }
       }
 
       if (employeeRole && employeeRole !== 'All') {
@@ -1646,14 +1703,11 @@ export class LeaveRequestsService {
       }[] = [];
       const now = dayjs();
 
-      const roleUpper = (user?.role || '').toUpperCase();
       const isPrivileged =
-        user &&
-        (hasAdminAccess(user) ||
-          user.userType === UserType.MANAGER ||
-          roleUpper.includes(UserType.ADMIN) ||
-          roleUpper.includes('MNG') ||
-          roleUpper.includes(UserType.MANAGER));
+        await this.employeeAttendanceService.canOverrideLockedTimesheet(
+          user,
+          employeeId,
+        );
 
       const statuses = [
         LeaveRequestStatus.REQUESTING_FOR_CANCELLATION,
@@ -2444,6 +2498,74 @@ export class LeaveRequestsService {
     if (blocked || requests.length !== ids.length) {
       throw new ForbiddenException(
         'CEO can review leave, work from home, and client visit only for managers',
+      );
+    }
+  }
+
+  /** True when the department of any of these employee ids allows managers to approve their own requests. */
+  private async isSelfApprovalAllowed(employeeIds: string[]): Promise<boolean> {
+    if (!employeeIds.length) return false;
+    try {
+      const employees = await this.employeeDetailsRepository.find({
+        where: [{ employeeId: In(employeeIds) }, { internId: In(employeeIds) }],
+        select: ['employeeId', 'department'],
+      });
+      const departments = [...new Set(employees.map((e) => e.department).filter(Boolean))];
+      if (!departments.length) return false;
+      const count = await this.masterDepartmentRepository.count({
+        where: { departmentName: In(departments as string[]), leaveApproval: LeaveApprovalType.AUTO },
+      });
+      return count > 0;
+    } catch (error) {
+      this.logger.warn(`[SELF_APPROVAL] Could not resolve leave approval setting: ${error.message}`);
+      return false;
+    }
+  }
+
+  /** Whether the logged-in manager's department lets him approve his own requests. */
+  async canManagerSelfApprove(user: any): Promise<boolean> {
+    const managerId = user?.loginId || user?.employeeId;
+    if (!managerId) return false;
+    return this.isSelfApprovalAllowed([String(managerId)]);
+  }
+
+  async assertManagerCannotReviewOwnRequests(user: any, requestIds: number[]): Promise<void> {
+    const ids = requestIds.filter((id) => Number.isFinite(id));
+    if (!ids.length) return;
+    if (await this.canManagerSelfApprove(user)) return;
+    const managerId = user?.loginId || user?.employeeId;
+    const managerName = user?.aliasLoginName || user?.fullName;
+
+    const ownIds = new Set<string>();
+    if (managerId) ownIds.add(managerId);
+
+    const managerWhere: any[] = [];
+    if (managerId) {
+      managerWhere.push({ employeeId: managerId }, { internId: managerId });
+    }
+    if (managerName) {
+      managerWhere.push({ fullName: managerName });
+    }
+    if (managerWhere.length > 0) {
+      const mgrEmps = await this.employeeDetailsRepository.find({
+        where: managerWhere,
+        select: ['employeeId', 'internId'],
+      });
+      mgrEmps.forEach((m) => {
+        if (m.employeeId) ownIds.add(m.employeeId);
+        if (m.internId) ownIds.add(m.internId);
+      });
+    }
+
+    const requests = await this.leaveRequestRepository.find({
+      where: { id: In(ids) },
+      select: ['id', 'employeeId'],
+    });
+
+    const hasOwnRequest = requests.some((r) => ownIds.has(r.employeeId));
+    if (hasOwnRequest) {
+      throw new ForbiddenException(
+        'Managers cannot approve or reject their own requests. Manager requests are reviewed by General Manager (GM).',
       );
     }
   }
@@ -3616,14 +3738,11 @@ export class LeaveRequestsService {
 
       const isPendingRequest = request.status === LeaveRequestStatus.PENDING;
 
-      const roleUpper = (user?.role || '').toUpperCase();
       const isPrivileged =
-        user &&
-        (hasAdminAccess(user) ||
-          user.userType === UserType.MANAGER ||
-          roleUpper.includes(UserType.ADMIN) ||
-          roleUpper.includes('MNG') ||
-          roleUpper.includes(UserType.MANAGER));
+        await this.employeeAttendanceService.canOverrideLockedTimesheet(
+          user,
+          employeeId,
+        );
 
       const sortedDates = datesToCancel.sort();
       const ranges: { start: string; end: string; count: number }[] = [];
@@ -3820,6 +3939,17 @@ export class LeaveRequestsService {
         }
       } else {
         // --- APPROVED REQUEST CANCELLATION ---
+        if (!isPrivileged) {
+          const now = dayjs();
+          const pastDeadline = datesToCancel.find((date) =>
+            !now.isBefore(dayjs(date).hour(18).minute(30).second(0)),
+          );
+          if (pastDeadline) {
+            throw new ForbiddenException(
+              'Approved leave can only be changed before 6:30 PM on that date. A manager can change approved leave only for employees mapped under them.',
+            );
+          }
+        }
 
         // Calculate total working days being cancelled in this batch
         let cancellingWorkingDays = 0;
@@ -5794,8 +5924,10 @@ export class LeaveRequestsService {
     reviewerName?: string;
     reviewerEmail?: string;
     employeeRole?: string;
+    managerName?: string;
+    managerId?: string;
   }): Promise<{ successCount: number; failCount: number; total: number }> {
-    const { status, department, search, month, year, requestType, ids: explicitIds, reviewerName, reviewerEmail, employeeRole } = params;
+    const { status, department, search, month, year, requestType, ids: explicitIds, reviewerName, reviewerEmail, employeeRole, managerName, managerId } = params;
 
     let ids: number[] = [];
     if (explicitIds && Array.isArray(explicitIds) && explicitIds.length > 0) {
@@ -5819,6 +5951,8 @@ export class LeaveRequestsService {
         year: year || 'All',
         requestType,
         employeeRole,
+        managerName,
+        managerId,
         status: queryStatus,
         page: 1,
         limit: 99999,
