@@ -64,6 +64,9 @@ export class RevealedEvaluationDto {
   @ApiProperty({ required: false })
   managerConfirmation?: boolean;
 
+  @ApiProperty({ required: false })
+  assignerConfirmation?: boolean;
+
   @ApiProperty()
   passwordVerified: boolean;
 

@@ -39,6 +39,7 @@ export interface YearlyQuarterReviewSnapshot {
   reviewOutcome: string | null;
   performanceAction: string | null;
   managerConfirmation: boolean;
+  assignerConfirmation: boolean;
   description: string | null;
   performanceId: number | null;
   performance: YearlyQuarterPerformanceSnapshot | null;

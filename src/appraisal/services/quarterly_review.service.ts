@@ -6,7 +6,6 @@ import {
   Logger,
   HttpException,
   HttpStatus,
-  OnModuleInit,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In } from 'typeorm';
@@ -65,6 +64,8 @@ import {
   YearlyQuarterReviewSnapshot,
   YearlyQuarterReviews,
 } from '../interfaces/yearly_quarter_reviews.interface';
+import { AppraisalMappingService } from './appraisal_mapping.service';
+import { AppraisalAssignerType } from '../entities/appraisal_mapping.entity';
 
 export interface EnrichedQuarterlyReview extends QuarterlyReview {
   performanceDetails?: (EmployeePerformance & {
@@ -82,7 +83,7 @@ export interface EnrichedQuarterlyReview extends QuarterlyReview {
 }
 
 @Injectable()
-export class QuarterlyReviewService implements OnModuleInit {
+export class QuarterlyReviewService {
   private readonly logger = new Logger(QuarterlyReviewService.name);
 
   constructor(
@@ -98,99 +99,8 @@ export class QuarterlyReviewService implements OnModuleInit {
     private readonly noticeService: AppraisalNoticeService,
     private readonly usersService: UsersService,
     private readonly financialYearService: MasterFinancialYearService,
+    private readonly appraisalMappingService: AppraisalMappingService,
   ) {}
-
-  async onModuleInit() {
-    await this.ensureQuarterColumnSchema();
-  }
-
-  private async ensureQuarterColumnSchema(): Promise<void> {
-    try {
-      try {
-        await this.reviewRepository.query('DROP INDEX `IDX_review_fy_quarter` ON `quaterly_review`');
-      } catch {
-        // Index does not exist
-      }
-
-      await this.reviewRepository.query(
-        'ALTER TABLE `quaterly_review` MODIFY COLUMN `quarter` VARCHAR(500) NOT NULL',
-      );
-
-      try {
-        await this.performanceRepository.query(
-          'ALTER TABLE `employee_performance` MODIFY COLUMN `quarter` VARCHAR(500) NOT NULL',
-        );
-      } catch {
-        // Ignore
-      }
-
-      const hasReviewPeriod = await this.reviewRepository.query(
-        `SELECT COUNT(*) as cnt FROM information_schema.columns
-         WHERE table_schema = DATABASE() AND table_name = 'quaterly_review' AND column_name = 'reviewPeriod'`,
-      );
-      if (Number(hasReviewPeriod?.[0]?.cnt || 0) === 0) {
-        await this.reviewRepository.query(
-          "ALTER TABLE `quaterly_review` ADD COLUMN `reviewPeriod` ENUM('QUARTERLY', 'YEARLY') NOT NULL DEFAULT 'QUARTERLY' AFTER `quarter`",
-        );
-      }
-
-      // Normalize yearly quarter storage to ["Q1","Q2","Q3","Q4"] once (one row per employee + FY)
-      await this.reviewRepository.query(
-        `UPDATE \`quaterly_review\`
-         SET \`quarter\` = '["Q1","Q2","Q3","Q4"]', \`reviewPeriod\` = 'YEARLY'
-         WHERE \`quarter\` = 'YEARLY'
-            OR \`reviewPeriod\` = 'YEARLY'
-            OR \`quarter\` LIKE '{"Q1"%'
-            OR \`quarter\` LIKE '["Q1"%'
-            OR \`quarter\` LIKE '{"Q1":{%'
-            OR \`quarter\` LIKE '{"Q1": null%'`,
-      );
-
-      try {
-        await this.reviewRepository.query(
-          `DELETE r2 FROM \`quaterly_review\` r2
-           INNER JOIN \`quaterly_review\` r1
-             ON r1.employeeId = r2.employeeId
-             AND r1.financialYear = r2.financialYear
-             AND r1.id < r2.id
-           WHERE r1.reviewPeriod = 'YEARLY'
-             AND r2.reviewPeriod = 'YEARLY'`,
-        );
-      } catch {
-        // Ignore
-      }
-
-      try {
-        await this.performanceRepository.query(
-          `DELETE ep2 FROM \`employee_performance\` ep2
-           INNER JOIN \`employee_performance\` ep1
-             ON ep1.employeeId = ep2.employeeId
-             AND ep1.financialYear = ep2.financialYear
-             AND ep1.id < ep2.id`,
-        );
-      } catch {
-        // Ignore
-      }
-
-      try {
-        await this.performanceRepository.query(
-          `UPDATE \`employee_performance\`
-           SET \`quarter\` = '["Q1","Q2","Q3","Q4"]'
-           WHERE \`quarter\` = 'YEARLY'
-              OR \`quarter\` LIKE '{"Q1"%'
-              OR \`quarter\` LIKE '["Q1"%'
-              OR \`quarter\` LIKE '{"Q1":{%'
-              OR \`quarter\` LIKE '{"Q1": null%'`,
-        );
-      } catch {
-        // Ignore
-      }
-
-      this.logger.log('Successfully verified quarter column supports JSON storage and cleaned duplicates');
-    } catch (err: any) {
-      this.logger.warn(`Could not automatically modify quarter column schema: ${err.message}`);
-    }
-  }
 
   private toReviewQuarter(quarter: string): QuaterlyEnum {
     switch (quarter) {
@@ -299,6 +209,7 @@ export class QuarterlyReviewService implements OnModuleInit {
       reviewOutcome: review.reviewOutcome,
       performanceAction: review.performanceAction,
       managerConfirmation: Boolean(review.managerConfirmation),
+      assignerConfirmation: Boolean(review.assignerConfirmation),
       description: review.description,
       performanceId: performance?.id ?? review.performanceId,
       performance: performance
@@ -883,7 +794,52 @@ export class QuarterlyReviewService implements OnModuleInit {
       if (evalDto.careerGrowthRecommendation !== undefined) review.careerGrowthRecommendation = evalDto.careerGrowthRecommendation;
       if (evalDto.reviewOutcome !== undefined) review.reviewOutcome = evalDto.reviewOutcome;
       if (evalDto.performanceAction !== undefined) review.performanceAction = evalDto.performanceAction;
-      if (evalDto.managerConfirmation !== undefined) review.managerConfirmation = evalDto.managerConfirmation;
+      // Dual flow (safe default = old COMPLETED path when no employee-assigner mapping):
+      // EMPLOYEE assigner first submit → AWAITING_MANAGER_FINAL_REVIEW (+ notify manager).
+      // Manager final (or manager-assigner / no mapping) → COMPLETED as before.
+      const appraisalMapping = await this.appraisalMappingService.findActiveByEmployeeId(
+        review.employeeId,
+      );
+      const alreadyAwaitingManager =
+        review.status === QuarterlyReviewStatus.AWAITING_MANAGER_FINAL_REVIEW;
+      const evaluationFinished = this.isEvaluationFinished(review.status);
+      const sessionEmployeeId = user?.loginId
+        ? await this.resolveSessionEmployeeId(String(user.loginId))
+        : null;
+      // Employee-assigner cannot edit after forward or after manager completes.
+      if (
+        appraisalMapping?.assignerType === AppraisalAssignerType.EMPLOYEE &&
+        sessionEmployeeId &&
+        sessionEmployeeId === appraisalMapping.assignerId &&
+        (alreadyAwaitingManager || evaluationFinished)
+      ) {
+        throw new ForbiddenException(
+          alreadyAwaitingManager
+            ? 'Evaluation is awaiting manager final comment. Only the manager can complete it.'
+            : 'Evaluation is completed. Only the manager can edit it.',
+        );
+      }
+      const isEmployeeAssignerFlow =
+        !!appraisalMapping &&
+        appraisalMapping.assignerType === AppraisalAssignerType.EMPLOYEE &&
+        !alreadyAwaitingManager &&
+        !evaluationFinished;
+
+      // Confirmations: assigner first-pass → assignerConfirmation; manager final → managerConfirmation.
+      if (isEmployeeAssignerFlow) {
+        if (evalDto.assignerConfirmation !== undefined) {
+          review.assignerConfirmation = evalDto.assignerConfirmation;
+        } else if (evalDto.managerConfirmation) {
+          review.assignerConfirmation = true;
+        }
+      } else {
+        if (evalDto.assignerConfirmation !== undefined) {
+          review.assignerConfirmation = evalDto.assignerConfirmation;
+        }
+        if (evalDto.managerConfirmation !== undefined) {
+          review.managerConfirmation = evalDto.managerConfirmation;
+        }
+      }
 
       if (evalDto.isDraft) {
         review.status = QuarterlyReviewStatus.EVALUATION_IN_PROGRESS;
@@ -908,6 +864,45 @@ export class QuarterlyReviewService implements OnModuleInit {
         await this.markPerformanceEvaluationInProgress(saved);
         await this.propagateYearlyReview(saved);
         await this.annualService.syncEmployeeAnnualRating(saved.employeeId, saved.financialYear);
+        return this.toEvaluationPatchResponse(saved, evalDto, anyScoreSent);
+      }
+
+      if (isEmployeeAssignerFlow) {
+        // Strip manager comment if an employee-assigner somehow sent it.
+        if (evalDto.managerComment !== undefined) {
+          review.managerComment = null;
+        }
+        review.managerConfirmation = false;
+        review.status = QuarterlyReviewStatus.AWAITING_MANAGER_FINAL_REVIEW;
+        review.reviewedDate = null;
+        const awaitEntry = createAuditEntry({
+          employeeId: review.employeeId,
+          managerId: review.managerId || review.assignerId,
+          quarter: review.quarter,
+          financialYear: review.financialYear,
+          createdBy: review.assignerId || 'ADMIN',
+          createdDate: review.assignedDate,
+          assignedDate: review.assignedDate,
+          deadlineDate: review.deadlineDate,
+          submittedDate: new Date(),
+          submittedBy: appraisalMapping.assignerId,
+          status: QuarterlyReviewStatus.AWAITING_MANAGER_FINAL_REVIEW,
+          lastModifiedBy: appraisalMapping.assignerId,
+          details: `Assigner submitted evaluation (score: ${review.finalRating ?? 'N/A'}); awaiting manager final comment`,
+        });
+        review.auditHistory = appendAuditEntry(review.auditHistory, awaitEntry);
+        const saved = await this.reviewRepository.save(review);
+        await this.syncPerformanceAudit(saved, awaitEntry);
+        await this.markPerformanceEvaluationInProgress(saved);
+        await this.propagateYearlyReview(saved);
+        await this.annualService.syncEmployeeAnnualRating(saved.employeeId, saved.financialYear);
+        await this.noticeService.notifyManagerOfFinalReviewNeeded({
+          employeeId: saved.employeeId,
+          employeeName: saved.employeeName || saved.employeeId,
+          quarter: saved.quarter,
+          financialYear: saved.financialYear,
+          assignerName: appraisalMapping.assignerName || appraisalMapping.assignerId,
+        });
         return this.toEvaluationPatchResponse(saved, evalDto, anyScoreSent);
       }
 
@@ -1052,8 +1047,17 @@ export class QuarterlyReviewService implements OnModuleInit {
       });
     }
 
-    // Deduplicate by ID
-    const uniqueReviews = Array.from(new Map(reviews.map((r) => [r.id, r])).values());
+    // Deduplicate by ID; hide other-assigner team rows until awaiting manager final / completed.
+    const managerVisibleFromOtherAssigner = new Set<string>([
+      QuarterlyReviewStatus.AWAITING_MANAGER_FINAL_REVIEW,
+      QuarterlyReviewStatus.COMPLETED,
+      QuarterlyReviewStatus.REVIEWED,
+    ]);
+    const uniqueReviews = Array.from(new Map(reviews.map((r) => [r.id, r])).values()).filter(
+      (r) =>
+        r.assignerId === managerId ||
+        managerVisibleFromOtherAssigner.has(String(r.status || '')),
+    );
 
     const completed = uniqueReviews.filter((r) => this.isEvaluationFinished(r.status));
     const pending = uniqueReviews.filter((r) => !this.isEvaluationFinished(r.status));
@@ -1199,6 +1203,7 @@ export class QuarterlyReviewService implements OnModuleInit {
       reviewOutcome: review.reviewOutcome || '',
       performanceAction: review.performanceAction || '',
       managerConfirmation: Boolean(review.managerConfirmation),
+      assignerConfirmation: Boolean(review.assignerConfirmation),
       passwordVerified: true,
     };
     return revealed;
@@ -1211,7 +1216,21 @@ export class QuarterlyReviewService implements OnModuleInit {
       throw new NotFoundException(`Quarterly review with ID ${id} not found.`);
     }
     await this.assertCanEvaluateReview(review.employeeId, user);
-    return this.toRevealedEvaluation(review);
+    const revealed = this.toRevealedEvaluation(review);
+    // Hide manager comment from employee-assigner until manager final step.
+    const mapping = await this.appraisalMappingService.findActiveByEmployeeId(review.employeeId);
+    const sessionEmployeeId = user?.loginId
+      ? await this.resolveSessionEmployeeId(String(user.loginId))
+      : null;
+    if (
+      mapping?.assignerType === AppraisalAssignerType.EMPLOYEE &&
+      sessionEmployeeId === mapping.assignerId &&
+      review.status !== QuarterlyReviewStatus.AWAITING_MANAGER_FINAL_REVIEW &&
+      review.status !== QuarterlyReviewStatus.COMPLETED
+    ) {
+      revealed.managerComment = '';
+    }
+    return revealed;
   }
 
   private toRevealedEvaluation(review: QuarterlyReview): RevealedEvaluationDto {
@@ -1245,6 +1264,7 @@ export class QuarterlyReviewService implements OnModuleInit {
       reviewOutcome: review.reviewOutcome || '',
       performanceAction: review.performanceAction || '',
       managerConfirmation: Boolean(review.managerConfirmation),
+      assignerConfirmation: Boolean(review.assignerConfirmation),
       passwordVerified: true,
       status: review.status,
     };
@@ -1304,6 +1324,9 @@ export class QuarterlyReviewService implements OnModuleInit {
     }
     if (evalDto.managerConfirmation !== undefined) {
       response.managerConfirmation = Boolean(review.managerConfirmation);
+    }
+    if (evalDto.assignerConfirmation !== undefined) {
+      response.assignerConfirmation = Boolean(review.assignerConfirmation);
     }
 
     if (
@@ -1511,10 +1534,21 @@ export class QuarterlyReviewService implements OnModuleInit {
           .map((m) => m.employeeId)
           .filter((id): id is string => Boolean(id) && id !== assignerId);
 
+        // Own assignments always visible. Team rows assigned by someone else (employee assigner)
+        // only after AWAITING_MANAGER_FINAL_REVIEW or finished (COMPLETED/REVIEWED).
+        const managerVisibleFromOtherAssigner = [
+          QuarterlyReviewStatus.AWAITING_MANAGER_FINAL_REVIEW,
+          QuarterlyReviewStatus.COMPLETED,
+          QuarterlyReviewStatus.REVIEWED,
+        ];
         if (teamEmployeeIds.length > 0) {
           qb.andWhere(
-            '(review.assignerId = :assignerId OR review.employeeId IN (:...teamEmployeeIds))',
-            { assignerId, teamEmployeeIds },
+            `(review.assignerId = :assignerId OR (
+              review.employeeId IN (:...teamEmployeeIds)
+              AND review.assignerId != :assignerId
+              AND review.status IN (:...managerVisibleFromOtherAssigner)
+            ))`,
+            { assignerId, teamEmployeeIds, managerVisibleFromOtherAssigner },
           );
         } else {
           qb.andWhere('review.assignerId = :assignerId', { assignerId });
@@ -1642,6 +1676,7 @@ export class QuarterlyReviewService implements OnModuleInit {
       'reviewOutcome',
       'performanceAction',
       'managerConfirmation',
+      'assignerConfirmation',
     ] as const;
     hidden.forEach((key) => {
       delete (copy as any)[key];
@@ -1669,6 +1704,7 @@ export class QuarterlyReviewService implements OnModuleInit {
               reviewOutcome: null,
               performanceAction: null,
               managerConfirmation: false,
+              assignerConfirmation: false,
             }
           : null;
       copy.yearlyQuarterReviews = {
@@ -2241,13 +2277,13 @@ export class QuarterlyReviewService implements OnModuleInit {
     review.deadlineDate = this.calendarDate(newDeadlineStr);
     review.status = wasSubmitted
       ? QuarterlyReviewStatus.EDIT_GRANTED
-      : QuarterlyReviewStatus.ASSIGNED;
+      : QuarterlyReviewStatus.REASSIGNED;
     if (!wasSubmitted) {
       review.reassignCount = (review.reassignCount || 0) + 1;
     }
     if (dto.reason?.trim()) {
-      const note = `[Re-assigned on ${todayDateStr}]: ${dto.reason.trim()}`;
-      review.description = review.description ? `${review.description}\n${note}` : note;
+      // Keep only the latest reassignment note in description (no prior text).
+      review.description = `[Re-assigned on ${todayDateStr}]: ${dto.reason.trim()}`;
     }
     const reassignEntry = createAuditEntry({
       employeeId: review.employeeId,
@@ -2277,6 +2313,7 @@ export class QuarterlyReviewService implements OnModuleInit {
         const [year, month, day] = newDeadlineStr.split('-').map(Number);
         performance.editAllowedUntil = new Date(year, month - 1, day, 23, 59, 59, 0);
       } else {
+        // Employee self-review side stays NOT_STARTED so they can fill again.
         performance.status = EmployeePerformanceStatus.NOT_STARTED;
         performance.editAllowedUntil = null;
       }

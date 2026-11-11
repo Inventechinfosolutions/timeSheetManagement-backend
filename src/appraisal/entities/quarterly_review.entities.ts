@@ -185,6 +185,10 @@ export class QuarterlyReview extends BaseEntity {
   @Column({ type: 'boolean', default: false })
   managerConfirmation!: boolean;
 
+  /** Employee-assigner declaration on first evaluation submit (before manager final). */
+  @Column({ type: 'boolean', default: false })
+  assignerConfirmation!: boolean;
+
   // Linked employee self-assessment submission
   @Column({ type: 'int', nullable: true })
   performanceId!: number | null;

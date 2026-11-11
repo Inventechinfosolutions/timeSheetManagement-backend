@@ -58,6 +58,8 @@ export const LOCKED_PERFORMANCE_STATUSES: readonly EmployeePerformanceStatus[] =
 
 export const SUBMITTABLE_PERFORMANCE_STATUSES: readonly EmployeePerformanceStatus[] = [
   EmployeePerformanceStatus.NOT_STARTED,
+  EmployeePerformanceStatus.ASSIGNED,
+  EmployeePerformanceStatus.REASSIGNED,
   EmployeePerformanceStatus.DRAFT,
   EmployeePerformanceStatus.PENDING,
   EmployeePerformanceStatus.IN_PROGRESS,
@@ -68,6 +70,8 @@ export const SUBMITTABLE_PERFORMANCE_STATUSES: readonly EmployeePerformanceStatu
 
 export const DRAFT_ON_SAVE_STATUSES: readonly EmployeePerformanceStatus[] = [
   EmployeePerformanceStatus.NOT_STARTED,
+  EmployeePerformanceStatus.ASSIGNED,
+  EmployeePerformanceStatus.REASSIGNED,
   EmployeePerformanceStatus.PENDING,
   EmployeePerformanceStatus.IN_PROGRESS,
 ];
