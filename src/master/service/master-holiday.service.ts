@@ -163,7 +163,40 @@ export class MasterHolidayService {
     }
   }
 
-  async findOne(id: number): Promise<any> {
+
+async findByYear(year: number): Promise<any[]> {
+  this.logger.log(`Fetching holidays for year: ${year}`);
+
+  try {
+    const holidays = await this.holidayRepository
+      .createQueryBuilder('holiday')
+      .where('YEAR(holiday.date) = :year', { year })
+      .orderBy('holiday.date', 'ASC')
+      .getMany();
+
+    this.logger.log(
+      `Retrieved ${holidays.length} holidays for year ${year}`,
+    );
+
+    return holidays.map(holiday =>
+      MasterHolidayMapper.toResponseDto(holiday),
+    );
+
+  } catch (error) {
+    this.logger.error(
+      `Failed to fetch holidays for year ${year}: ${error.message}`,
+      error.stack,
+    );
+
+    if (error instanceof HttpException) throw error;
+
+    throw new HttpException(
+      `Failed to fetch holidays: ${error.message}`,
+      HttpStatus.INTERNAL_SERVER_ERROR,
+    );
+  }
+}
+   async findOne(id: number): Promise<any> {
     this.logger.log(`Fetching holiday with ID: ${id}`);
     try {
       const holiday = await this.holidayRepository.findOne({ where: { id } });
@@ -183,6 +216,7 @@ export class MasterHolidayService {
       );
     }
   }
+  
 
   async findByDateRange(fromDate: string, toDate: string): Promise<any[]> {
     this.logger.log(`Fetching holidays from ${fromDate} to ${toDate}`);
