@@ -259,7 +259,13 @@ export class EmployeeDetailsService {
     includeSelf: boolean = false,
     userStatus?: string,
     role?: string,
-  ): Promise<{ data: EmployeeDetails[]; totalItems: number }> {
+  ): Promise<{
+    data: EmployeeDetails[];
+    totalItems: number;
+    page: number;
+    limit: number;
+    totalPages: number;
+  }> {
     try {
       this.logger.log('Fetching employees with filter:', {
         search,
@@ -368,7 +374,15 @@ export class EmployeeDetailsService {
         user: undefined // Remove the nested user object to keep response clean
       }));
 
-      return { data: enrichedData, totalItems };
+      const totalPages = totalItems > 0 ? Math.ceil(totalItems / limit) : 0;
+
+      return {
+        data: enrichedData,
+        totalItems,
+        page,
+        limit,
+        totalPages,
+      };
     } catch (error) {
       this.logger.error(
         `Error fetching employees: ${error.message}`,
@@ -578,7 +592,13 @@ export class EmployeeDetailsService {
     managerName?: string,
     managerId?: string,
     includeSelf: boolean = false,
-  ): Promise<{ data: any[]; totalItems: number }> {
+  ): Promise<{
+    data: any[];
+    totalItems: number;
+    page: number;
+    limit: number;
+    totalPages: number;
+  }> {
     try {
       this.logger.log('Fetching employees for timesheet list with filter:', {
         search,
@@ -808,7 +828,15 @@ export class EmployeeDetailsService {
         }));
       }
 
-      return { data, totalItems };
+      const totalPages = totalItems > 0 ? Math.ceil(totalItems / limit) : 0;
+
+      return {
+        data,
+        totalItems,
+        page,
+        limit,
+        totalPages,
+      };
     } catch (error) {
       this.logger.error(`Error fetching timesheet list: ${error.message}`, error.stack);
       throw new HttpException('Failed to fetch timesheet list', HttpStatus.INTERNAL_SERVER_ERROR);
