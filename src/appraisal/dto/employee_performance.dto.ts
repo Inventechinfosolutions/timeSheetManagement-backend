@@ -1,0 +1,649 @@
+import {
+  IsNotEmpty,
+  IsEnum,
+  IsString,
+  IsDateString,
+  IsOptional,
+  IsBoolean,
+  IsInt,
+  IsObject,
+  Min,
+  Max,
+  IsArray,
+  ArrayMinSize,
+  ValidateIf,
+  ValidateNested,
+} from 'class-validator';
+import { ApiProperty, ApiPropertyOptional, PartialType } from '@nestjs/swagger';
+import { Type } from 'class-transformer';
+import { QuaterlyEnum, ReviewPeriod } from '../enums/quarterly_review.enums';
+import {
+  EmployeePerformanceStatus,
+  RateCompanyEnvironmentEnum,
+} from '../enums/employee_performance.enums';
+import { PerformanceAttachment } from '../interfaces/employee_performance.interface';
+
+export class PerformanceProjectAttachmentDto {
+  @IsString()
+  @IsNotEmpty()
+  fileName: string;
+
+  @IsOptional()
+  @IsString()
+  fileUrl?: string;
+
+  @IsOptional()
+  @IsInt()
+  fileSize?: number;
+
+  @IsOptional()
+  @IsString()
+  fileType?: string;
+
+  @IsString()
+  @IsNotEmpty()
+  objectKey: string;
+}
+
+export class PerformanceProjectDto {
+  @ApiProperty({ example: 'Timesheet Workflow' })
+  @IsNotEmpty()
+  @IsString()
+  projectName: string;
+
+  @ApiProperty({ example: 'Delivered the appraisal flow' })
+  @ValidateIf((project) => project.isDraft !== true)
+  @IsString()
+  @IsNotEmpty()
+  description: string;
+
+  @ApiPropertyOptional({ example: 'Resolved the quarter window' })
+  @IsOptional()
+  @IsString()
+  challenge?: string;
+
+  @ApiProperty({ example: 'Frontend Developer' })
+  @ValidateIf((project) => project.isDraft !== true)
+  @IsNotEmpty()
+  @IsString()
+  projectRole: string;
+
+  @ApiProperty({ example: 'Individual Contributor' })
+  @ValidateIf((project) => project.isDraft !== true)
+  @IsNotEmpty()
+  @IsString()
+  responsibilityType: string;
+
+  @ApiProperty({ example: 'Project responsibilities' })
+  @ValidateIf((project) => project.isDraft !== true)
+  @IsNotEmpty()
+  @IsString()
+  keyResponsibilities: string;
+
+  @ApiProperty({ example: 'Challenges faced' })
+  @ValidateIf((project) => project.isDraft !== true)
+  @IsNotEmpty()
+  @IsString()
+  challengesFaced: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  solutionsImplemented?: string;
+
+  @ApiProperty({ example: 'Key achievements' })
+  @ValidateIf((project) => project.isDraft !== true)
+  @IsNotEmpty()
+  @IsString()
+  keyAchievementsOutcomes: string;
+
+  @ApiProperty({ type: [String] })
+  @IsArray()
+  @ValidateIf((project) => project.isDraft !== true)
+  @ArrayMinSize(1)
+  technologiesUsed: string[];
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  leadershipQualities?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  clientReviewFeedback?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsBoolean()
+  isDraft?: boolean;
+
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => PerformanceProjectAttachmentDto)
+  attachments?: PerformanceProjectAttachmentDto[];
+}
+
+export class CreateEmployeePerformanceDto {
+  @ApiProperty({ example: 'EMP-10021', description: 'Employee ID' })
+  @IsNotEmpty()
+  @IsString()
+  employeeId: string;
+
+  @ApiProperty({
+    enum: QuaterlyEnum,
+    example: QuaterlyEnum.Q1,
+    description: 'Quarter (Q1, Q2, Q3, Q4)',
+  })
+  @IsNotEmpty()
+  @IsEnum(QuaterlyEnum)
+  quarter: QuaterlyEnum;
+
+  @ApiProperty({
+    example: '2025-2026',
+    description: 'Financial year (e.g. 2025-2026)',
+  })
+  @IsNotEmpty()
+  @IsString()
+  financialYear: string;
+
+  // --- Section A: Key Deliverables (Stepper 1) ---
+  @ApiPropertyOptional({ example: 'Backend lead, API design, testing', description: 'Responsibilities handled' })
+  @IsOptional()
+  @IsString()
+  responsibilitiesHandled?: string;
+
+  @ApiPropertyOptional({ example: 'Deployed 12 REST endpoints and Swagger specs', description: 'Deliverables completed' })
+  @IsOptional()
+  @IsString()
+  deliverablesCompleted?: string;
+
+  // --- Section B: Achievements (Stepper 2) ---
+  @ApiPropertyOptional({ example: 'Reduced API response times by 35%', description: 'Key accomplishments' })
+  @IsOptional()
+  @IsString()
+  keyAccomplishments?: string;
+
+  // --- Section C: Challenges (Stepper 3) ---
+  @ApiPropertyOptional({ example: 'Challenges faced' })
+  @IsOptional()
+  @IsString()
+  challengesFaced?: string;
+
+  // --- Section D: Learning & Development (Stepper 4) ---
+  @ApiPropertyOptional({ example: 'NestJS CQRS, Docker containerization', description: 'Skills acquired' })
+  @IsOptional()
+  @IsString()
+  skillsAcquired?: string;
+
+  // --- Section E: Goals for Next Quarter (Stepper 5) ---
+  @ApiPropertyOptional({ example: 'Complete multi-tenant database isolation', description: 'Planned deliverables' })
+  @IsOptional()
+  @IsString()
+  plannedDeliverables?: string;
+
+  @ApiPropertyOptional({ example: 'Achieve AWS Solutions Architect associate', description: 'Career development goals' })
+  @IsOptional()
+  @IsString()
+  careerDevelopmentGoals?: string;
+
+  // --- Attachments (Stepper 6) ---
+  @ApiPropertyOptional({ description: 'List of uploaded files (PDF, DOCX, XLSX)' })
+  @IsOptional()
+  @IsArray()
+  attachments?: PerformanceAttachment[];
+
+  // --- Legacy Compatibility Fields (Optional) ---
+  @ApiPropertyOptional({ description: 'Legacy overview' })
+  @IsOptional()
+  @IsString()
+  overview?: string;
+
+  @ApiPropertyOptional({ type: [PerformanceProjectDto] })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => PerformanceProjectDto)
+  projects?: PerformanceProjectDto[];
+
+  @ApiPropertyOptional({ description: 'Legacy metric' })
+  @IsOptional()
+  @IsInt()
+  crossDepartmentCollaboration?: number;
+
+  @ApiPropertyOptional({ description: 'Legacy metric' })
+  @IsOptional()
+  @IsInt()
+  mentorshipKnowledgeSharing?: number;
+
+  @ApiPropertyOptional({ description: 'Legacy metric' })
+  @IsOptional()
+  @IsInt()
+  reliabilityAccountability?: number;
+
+  @ApiPropertyOptional({ description: 'Legacy metric' })
+  @IsOptional()
+  @IsInt()
+  communicationTransparency?: number;
+
+  @ApiPropertyOptional({ description: 'Legacy metric' })
+  @IsOptional()
+  @IsInt()
+  peerSupportTeamSpirit?: number;
+
+  @ApiPropertyOptional({ description: 'Legacy metric' })
+  @IsOptional()
+  @IsInt()
+  adaptabilityInitiative?: number;
+
+  @ApiPropertyOptional({ type: [String], description: 'List of learning goals' })
+  @IsOptional()
+  @IsArray()
+  learningGoals?: string[];
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  feedbackOnWorkCulture?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  workLifeBalance?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  suggestionsForImprovement?: string;
+
+  @ApiPropertyOptional({ enum: RateCompanyEnvironmentEnum })
+  @IsOptional()
+  @IsEnum(RateCompanyEnvironmentEnum)
+  rateCompanyEnvironment?: RateCompanyEnvironmentEnum;
+
+  @ApiPropertyOptional({
+    enum: EmployeePerformanceStatus,
+    default: EmployeePerformanceStatus.DRAFT,
+  })
+  @IsOptional()
+  @IsEnum(EmployeePerformanceStatus)
+  status?: EmployeePerformanceStatus;
+
+  // --- Step 1: Role & Quarter Overview ---
+  @ApiPropertyOptional({ description: 'Overall performance summary' })
+  @IsOptional()
+  @IsString()
+  overallPerformanceSummary?: string;
+
+  @ApiPropertyOptional({ description: 'Key quarterly highlights' })
+  @IsOptional()
+  @IsString()
+  keyHighlights?: string;
+
+  @ApiPropertyOptional({ description: 'Major impactful contributions' })
+  @IsOptional()
+  @IsString()
+  majorContributions?: string;
+
+  @ApiPropertyOptional({ description: 'Areas for improvement next quarter' })
+  @IsOptional()
+  @IsString()
+  areasForImprovement?: string;
+
+  // --- Step 3: Teamwork & Collaboration ---
+  @ApiPropertyOptional({ description: 'Team collaboration summary' })
+  @IsOptional()
+  @IsString()
+  teamCollaborationSummary?: string;
+
+  @ApiPropertyOptional({ description: 'Cross-team contributions' })
+  @IsOptional()
+  @IsString()
+  crossTeamContributions?: string;
+
+  @ApiPropertyOptional({ description: 'Knowledge sharing and mentoring' })
+  @IsOptional()
+  @IsString()
+  knowledgeSharingMentoring?: string;
+
+  @ApiPropertyOptional({ description: 'Specific teamwork examples' })
+  @IsOptional()
+  @IsString()
+  teamworkExamples?: string;
+
+  @ApiPropertyOptional({ description: 'Teamwork dimension ratings' })
+  @IsOptional()
+  teamRatings?: Record<string, number>;
+
+  @ApiPropertyOptional({ description: 'Communication & Coordination description' })
+  @IsOptional()
+  @IsString()
+  communicationDescription?: string;
+
+  @ApiPropertyOptional({ description: 'Ownership description' })
+  @IsOptional()
+  @IsString()
+  ownershipDescription?: string;
+
+  @ApiPropertyOptional({ description: 'Collaboration description' })
+  @IsOptional()
+  @IsString()
+  collaborationDescription?: string;
+
+  @ApiPropertyOptional({ description: 'Problem Solving description' })
+  @IsOptional()
+  @IsString()
+  problemSolvingDescription?: string;
+
+  @ApiPropertyOptional({ description: 'Leadership description' })
+  @IsOptional()
+  @IsString()
+  leadershipDescription?: string;
+
+  @ApiPropertyOptional({ description: 'Adaptability description' })
+  @IsOptional()
+  @IsString()
+  adaptabilityDescription?: string;
+
+  // --- Step 4: Continuous Learning & Goals ---
+  @ApiPropertyOptional({ description: 'Certifications and courses completed' })
+  @IsOptional()
+  @IsString()
+  certificationsOrCourses?: string;
+
+  @ApiPropertyOptional({ description: 'Skills targeted to improve' })
+  @IsOptional()
+  @IsString()
+  skillsToImprove?: string;
+
+  @ApiPropertyOptional({ description: 'Support or training required' })
+  @IsOptional()
+  @IsString()
+  supportOrTrainingRequired?: string;
+
+  @ApiPropertyOptional({ description: 'Next quarter learning goals' })
+  @IsOptional()
+  @IsString()
+  nextQuarterLearningGoals?: string;
+
+  // --- Step 5: Environment ---
+  @ApiPropertyOptional({ description: 'Work environment satisfaction rating (1-5)' })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(5)
+  workEnvironmentRating?: number;
+
+  @ApiPropertyOptional({ description: 'Tools and resources rating (1-5)' })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(5)
+  toolsResourcesRating?: number;
+
+  @ApiPropertyOptional({ description: 'Manager support rating (1-5)' })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(5)
+  managerSupportRating?: number;
+
+  @ApiPropertyOptional({ description: 'Challenges affecting productivity' })
+  @IsOptional()
+  @IsString()
+  challengesAffectingProductivity?: string;
+
+  // --- Step 6: Review & Final Submission ---
+  @ApiPropertyOptional({ description: 'Overall self-rating (1-5)' })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(5)
+  overallSelfRating?: number;
+
+  @ApiPropertyOptional({ description: 'Overall employee comments' })
+  @IsOptional()
+  @IsString()
+  overallEmployeeComments?: string;
+
+  @ApiPropertyOptional({ description: 'Career growth interests' })
+  @IsOptional()
+  @IsString()
+  careerGrowthInterests?: string;
+
+  @ApiPropertyOptional({ description: 'Confirmation of review accuracy' })
+  @IsOptional()
+  @IsBoolean()
+  confirmationAccepted?: boolean;
+
+  @ApiPropertyOptional({ description: 'Step 1 JSON' })
+  @IsOptional()
+  @IsObject()
+  stepOverview?: Record<string, unknown>;
+
+  @ApiPropertyOptional({ description: 'Step 3 JSON' })
+  @IsOptional()
+  @IsObject()
+  stepTeamwork?: Record<string, unknown>;
+
+  @ApiPropertyOptional({ description: 'Step 4 JSON' })
+  @IsOptional()
+  @IsObject()
+  stepLearning?: Record<string, unknown>;
+
+  @ApiPropertyOptional({ description: 'Step 5 JSON' })
+  @IsOptional()
+  @IsObject()
+  stepEnvironment?: Record<string, unknown>;
+
+  @ApiPropertyOptional({ description: 'Step 6 JSON' })
+  @IsOptional()
+  @IsObject()
+  stepFinalReview?: Record<string, unknown>;
+}
+
+export class UpdatePerformanceProjectDto {
+  @IsOptional()
+  @IsString()
+  projectName?: string;
+
+  @IsOptional()
+  @IsString()
+  description?: string;
+
+  @IsOptional()
+  @IsString()
+  challenge?: string;
+
+  @IsOptional()
+  @IsString()
+  projectRole?: string;
+
+  @IsOptional()
+  @IsString()
+  responsibilityType?: string;
+
+  @IsOptional()
+  @IsString()
+  keyResponsibilities?: string;
+
+  @IsOptional()
+  @IsString()
+  challengesFaced?: string;
+
+  @IsOptional()
+  @IsString()
+  solutionsImplemented?: string;
+
+  @IsOptional()
+  @IsString()
+  keyAchievementsOutcomes?: string;
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  technologiesUsed?: string[];
+
+  @IsOptional()
+  @IsString()
+  leadershipQualities?: string;
+
+  @IsOptional()
+  @IsString()
+  clientReviewFeedback?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  isDraft?: boolean;
+
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => PerformanceProjectAttachmentDto)
+  attachments?: PerformanceProjectAttachmentDto[];
+}
+
+export class UpdateEmployeePerformanceDto extends PartialType(CreateEmployeePerformanceDto) {
+  @ApiPropertyOptional({ description: 'Clear every saved step. Used when the employee resets an empty form.' })
+  @IsOptional()
+  @IsBoolean()
+  clearSteps?: boolean;
+}
+
+export class SaveDraftDto extends CreateEmployeePerformanceDto { }
+
+export class SubmitReviewDto {
+  @ApiProperty({ example: 'EMP-10021' })
+  @IsNotEmpty()
+  @IsString()
+  employeeId: string;
+
+  @ApiProperty({ enum: QuaterlyEnum, example: QuaterlyEnum.Q1 })
+  @IsNotEmpty()
+  @IsEnum(QuaterlyEnum)
+  quarter: QuaterlyEnum;
+
+  @ApiProperty({ example: '2025-2026' })
+  @IsNotEmpty()
+  @IsString()
+  financialYear: string;
+}
+
+export class RequestEditPermissionDto {
+  @ApiPropertyOptional({ example: 1, description: 'EmployeePerformance record ID' })
+  @IsOptional()
+  @IsInt()
+  performanceId?: number;
+
+  @ApiPropertyOptional({ example: 1, description: 'QuarterlyReview record ID' })
+  @IsOptional()
+  @IsInt()
+  reviewId?: number;
+
+  @ApiProperty({ example: 'EMP-10021' })
+  @IsNotEmpty()
+  @IsString()
+  employeeId: string;
+
+  @ApiPropertyOptional({ example: 'Need to update section B deliverables with latest metrics' })
+  @IsOptional()
+  @IsString()
+  reason?: string;
+}
+
+export class RespondEditPermissionDto {
+  @ApiProperty({ example: 1, description: 'EmployeePerformance record ID' })
+  @IsNotEmpty()
+  @IsInt()
+  performanceId: number;
+
+  @ApiPropertyOptional({ example: 1, description: 'Legacy requestId alias' })
+  @IsOptional()
+  @IsInt()
+  requestId?: number;
+
+  @ApiProperty({ example: 'MGR-005', description: 'Manager employee ID' })
+  @IsNotEmpty()
+  @IsString()
+  managerId: string;
+
+  @ApiProperty({ example: true, description: 'true to approve edit, false to reject' })
+  @IsNotEmpty()
+  approved: boolean;
+
+  @ApiPropertyOptional({ example: 'Approved. You have 24 hours to update.' })
+  @IsOptional()
+  @IsString()
+  responseNote?: string;
+
+  @ApiPropertyOptional({
+    example: '2026-10-08T18:00:00.000Z',
+    description: 'Deadline date/time until which the employee is allowed to edit',
+  })
+  @IsOptional()
+  @IsDateString()
+  editAllowedUntil?: string;
+}
+
+export class QueryEmployeePerformanceDto {
+  @ApiPropertyOptional({ example: 'EMP-10021', description: 'Filter by employee ID' })
+  @IsOptional()
+  @IsString()
+  employeeId?: string;
+
+  @ApiPropertyOptional({ example: 'John Doe', description: 'Filter by employee name' })
+  @IsOptional()
+  @IsString()
+  name?: string;
+
+  @ApiPropertyOptional({ example: 'IT', description: 'Filter by department' })
+  @IsOptional()
+  @IsString()
+  department?: string;
+
+  @ApiPropertyOptional({ enum: QuaterlyEnum, description: 'Filter by quarter (Q1, Q2, Q3, Q4)' })
+  @IsOptional()
+  @IsEnum(QuaterlyEnum)
+  quarter?: QuaterlyEnum;
+
+  @ApiPropertyOptional({ enum: ReviewPeriod, description: 'YEARLY returns the single yearly assignment with Q1-Q4 JSON' })
+  @IsOptional()
+  @IsEnum(ReviewPeriod)
+  reviewPeriod?: ReviewPeriod;
+
+  @ApiPropertyOptional({ example: '2025-2026', description: 'Filter by financial year' })
+  @IsOptional()
+  @IsString()
+  financialYear?: string;
+
+  @ApiPropertyOptional({ enum: EmployeePerformanceStatus, description: 'Filter by status' })
+  @IsOptional()
+  @IsEnum(EmployeePerformanceStatus)
+  status?: EmployeePerformanceStatus;
+
+  @ApiPropertyOptional({
+    example: 'Timesheet',
+    description: 'Search keyword',
+  })
+  @IsOptional()
+  @IsString()
+  q?: string;
+
+  @ApiPropertyOptional({ example: 1, description: 'Page number' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  page?: number;
+
+  @ApiPropertyOptional({ example: 10, description: 'Items per page' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  limit?: number;
+}
+
+export class SearchEmployeePerformanceDto extends QueryEmployeePerformanceDto { }
+

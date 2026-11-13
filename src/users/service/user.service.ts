@@ -105,7 +105,26 @@ export class UsersService {
           }
         } catch (error) {
           this.logger.warn(`Failed to enrich user ${id} with employee details: ${error.message}`);
-          // fail silently, return user as is
+        }
+      } else if (
+        user &&
+        user.userType !== UserType.CEO &&
+        String(user.role || '').toUpperCase() !== UserType.CEO
+      ) {
+        try {
+          const employee = await this.employeeDetailsRepository.findOne({
+            where: [
+              { employeeId: user.loginId },
+              { email: user.loginId },
+            ],
+            select: ['designation', 'role'],
+          });
+          const detected = String(employee?.role || employee?.designation || '').toUpperCase();
+          if (detected === UserType.CEO) {
+            user.userType = UserType.CEO;
+          }
+        } catch (error) {
+          this.logger.warn(`Failed to enrich user ${id} with employee details: ${error.message}`);
         }
       }
 

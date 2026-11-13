@@ -1,0 +1,1940 @@
+import {
+  Injectable,
+  NotFoundException,
+  BadRequestException,
+  ForbiddenException,
+  Logger,
+  HttpException,
+  HttpStatus,
+} from '@nestjs/common';
+import { Readable } from 'stream';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository, In } from 'typeorm';
+import { EmployeePerformance } from '../entities/employee_performance.entity';
+import { QuarterlyReview } from '../entities/quarterly_review.entities';
+import { EmployeeDetails } from '../../employeeTimeSheet/entities/employeeDetails.entity';
+import { ManagerMapping } from '../../managerMapping/entities/managerMapping.entity';
+import {
+  CreateEmployeePerformanceDto,
+  QueryEmployeePerformanceDto,
+  SearchEmployeePerformanceDto,
+  UpdateEmployeePerformanceDto,
+  SubmitReviewDto,
+  RequestEditPermissionDto,
+  RespondEditPermissionDto,
+  PerformanceProjectDto,
+  UpdatePerformanceProjectDto,
+} from '../dto/employee_performance.dto';
+import { EmployeePerformanceStatus } from '../enums/employee_performance.enums';
+import { YearlyQuarterReviews } from '../interfaces/yearly_quarter_reviews.interface';
+import { UserType } from '../../users/enums/user-type.enum';
+import { isCeoOrGmUser } from '../../users/utils/admin-access';
+import { QuarterlyReviewStatus, ReviewPeriod, QuaterlyEnum } from '../enums/quarterly_review.enums';
+import { AppraisalNoticeService } from './appraisal_notice.service';
+import { QuarterlyReviewService } from './quarterly_review.service';
+import { AnnualAppraisalService } from './annual_appraisal.service';
+import { AppraisalMappingService } from './appraisal_mapping.service';
+import { AppraisalAssignerType } from '../entities/appraisal_mapping.entity';
+import { MasterQuaterlyService } from '../../master/service/master-quaterly.service';
+import { DocumentUploaderService } from '../../common/document-uploader/services/document-uploader.service';
+import { DocumentMetaInfo, EntityType, ReferenceType } from '../../common/document-uploader/models/documentmetainfo.model';
+import { BufferedFile } from '../../common/s3-client/file.model';
+import { PerformanceAttachment, PerformanceProject, PerformanceProjectAttachment } from '../interfaces/employee_performance.interface';
+import {
+  APPRAISAL_EDIT_WINDOW_HOURS,
+  EDIT_REQUEST_DEFAULT_REASON,
+  DRAFT_ON_SAVE_STATUSES,
+  LOCKED_PERFORMANCE_STATUSES,
+  SUBMITTABLE_PERFORMANCE_STATUSES,
+  appraisalWindowMs,
+} from '../constants/appraisal.constants';
+import {
+  deadlineHasArrived,
+  isLockedReviewStatus,
+  isOneDayBeforeDeadline,
+  reviewAccessFlags,
+  shouldCloseRenewedAccess,
+} from '../utils/review-access';
+import { createAuditEntry, appendAuditEntry } from '../utils/audit-history.helper';
+import { AppraisalAuditEntry } from '../interfaces/appraisal_audit.interface';
+import {
+  applyPerformanceSteps,
+  applyStepPatch,
+  clearPerformanceSteps,
+  computeResumeStep,
+  overlayPerformanceView,
+  PerformanceStepSlug,
+  PERFORMANCE_STEP_SLUGS,
+  readPerformanceProjects,
+  readStepData,
+  savePerformanceProjects,
+  stepText,
+} from '../utils/performance-steps';
+
+export interface PerformanceStepApiResponse {
+  id: number;
+  status: EmployeePerformanceStatus;
+  canEdit?: boolean;
+  canRequestEdit?: boolean;
+  /** First incomplete step (1–6) from DB. */
+  step?: number;
+  /** Step payload. For final-review, also includes prior steps for the review summary. */
+  data: ReturnType<typeof readStepData> | Record<string, unknown> | null;
+}
+
+export interface PerformanceListMeta {
+  totalItems: number;
+  itemCount: number;
+  itemsPerPage: number;
+  totalPages: number;
+  currentPage: number;
+}
+
+export interface EnrichedEmployeePerformance extends EmployeePerformance {
+  averageCollaborationScore?: number | null;
+  employeeName?: string | null;
+  department?: string | null;
+  designation?: string | null;
+  canRequestEdit?: boolean;
+  remainingRequestHours?: number;
+  canEdit?: boolean;
+  isEditWindowActive?: boolean;
+  assignedBy?: string | null;
+  assignedDate?: Date | string | null;
+  deadlineDate?: Date | string | null;
+  description?: string | null;
+  reviewId?: number | null;
+  reviewPeriod?: ReviewPeriod;
+  yearlyQuarterReviews?: YearlyQuarterReviews | null;
+  /** First incomplete appraisal step (1–6), derived from saved step JSON in DB. */
+  step?: number;
+}
+
+/** Yearly quarter column — each quarter listed once: ["Q1","Q2","Q3","Q4"]. */
+const YEARLY_QUARTER_VALUE = ['Q1', 'Q2', 'Q3', 'Q4'] as const;
+
+function isYearlyQuarterValue(quarter: unknown): boolean {
+  if (quarter == null) return false;
+  if (Array.isArray(quarter)) {
+    return quarter.some((item) => String(item).toUpperCase().includes('Q'));
+  }
+  if (typeof quarter === 'object') return true; // legacy { Q1: "Q1", ... }
+  const value = String(quarter).trim();
+  const upper = value.toUpperCase();
+  if (
+    upper === QuaterlyEnum.Q1 ||
+    upper === QuaterlyEnum.Q2 ||
+    upper === QuaterlyEnum.Q3 ||
+    upper === QuaterlyEnum.Q4
+  ) {
+    return false;
+  }
+  return (
+    upper === 'YEARLY' ||
+    upper === String(QuaterlyEnum.YEARLY).toUpperCase() ||
+    upper.includes('YEARLY') ||
+    (upper.includes('Q1') && upper.includes('Q2') && upper.includes('Q3') && upper.includes('Q4')) ||
+    (value.startsWith('{') && value.includes('Q1')) ||
+    (value.startsWith('[') && value.includes('Q1'))
+  );
+}
+
+@Injectable()
+export class EmployeePerformanceService {
+  private readonly logger = new Logger(EmployeePerformanceService.name);
+
+  constructor(
+    @InjectRepository(EmployeePerformance)
+    private readonly performanceRepository: Repository<EmployeePerformance>,
+    @InjectRepository(QuarterlyReview)
+    private readonly reviewRepository: Repository<QuarterlyReview>,
+    @InjectRepository(EmployeeDetails)
+    private readonly employeeDetailsRepository: Repository<EmployeeDetails>,
+    @InjectRepository(ManagerMapping)
+    private readonly managerMappingRepository: Repository<ManagerMapping>,
+    private readonly noticeService: AppraisalNoticeService,
+    private readonly documentUploaderService: DocumentUploaderService,
+    private readonly quarterlyReviewService: QuarterlyReviewService,
+    private readonly annualService: AnnualAppraisalService,
+    private readonly masterQuaterlyService: MasterQuaterlyService,
+    private readonly appraisalMappingService: AppraisalMappingService,
+  ) { }
+
+  /** Format YYYY-MM-DD (or Date) → DD-MM-YYYY for overview review-period banner. */
+  private toDisplayDate(value?: string | Date | null): string {
+    if (!value) return '';
+    if (value instanceof Date) {
+      if (Number.isNaN(value.getTime())) return '';
+      const day = String(value.getDate()).padStart(2, '0');
+      const month = String(value.getMonth() + 1).padStart(2, '0');
+      return `${day}-${month}-${value.getFullYear()}`;
+    }
+    const text = String(value).trim();
+    const iso = /^(\d{4})-(\d{2})-(\d{2})/.exec(text);
+    if (iso) return `${iso[3]}-${iso[2]}-${iso[1]}`;
+    return text;
+  }
+
+  /**
+   * Resolve default Q start/end from master quarters + financial year.
+   * Used when stepOverview is null so GET /overview still returns period dates.
+   */
+  private async resolveDefaultReviewPeriod(
+    quarter: unknown,
+    financialYear: string,
+  ): Promise<{ reviewPeriodStart: string; reviewPeriodEnd: string }> {
+    const fromYearMatch = String(financialYear || '').match(/^(\d{4})/);
+    const fromYear = fromYearMatch ? parseInt(fromYearMatch[1], 10) : new Date().getFullYear();
+    const toYear = fromYear + 1;
+
+    if (isYearlyQuarterValue(quarter)) {
+      return {
+        reviewPeriodStart: `01-04-${fromYear}`,
+        reviewPeriodEnd: `31-03-${toYear}`,
+      };
+    }
+
+    const label = String(quarter || '').trim().toUpperCase();
+    try {
+      const master = await this.masterQuaterlyService.findByQuarter(label, fromYear);
+      return {
+        reviewPeriodStart: this.toDisplayDate(master.startDate),
+        reviewPeriodEnd: this.toDisplayDate(master.endDate),
+      };
+    } catch {
+      // Fiscal-year fallback if master lookup fails
+      if (label === 'Q1') return { reviewPeriodStart: `01-04-${fromYear}`, reviewPeriodEnd: `30-06-${fromYear}` };
+      if (label === 'Q2') return { reviewPeriodStart: `01-07-${fromYear}`, reviewPeriodEnd: `30-09-${fromYear}` };
+      if (label === 'Q3') return { reviewPeriodStart: `01-10-${fromYear}`, reviewPeriodEnd: `31-12-${fromYear}` };
+      if (label === 'Q4') return { reviewPeriodStart: `01-01-${toYear}`, reviewPeriodEnd: `31-03-${toYear}` };
+      return { reviewPeriodStart: '', reviewPeriodEnd: '' };
+    }
+  }
+
+  /**
+   * FR-03: Save Draft (Create or Resume Draft)
+   * An employee can save incomplete submission and resume later.
+   */
+  async saveDraft(dto: CreateEmployeePerformanceDto): Promise<EnrichedEmployeePerformance> {
+    return this.writePerformance(dto, true);
+  }
+
+  private async writePerformance(
+    dto: CreateEmployeePerformanceDto,
+    asDraft: boolean,
+  ): Promise<EnrichedEmployeePerformance> {
+    try {
+      this.logger.log(
+        `Saving performance for: ${dto.employeeId}, Quarter: ${dto.quarter}, FY: ${dto.financialYear}, draft: ${asDraft}`,
+      );
+
+      const isYearly = isYearlyQuarterValue(dto.quarter);
+
+      let record: EmployeePerformance | null = null;
+      if (isYearly) {
+        const records = await this.performanceRepository.find({
+          where: {
+            employeeId: dto.employeeId,
+            financialYear: dto.financialYear,
+          },
+        });
+        record = records.find((r) => isYearlyQuarterValue(r.quarter)) || null;
+      } else {
+        record = await this.performanceRepository.findOne({
+          where: {
+            employeeId: dto.employeeId,
+            quarter: dto.quarter,
+            financialYear: dto.financialYear,
+          },
+        });
+      }
+
+      const requestedStatus = dto.status;
+      let nextStatus = requestedStatus || (asDraft ? EmployeePerformanceStatus.DRAFT : EmployeePerformanceStatus.NOT_STARTED);
+
+      if (record) {
+        record = await this.lockIfGrantExpired(record);
+
+        if (LOCKED_PERFORMANCE_STATUSES.includes(record.status)) {
+          throw new BadRequestException(
+            'This quarterly submission is locked. You must request edit permission.',
+          );
+        }
+        await this.assertEmployeeCanChange(record);
+        const keepStatus =
+          record.status === EmployeePerformanceStatus.EDIT_GRANTED;
+        if (keepStatus) {
+          nextStatus = record.status;
+        } else if (requestedStatus) {
+          nextStatus = requestedStatus;
+        } else if (record.status === EmployeePerformanceStatus.NOT_STARTED) {
+          nextStatus = asDraft
+            ? EmployeePerformanceStatus.DRAFT
+            : EmployeePerformanceStatus.NOT_STARTED;
+        } else if (asDraft || DRAFT_ON_SAVE_STATUSES.includes(record.status)) {
+          nextStatus = EmployeePerformanceStatus.DRAFT;
+        } else {
+          nextStatus = record.status;
+        }
+
+        applyPerformanceSteps(record, { ...dto });
+        if (isYearly) {
+          record.quarter = [...YEARLY_QUARTER_VALUE];
+        }
+        record.status = nextStatus;
+        record.lastModifiedDate = new Date();
+        record.lastModifiedBy = dto.employeeId;
+      } else {
+        record = this.performanceRepository.create({
+          employeeId: dto.employeeId,
+          quarter: isYearly ? [...YEARLY_QUARTER_VALUE] : dto.quarter,
+          financialYear: dto.financialYear,
+          status: nextStatus,
+          lastModifiedDate: new Date(),
+          lastModifiedBy: dto.employeeId,
+        });
+        applyPerformanceSteps(record, { ...dto });
+      }
+
+      const saved = await this.performanceRepository.save(record);
+      await this.linkPerformanceToReview(saved.employeeId, saved.quarter, saved.financialYear, saved.id);
+      let reviewForDraft = await this.findReviewForPerformance(
+        saved.employeeId,
+        saved.quarter,
+        saved.financialYear,
+      );
+      if (reviewForDraft) {
+        if (isYearly) {
+          reviewForDraft.quarter = [...YEARLY_QUARTER_VALUE];
+          reviewForDraft.reviewPeriod = ReviewPeriod.YEARLY;
+        }
+        if (
+          reviewForDraft.status === QuarterlyReviewStatus.DRAFT ||
+          reviewForDraft.status === QuarterlyReviewStatus.NOT_STARTED
+        ) {
+          reviewForDraft.status = QuarterlyReviewStatus.ASSIGNED;
+        }
+        await this.reviewRepository.save(reviewForDraft);
+      }
+
+      const draftAuditEntry = createAuditEntry({
+        employeeId: saved.employeeId,
+        managerId: reviewForDraft?.managerId || null,
+        quarter: saved.quarter,
+        financialYear: saved.financialYear,
+        createdBy: reviewForDraft?.assignerId || 'ADMIN',
+        createdDate: reviewForDraft?.assignedDate,
+        assignedDate: reviewForDraft?.assignedDate,
+        deadlineDate: reviewForDraft?.deadlineDate,
+        submittedDate: saved.submittedAt || reviewForDraft?.submittedDate,
+        submittedBy: (saved.submittedAt || reviewForDraft?.submittedDate) ? saved.employeeId : null,
+        status: saved.status,
+        lastModifiedBy: dto.employeeId,
+        details: 'Employee saved self-assessment draft',
+      });
+      saved.auditHistory = appendAuditEntry(saved.auditHistory, draftAuditEntry);
+      await this.performanceRepository.save(saved);
+      if (reviewForDraft) {
+        reviewForDraft.auditHistory = appendAuditEntry(reviewForDraft.auditHistory, draftAuditEntry);
+        await this.reviewRepository.save(reviewForDraft);
+      }
+      const effectiveDraftDeadline = saved.editAllowedUntil || reviewForDraft?.deadlineDate;
+      if (
+        effectiveDraftDeadline &&
+        SUBMITTABLE_PERFORMANCE_STATUSES.includes(saved.status) &&
+        isOneDayBeforeDeadline(effectiveDraftDeadline, new Date())
+      ) {
+        void this.noticeService.notifyOneDayDeadlineReminder({
+          employeeId: saved.employeeId,
+          employeeName: reviewForDraft?.employeeName || saved.employeeId,
+          quarter: saved.quarter,
+          financialYear: saved.financialYear,
+          deadlineDate: effectiveDraftDeadline,
+        }).catch((err) => {
+          this.logger.warn(`Could not dispatch 1-day reminder notice on draft save: ${err.message}`);
+        });
+      }
+
+      await this.quarterlyReviewService.propagateYearlyPerformance(saved);
+      const enriched = await this.enrichPerformancesWithEmployeeDetails([saved]);
+      return enriched[0];
+    } catch (error) {
+      const caught = this.caughtError(error);
+      this.logger.error(`Error saving draft performance: ${caught.message}`, caught.stack);
+      if (error instanceof HttpException) throw error;
+      throw new HttpException(
+        `Failed to save draft: ${caught.message}`,
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
+  }
+
+  /**
+   * FR-04: Submit Review
+   * Validates mandatory fields, locks editing, changes status to SUBMITTED.
+   */
+  async submitReview(id: number, dto: SubmitReviewDto): Promise<EnrichedEmployeePerformance> {
+    try {
+      this.logger.log(
+        `Submitting review ${id} for: ${dto.employeeId}, Quarter: ${dto.quarter}, FY: ${dto.financialYear}`,
+      );
+
+      let record = await this.performanceRepository.findOne({ where: { id } });
+
+      if (!record) {
+        throw new NotFoundException(
+          'No draft found for this quarter. Please fill in the submission before submitting.',
+        );
+      }
+      const isRecordYearly = isYearlyQuarterValue(record.quarter);
+      const isDtoYearly = isYearlyQuarterValue(dto.quarter);
+      const isYearly = isRecordYearly || isDtoYearly;
+
+      const quarterMatches =
+        record.quarter === dto.quarter ||
+        (isRecordYearly && isDtoYearly);
+
+      if (
+        record.employeeId !== dto.employeeId ||
+        !quarterMatches ||
+        record.financialYear !== dto.financialYear
+      ) {
+        throw new BadRequestException('This submission does not match the selected quarter.');
+      }
+
+      record = await this.lockIfGrantExpired(record);
+      await this.assertEmployeeCanChange(record);
+
+      if (
+        record.status === EmployeePerformanceStatus.SUBMITTED ||
+        record.status === EmployeePerformanceStatus.RE_SUBMITTED
+      ) {
+        throw new BadRequestException('This quarterly submission is already submitted.');
+      }
+      if (
+        record.status === EmployeePerformanceStatus.REVIEWED ||
+        record.status === EmployeePerformanceStatus.COMPLETED
+      ) {
+        throw new BadRequestException('This review has already been evaluated by your manager.');
+      }
+      if (!SUBMITTABLE_PERFORMANCE_STATUSES.includes(record.status)) {
+        throw new BadRequestException(
+          'This quarterly submission is locked. You must request edit permission.',
+        );
+      }
+      const resubmitting = record.status === EmployeePerformanceStatus.EDIT_GRANTED;
+
+      // Validate Section requirements
+      const savedProjects = readPerformanceProjects(record).filter(
+        (project) => project.projectName?.trim() && project.description?.trim(),
+      );
+      if (savedProjects.length === 0) {
+        throw new BadRequestException('Add at least one project before submission.');
+      }
+      if (!stepText(record.stepOverview?.overallPerformanceSummary)) {
+        throw new BadRequestException('Overall performance summary is required before submission.');
+      }
+      if (!stepText(record.stepLearning?.skillsAcquired)) {
+        throw new BadRequestException('Skills learned during this period is required before submission.');
+      }
+      if (!stepText(record.stepLearning?.nextQuarterLearningGoals)) {
+        throw new BadRequestException('Learning goals for next quarter are required before submission.');
+      }
+
+      const submittedAt = new Date();
+      if (isYearly) {
+        record.quarter = [...YEARLY_QUARTER_VALUE];
+      }
+      record.status = resubmitting
+        ? EmployeePerformanceStatus.RE_SUBMITTED
+        : EmployeePerformanceStatus.SUBMITTED;
+      record.submittedAt = submittedAt;
+      record.lastModifiedDate = new Date();
+      record.lastModifiedBy = dto.employeeId;
+      record.editAllowedUntil = null;
+
+      const saved = await this.performanceRepository.save(record);
+
+      // Always update the existing assigned review row (same table/columns). Never create a duplicate yearly row.
+      let review = await this.findReviewForPerformance(
+        dto.employeeId,
+        isYearly ? YEARLY_QUARTER_VALUE : dto.quarter,
+        dto.financialYear,
+      );
+
+      const submitEntry = createAuditEntry({
+        employeeId: saved.employeeId,
+        managerId: review?.managerId || null,
+        quarter: saved.quarter,
+        financialYear: saved.financialYear,
+        createdBy: review?.assignerId || 'ADMIN',
+        createdDate: review?.assignedDate,
+        assignedDate: review?.assignedDate,
+        deadlineDate: review?.deadlineDate,
+        submittedDate: submittedAt,
+        submittedBy: dto.employeeId,
+        status: saved.status,
+        lastModifiedBy: dto.employeeId,
+        details: resubmitting
+          ? 'Employee re-submitted self-assessment after editing'
+          : 'Employee submitted self-assessment',
+      });
+      saved.auditHistory = appendAuditEntry(saved.auditHistory, submitEntry);
+      await this.performanceRepository.save(saved);
+
+      const reviewStatus = QuarterlyReviewStatus.PERFORMANCE_RECEIVED;
+      if (review) {
+        if (isYearly) {
+          review.quarter = [...YEARLY_QUARTER_VALUE];
+          review.reviewPeriod = ReviewPeriod.YEARLY;
+        }
+        review.submittedDate = submittedAt;
+        review.performanceId = saved.id;
+        review.status = reviewStatus;
+        review.auditHistory = appendAuditEntry(review.auditHistory, submitEntry);
+        await this.reviewRepository.save(review);
+      } else {
+        // Auto-create QuarterlyReview master only if manager never assigned one
+        const emp = await this.employeeDetailsRepository.findOne({
+          where: { employeeId: dto.employeeId },
+        });
+        const mapping = await this.managerMappingRepository.findOne({
+          where: { employeeId: dto.employeeId },
+        });
+
+        review = this.reviewRepository.create({
+          employeeId: dto.employeeId,
+          employeeName: emp?.fullName || dto.employeeId,
+          department: emp?.department || '',
+          designation: emp?.designation || '',
+          financialYear: dto.financialYear,
+          quarter: isYearly ? [...YEARLY_QUARTER_VALUE] : dto.quarter,
+          reviewPeriod: isYearly ? ReviewPeriod.YEARLY : ReviewPeriod.QUARTERLY,
+          status: QuarterlyReviewStatus.PERFORMANCE_RECEIVED,
+          submittedDate: submittedAt,
+          performanceId: saved.id,
+          assignerId: mapping?.managerId || 'MANAGER',
+          managerName: mapping?.managerName || 'Reporting Manager',
+          auditHistory: [submitEntry],
+        });
+        await this.reviewRepository.save(review);
+      }
+
+      const employee = await this.employeeDetailsRepository.findOne({
+        where: { employeeId: dto.employeeId },
+      });
+      const notice = {
+        employeeId: dto.employeeId,
+        employeeName: employee?.fullName || dto.employeeId,
+        quarter: dto.quarter,
+        financialYear: dto.financialYear,
+      };
+      await this.noticeService.notifyEmployeeOfSubmission(notice);
+      // Appraisal mapping: employee-assigner gets submission notice; otherwise keep old manager notice.
+      const appraisalMapping = await this.appraisalMappingService.findActiveByEmployeeId(dto.employeeId);
+      if (
+        appraisalMapping &&
+        appraisalMapping.assignerType === AppraisalAssignerType.EMPLOYEE
+      ) {
+        await this.noticeService.notifyAssignerOfSubmission({
+          ...notice,
+          assignerId: appraisalMapping.assignerId,
+        });
+      } else {
+        await this.noticeService.notifyManagerOfSubmission(notice);
+      }
+      await this.quarterlyReviewService.propagateYearlyPerformance(saved);
+      await this.annualService.syncEmployeeAnnualRating(saved.employeeId, saved.financialYear);
+
+      const enriched = await this.enrichPerformancesWithEmployeeDetails([saved]);
+      return enriched[0];
+    } catch (error) {
+      const caught = this.caughtError(error);
+      this.logger.error(`Error submitting review: ${caught.message}`, caught.stack);
+      if (error instanceof HttpException) throw error;
+      throw new HttpException(
+        `Failed to submit review: ${caught.message}`,
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
+  }
+
+  /**
+   * Request Edit Permission within 1 Day (Option A: Direct on EmployeePerformance)
+   * Allows employee to ask manager for edit access after submission.
+   */
+  async requestEditPermission(dto: RequestEditPermissionDto): Promise<EnrichedEmployeePerformance> {
+    try {
+      let record = dto.performanceId
+        ? await this.performanceRepository.findOne({
+          where: { id: dto.performanceId, employeeId: dto.employeeId },
+        })
+        : null;
+
+      let review = dto.reviewId
+        ? await this.reviewRepository.findOne({ where: { id: dto.reviewId } })
+        : null;
+
+      if (!record && review) {
+        const isYearlyReview = isYearlyQuarterValue(review.quarter) || review.reviewPeriod === ReviewPeriod.YEARLY;
+        if (isYearlyReview) {
+          const performances = await this.performanceRepository.find({
+            where: {
+              employeeId: review.employeeId,
+              financialYear: review.financialYear,
+            },
+          });
+          record = performances.find((r) => isYearlyQuarterValue(r.quarter)) || null;
+        } else {
+          record = await this.performanceRepository.findOne({
+            where: {
+              employeeId: review.employeeId,
+              quarter: review.quarter,
+              financialYear: review.financialYear,
+            },
+          });
+        }
+        if (!record) {
+          record = this.performanceRepository.create({
+            employeeId: review.employeeId,
+            quarter: isYearlyReview ? [...YEARLY_QUARTER_VALUE] : review.quarter,
+            financialYear: review.financialYear,
+            status: EmployeePerformanceStatus.LOCKED,
+          });
+          record = await this.performanceRepository.save(record);
+          review.performanceId = record.id;
+          if (isYearlyReview) {
+            review.quarter = [...YEARLY_QUARTER_VALUE];
+            review.reviewPeriod = ReviewPeriod.YEARLY;
+          }
+          await this.reviewRepository.save(review);
+        }
+      }
+
+      if (!record) {
+        throw new NotFoundException('Performance submission not found.');
+      }
+
+      if (!review) {
+        review = await this.findReviewForPerformance(
+          record.employeeId,
+          record.quarter,
+          record.financialYear,
+        );
+      }
+
+      if (
+        review?.status === QuarterlyReviewStatus.COMPLETED ||
+        review?.status === QuarterlyReviewStatus.REVIEWED
+      ) {
+        throw new BadRequestException('This review is completed. You can only view it.');
+      }
+      if (record.status === EmployeePerformanceStatus.RE_SUBMITTED) {
+        throw new BadRequestException('This submission cannot be edited again.');
+      }
+      if (
+        record.status === EmployeePerformanceStatus.COMPLETED ||
+        record.status === EmployeePerformanceStatus.REVIEWED
+      ) {
+        throw new BadRequestException('This review is completed. You can only view it.');
+      }
+      if (record.status === EmployeePerformanceStatus.REQUESTED_FOR_EDIT) {
+        throw new BadRequestException(
+          'An edit request is already pending approval from your manager.',
+        );
+      }
+
+      const renewalCount = review?.reassignCount || 0;
+      const deadlineReached = deadlineHasArrived(review?.deadlineDate);
+      const unsubmitted =
+        isLockedReviewStatus(record.status) ||
+        record.status === EmployeePerformanceStatus.NOT_STARTED ||
+        record.status === EmployeePerformanceStatus.DRAFT ||
+        record.status === EmployeePerformanceStatus.ASSIGNED ||
+        record.status === EmployeePerformanceStatus.PENDING ||
+        record.status === EmployeePerformanceStatus.IN_PROGRESS;
+
+      if (record.status === EmployeePerformanceStatus.SUBMITTED) {
+        const submittedAt = record.submittedAt || record.createdAt;
+        const diffMs = Date.now() - new Date(submittedAt).getTime();
+        if (diffMs > appraisalWindowMs(APPRAISAL_EDIT_WINDOW_HOURS)) {
+          throw new BadRequestException(
+            'Edit request window has expired. You can request an edit within 42 hours of submission.',
+          );
+        }
+        record.status = EmployeePerformanceStatus.REQUESTED_FOR_EDIT;
+        record.editRequestedAt = new Date();
+        record.editRequestReason = dto.reason || EDIT_REQUEST_DEFAULT_REASON;
+      } else if (unsubmitted && deadlineReached) {
+        if (renewalCount >= 1) {
+          await this.closeRenewedAccess(review, record);
+          throw new BadRequestException(
+            'This review was already reassigned. Access and editing stay closed.',
+          );
+        }
+        const access = reviewAccessFlags({
+          status: record.status,
+          deadlineDate: review?.deadlineDate,
+          submittedAt: record.submittedAt,
+          editAllowedUntil: record.editAllowedUntil,
+          reassignCount: renewalCount,
+          requestWindowMs: appraisalWindowMs(APPRAISAL_EDIT_WINDOW_HOURS),
+          lockedAt: review?.updatedAt,
+        });
+        if (!access.canRequestEdit) {
+          throw new BadRequestException(
+            'The 42 hour window to request access has ended. Your manager can re-assign this review.',
+          );
+        }
+        record.status = EmployeePerformanceStatus.REQUESTED_FOR_EDIT;
+        record.editRequestedAt = new Date();
+        record.editRequestReason = dto.reason || 'Access requested after the deadline';
+      } else if (unsubmitted) {
+        throw new BadRequestException(
+          'You can still update and submit this review before the deadline.',
+        );
+      } else {
+        throw new BadRequestException(
+          'Edit request can only be submitted for a submitted review or after the deadline.',
+        );
+      }
+
+      const saved = await this.performanceRepository.save(record);
+      const editEntry = createAuditEntry({
+        employeeId: saved.employeeId,
+        managerId: review?.managerId || null,
+        quarter: saved.quarter,
+        financialYear: saved.financialYear,
+        createdBy: review?.assignerId || 'ADMIN',
+        createdDate: review?.assignedDate,
+        assignedDate: review?.assignedDate,
+        deadlineDate: review?.deadlineDate,
+        submittedDate: saved.submittedAt || review?.submittedDate,
+        submittedBy: (saved.submittedAt || review?.submittedDate) ? saved.employeeId : null,
+        status: EmployeePerformanceStatus.REQUESTED_FOR_EDIT,
+        lastModifiedBy: saved.employeeId,
+        details: dto.reason ? `Employee requested edit permission. Reason: ${dto.reason}` : 'Employee requested edit permission',
+      });
+      saved.auditHistory = appendAuditEntry(saved.auditHistory, editEntry);
+      await this.performanceRepository.save(saved);
+      if (review) {
+        review.auditHistory = appendAuditEntry(review.auditHistory, editEntry);
+        await this.reviewRepository.save(review);
+      }
+
+      await this.setReviewStatus(
+        saved.employeeId,
+        saved.quarter,
+        saved.financialYear,
+        QuarterlyReviewStatus.REQUESTED_FOR_EDIT,
+        saved.id,
+      );
+      const enriched = await this.enrichPerformancesWithEmployeeDetails([saved]);
+      const editNotice = {
+        employeeId: saved.employeeId,
+        employeeName: enriched[0].employeeName || saved.employeeId,
+        quarter: saved.quarter,
+        financialYear: saved.financialYear,
+      };
+      const appraisalMapping = await this.appraisalMappingService.findActiveByEmployeeId(saved.employeeId);
+      if (
+        appraisalMapping &&
+        appraisalMapping.assignerType === AppraisalAssignerType.EMPLOYEE
+      ) {
+        await this.noticeService.notifyAssignerOfEditRequest({
+          ...editNotice,
+          assignerId: appraisalMapping.assignerId,
+        });
+      } else {
+        await this.noticeService.notifyManagerOfEditRequest(editNotice);
+      }
+      await this.noticeService.notifyEmployeeOfEditRequestSent(editNotice);
+      return enriched[0];
+    } catch (error) {
+      const caught = this.caughtError(error);
+      this.logger.error(`Error requesting edit permission: ${caught.message}`, caught.stack);
+      if (error instanceof HttpException) throw error;
+      throw new HttpException(
+        `Failed to request edit: ${caught.message}`,
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
+  }
+
+  /**
+   * Manager responds to Edit Permission request (Approve or Reject)
+   */
+  async respondEditPermission(
+    dto: RespondEditPermissionDto,
+    user?: { userType?: string | null; role?: string | null } | null,
+  ): Promise<EnrichedEmployeePerformance> {
+    try {
+      const targetId = dto.performanceId || dto.requestId;
+      const record = await this.performanceRepository.findOne({
+        where: { id: targetId },
+      });
+      if (record && isCeoOrGmUser(user)) {
+        const employee = await this.employeeDetailsRepository.findOne({
+          where: { employeeId: record.employeeId },
+        });
+        if (!employee || String(employee.role || '').toUpperCase() !== UserType.MANAGER) {
+          throw new ForbiddenException(
+            'CEO / General Manager can assign and review appraisals only for managers',
+          );
+        }
+      }
+
+      if (!record) {
+        throw new NotFoundException(`Performance submission with ID ${targetId} not found.`);
+      }
+
+      if (record.status !== EmployeePerformanceStatus.REQUESTED_FOR_EDIT) {
+        throw new BadRequestException('This submission does not have a pending edit request.');
+      }
+
+      const review = await this.reviewRepository.findOne({
+        where: {
+          employeeId: record.employeeId,
+          quarter: record.quarter,
+          financialYear: record.financialYear,
+        },
+      });
+      record.editRespondedAt = new Date();
+      record.editResponseNote = dto.responseNote || null;
+
+      const neverSubmitted = !record.submittedAt;
+      if (dto.approved) {
+        record.status = EmployeePerformanceStatus.EDIT_GRANTED;
+        if (dto.editAllowedUntil) {
+          const customDeadline = new Date(dto.editAllowedUntil);
+          if (Number.isNaN(customDeadline.getTime()) || customDeadline.getTime() <= Date.now()) {
+            throw new BadRequestException('Edit deadline must be a valid future date and time.');
+          }
+          record.editAllowedUntil = customDeadline;
+        } else {
+          record.editAllowedUntil = new Date(Date.now() + appraisalWindowMs(APPRAISAL_EDIT_WINDOW_HOURS));
+        }
+      } else if (neverSubmitted) {
+        record.status = EmployeePerformanceStatus.NOT_STARTED;
+        record.editAllowedUntil = null;
+      } else {
+        record.status = EmployeePerformanceStatus.SUBMITTED;
+        record.editAllowedUntil = null;
+      }
+
+      const saved = await this.performanceRepository.save(record);
+      const isApproved = dto.approved;
+      const respondEntry = createAuditEntry({
+        employeeId: saved.employeeId,
+        managerId: review?.managerId || null,
+        quarter: saved.quarter,
+        financialYear: saved.financialYear,
+        createdBy: review?.assignerId || 'ADMIN',
+        createdDate: review?.assignedDate,
+        assignedDate: review?.assignedDate,
+        deadlineDate: review?.deadlineDate,
+        submittedDate: saved.submittedAt || review?.submittedDate,
+        submittedBy: (saved.submittedAt || review?.submittedDate) ? saved.employeeId : null,
+        status: saved.status,
+        lastModifiedBy: review?.managerId || review?.assignerId || 'MANAGER',
+        details: isApproved
+          ? `Manager approved edit request${saved.editAllowedUntil ? ` until ${saved.editAllowedUntil.toISOString()}` : ''}`
+          : `Manager rejected edit request. Reason: ${dto.responseNote || 'Request declined'}`,
+      });
+      saved.auditHistory = appendAuditEntry(saved.auditHistory, respondEntry);
+      await this.performanceRepository.save(saved);
+      if (review) {
+        review.auditHistory = appendAuditEntry(review.auditHistory, respondEntry);
+        await this.reviewRepository.save(review);
+      }
+
+      if (saved.status === EmployeePerformanceStatus.EDIT_GRANTED) {
+        await this.setReviewStatus(
+          saved.employeeId,
+          saved.quarter,
+          saved.financialYear,
+          QuarterlyReviewStatus.EDIT_GRANTED,
+          saved.id,
+        );
+      } else if (neverSubmitted) {
+        await this.setReviewStatus(
+          saved.employeeId,
+          saved.quarter,
+          saved.financialYear,
+          QuarterlyReviewStatus.NOT_STARTED,
+          saved.id,
+        );
+      } else {
+        await this.setReviewStatus(
+          saved.employeeId,
+          saved.quarter,
+          saved.financialYear,
+          QuarterlyReviewStatus.PERFORMANCE_RECEIVED,
+          saved.id,
+        );
+      }
+      const enriched = await this.enrichPerformancesWithEmployeeDetails([saved]);
+      if (dto.approved) {
+        await this.noticeService.notifyEmployeeOfEditGrant({
+          employeeId: saved.employeeId,
+          employeeName: enriched[0].employeeName || saved.employeeId,
+          quarter: saved.quarter,
+          financialYear: saved.financialYear,
+          editAllowedUntil: saved.editAllowedUntil,
+        });
+
+        const effectiveDeadline = saved.editAllowedUntil || review?.deadlineDate;
+        if (effectiveDeadline && isOneDayBeforeDeadline(effectiveDeadline, new Date())) {
+          try {
+            await this.noticeService.notifyOneDayDeadlineReminder({
+              employeeId: saved.employeeId,
+              employeeName: enriched[0].employeeName || saved.employeeId,
+              quarter: saved.quarter,
+              financialYear: saved.financialYear,
+              deadlineDate: effectiveDeadline,
+              force: true,
+            });
+          } catch (noticeErr) {
+            this.logger.warn(`Could not dispatch 1-day reminder notice on edit grant: ${noticeErr}`);
+          }
+        }
+      } else {
+        try {
+          await this.noticeService.notifyEmployeeOfEditReject({
+            employeeId: saved.employeeId,
+            employeeName: enriched[0].employeeName || saved.employeeId,
+            quarter: saved.quarter,
+            financialYear: saved.financialYear,
+            reason: dto.responseNote,
+          });
+        } catch (noticeErr) {
+          this.logger.warn(`Could not dispatch edit reject notice: ${noticeErr}`);
+        }
+      }
+      return enriched[0];
+    } catch (error) {
+      const caught = this.caughtError(error);
+      this.logger.error(`Error responding to edit request: ${caught.message}`, caught.stack);
+      if (error instanceof HttpException) throw error;
+      throw new HttpException(
+        `Failed to process edit request: ${caught.message}`,
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
+  }
+
+  /**
+   * Get all submissions with active edit requests
+   */
+  async getEditRequests(
+    managerId?: string,
+    employeeId?: string,
+    q?: string,
+  ): Promise<EnrichedEmployeePerformance[]> {
+    const qb = this.performanceRepository.createQueryBuilder('ep')
+      .where('ep.status IN (:...editStatuses)', {
+        editStatuses: [
+          EmployeePerformanceStatus.REQUESTED_FOR_EDIT,
+          EmployeePerformanceStatus.APPROVED_FOR_EDITING,
+          EmployeePerformanceStatus.ALLOWED_TO_EDIT,
+        ],
+      });
+
+    if (employeeId?.trim()) {
+      qb.andWhere('ep.employeeId = :employeeId', { employeeId: employeeId.trim() });
+    }
+
+    if (managerId?.trim()) {
+      const mappings = await this.managerMappingRepository.find({
+        where: { managerId: managerId.trim() },
+      });
+      const empIds = mappings.map((m) => m.employeeId).filter(Boolean);
+      if (empIds.length > 0) {
+        qb.andWhere('ep.employeeId IN (:...empIds)', { empIds });
+      } else {
+        return [];
+      }
+    }
+
+    if (q?.trim()) {
+      const keyword = `%${q.trim()}%`;
+      const matchedEmployees = await this.employeeDetailsRepository
+        .createQueryBuilder('emp')
+        .where('emp.fullName LIKE :keyword OR emp.employeeId LIKE :keyword', { keyword })
+        .select('emp.employeeId', 'employeeId')
+        .getRawMany();
+      const matchedIds = matchedEmployees.map((row) => row.employeeId).filter(Boolean);
+
+      if (matchedIds.length > 0) {
+        qb.andWhere(
+          '(ep.employeeId LIKE :keyword OR ep.employeeId IN (:...matchedIds) OR ep.editRequestReason LIKE :keyword OR ep.financialYear LIKE :keyword)',
+          { keyword, matchedIds },
+        );
+      } else {
+        qb.andWhere(
+          '(ep.employeeId LIKE :keyword OR ep.editRequestReason LIKE :keyword OR ep.financialYear LIKE :keyword)',
+          { keyword },
+        );
+      }
+    }
+
+    qb.orderBy('ep.editRequestedAt', 'DESC');
+    const records = await qb.getMany();
+    return await this.enrichPerformancesWithEmployeeDetails(records);
+  }
+
+  /**
+   * Create standard performance record
+   */
+  async create(createDto: CreateEmployeePerformanceDto): Promise<EnrichedEmployeePerformance> {
+    return this.writePerformance(createDto, false);
+  }
+
+  /**
+   * Get all performance records with optional filters
+   */
+  async findAll(query?: QueryEmployeePerformanceDto): Promise<{
+    data: EnrichedEmployeePerformance[];
+    meta: PerformanceListMeta;
+  }> {
+    return this.getByParams(query);
+  }
+
+  /**
+   * Get performance records matching parameters
+   */
+  async getByParams(params?: QueryEmployeePerformanceDto): Promise<{
+    data: EnrichedEmployeePerformance[];
+    meta: PerformanceListMeta;
+  }> {
+    try {
+      const qb = this.performanceRepository.createQueryBuilder('ep');
+
+      if (params?.employeeId?.trim()) {
+        const empId = params.employeeId.trim();
+        qb.andWhere('(ep.employeeId = :exactEmpId OR ep.employeeId LIKE :likeEmpId)', {
+          exactEmpId: empId,
+          likeEmpId: `%${empId}%`,
+        });
+      }
+
+      if (params?.name?.trim() || params?.department?.trim()) {
+        const empQb = this.employeeDetailsRepository.createQueryBuilder('emp');
+        if (params.name?.trim()) {
+          empQb.andWhere('emp.fullName LIKE :name', { name: `%${params.name.trim()}%` });
+        }
+        if (params.department?.trim()) {
+          empQb.andWhere('emp.department LIKE :department', { department: `%${params.department.trim()}%` });
+        }
+
+        const matchedEmployees = await empQb.select('emp.employeeId', 'employeeId').getRawMany();
+        const matchedIds = matchedEmployees.map((e) => e.employeeId).filter(Boolean);
+
+        if (matchedIds.length === 0) {
+          return { data: [], meta: this.listMeta(0, 0, params?.page, params?.limit) };
+        }
+        qb.andWhere('ep.employeeId IN (:...matchedIds)', { matchedIds });
+      }
+
+      if (params?.reviewPeriod === ReviewPeriod.YEARLY) {
+        qb.andWhere(
+          `EXISTS (
+            SELECT 1 FROM quaterly_review yr
+            WHERE yr.employeeId = ep.employeeId
+              AND yr.financialYear = ep.financialYear
+              AND yr.reviewPeriod = :yearlyPeriod
+              AND (yr.quarter = ep.quarter OR yr.performanceId = ep.id)
+          )`,
+          { yearlyPeriod: ReviewPeriod.YEARLY },
+        );
+      } else if (params?.quarter) {
+        qb.andWhere('ep.quarter = :quarter', { quarter: params.quarter });
+      }
+
+      if (params?.financialYear?.trim()) {
+        const fy = params.financialYear.trim();
+        qb.andWhere('(ep.financialYear = :exactFy OR ep.financialYear LIKE :likeFy)', {
+          exactFy: fy,
+          likeFy: `%${fy}%`,
+        });
+      }
+
+      if (params?.status) {
+        qb.andWhere('ep.status = :status', { status: params.status });
+      }
+
+      if (params?.q?.trim()) {
+        const keyword = `%${params.q.trim()}%`;
+        qb.andWhere(
+          '(ep.employeeId LIKE :keyword OR ep.stepAchievements LIKE :keyword OR ep.financialYear LIKE :keyword OR ep.status LIKE :keyword)',
+          { keyword },
+        );
+      }
+
+      qb.orderBy('ep.id', 'DESC');
+
+      const total = await qb.getCount();
+
+      if (params?.page && params?.limit) {
+        const skip = (params.page - 1) * params.limit;
+        qb.skip(skip).take(params.limit);
+      }
+
+      const records = await qb.getMany();
+      const enriched = await this.attachReviewAssignment(
+        await this.enrichPerformancesWithEmployeeDetails(records),
+      );
+
+      return {
+        data: enriched,
+        meta: this.listMeta(total, enriched.length, params?.page, params?.limit),
+      };
+    } catch (error) {
+      const caught = this.caughtError(error);
+      this.logger.error(`Error in getByParams performance: ${caught.message}`, caught.stack);
+      if (error instanceof HttpException) throw error;
+      throw new HttpException(
+        `Failed to fetch performance records: ${caught.message}`,
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
+  }
+
+  /**
+   * Search performance records
+   */
+  async getBySearch(searchDto: SearchEmployeePerformanceDto): Promise<{
+    data: EnrichedEmployeePerformance[];
+    meta: PerformanceListMeta;
+  }> {
+    return this.getByParams(searchDto);
+  }
+
+  /**
+   * Find a single performance record by ID
+   */
+  async findOne(id: number): Promise<EnrichedEmployeePerformance> {
+    const record = await this.performanceRepository.findOne({
+      where: { id },
+    });
+
+    if (!record) {
+      throw new NotFoundException(`Employee performance record with ID ${id} not found`);
+    }
+
+    const [withReview] = await this.attachReviewAssignment([record]);
+    return withReview;
+  }
+
+  private assertValidStepSlug(step: string): PerformanceStepSlug {
+    if (!PERFORMANCE_STEP_SLUGS.includes(step as PerformanceStepSlug)) {
+      throw new BadRequestException(
+        `Unknown step "${step}". Use one of: ${PERFORMANCE_STEP_SLUGS.join(', ')}`,
+      );
+    }
+    return step as PerformanceStepSlug;
+  }
+
+  /** Resolve overview period dates (saved step or master quarter defaults). */
+  private async withOverviewPeriodDates(
+    enriched: EnrichedEmployeePerformance,
+    overviewData: Record<string, unknown> | null,
+  ): Promise<Record<string, unknown>> {
+    const overview = { ...(overviewData || {}) };
+    const hasStart = Boolean(String(overview.reviewPeriodStart || '').trim());
+    const hasEnd = Boolean(String(overview.reviewPeriodEnd || '').trim());
+    if (!hasStart || !hasEnd) {
+      const defaults = await this.resolveDefaultReviewPeriod(
+        enriched.quarter,
+        enriched.financialYear,
+      );
+      if (!hasStart) overview.reviewPeriodStart = defaults.reviewPeriodStart;
+      if (!hasEnd) overview.reviewPeriodEnd = defaults.reviewPeriodEnd;
+    }
+    return overview;
+  }
+
+  /**
+   * GET one step.
+   * Steps 1–5: that step only.
+   * Step 6 (final-review): final fields + prior steps so the review summary can render.
+   */
+  async getStep(id: number, stepSlug: string): Promise<PerformanceStepApiResponse> {
+    const step = this.assertValidStepSlug(stepSlug);
+    const enriched = await this.findOne(id);
+    let data: PerformanceStepApiResponse['data'] = readStepData(enriched, step);
+
+    // Overview: always include review period dates (from saved step or master quarter defaults)
+    if (step === 'overview') {
+      data = await this.withOverviewPeriodDates(
+        enriched,
+        (data as Record<string, unknown>) || null,
+      );
+    }
+
+    // Final review page shows steps 1–5 summary + step 6 inputs — return the full package.
+    if (step === 'final-review') {
+      const final = (readStepData(enriched, 'final-review') as Record<string, unknown>) || {};
+      const overview = await this.withOverviewPeriodDates(
+        enriched,
+        (enriched.stepOverview as Record<string, unknown>) || null,
+      );
+      data = {
+        overallSelfRating: final.overallSelfRating ?? null,
+        overallEmployeeComments: final.overallEmployeeComments ?? null,
+        careerGrowthInterests: final.careerGrowthInterests ?? null,
+        confirmationAccepted: Boolean(final.confirmationAccepted),
+        stepOverview: overview,
+        stepAchievements: enriched.stepAchievements ?? null,
+        stepTeamwork: enriched.stepTeamwork ?? null,
+        stepLearning: enriched.stepLearning ?? null,
+        stepEnvironment: enriched.stepEnvironment ?? null,
+      };
+    }
+
+    return {
+      id: enriched.id,
+      status: enriched.status,
+      canEdit: enriched.canEdit,
+      canRequestEdit: enriched.canRequestEdit,
+      step: computeResumeStep(enriched),
+      data,
+    };
+  }
+
+  /**
+   * PATCH one step — merges only fields present in the body into that step JSON.
+   * Does not replace other steps or untouched fields on this step.
+   */
+  async patchStep(
+    id: number,
+    stepSlug: string,
+    patchDto: Record<string, unknown>,
+  ): Promise<PerformanceStepApiResponse> {
+    const step = this.assertValidStepSlug(stepSlug);
+    const keys = Object.keys(patchDto || {}).filter((key) => patchDto[key] !== undefined);
+    if (keys.length === 0) {
+      return this.getStep(id, step);
+    }
+
+    let record = await this.performanceRepository.findOne({ where: { id } });
+    if (!record) {
+      throw new NotFoundException(`Employee performance record with ID ${id} not found`);
+    }
+
+    record = await this.lockIfGrantExpired(record);
+
+    if (LOCKED_PERFORMANCE_STATUSES.includes(record.status)) {
+      throw new BadRequestException(
+        'Submission is locked. You cannot edit a submitted or reviewed evaluation without manager approval.',
+      );
+    }
+
+    applyStepPatch(record, step, patchDto);
+
+    if (record.status === EmployeePerformanceStatus.NOT_STARTED) {
+      record.status = EmployeePerformanceStatus.DRAFT;
+    } else if (DRAFT_ON_SAVE_STATUSES.includes(record.status)) {
+      record.status = EmployeePerformanceStatus.DRAFT;
+    }
+    record.lastModifiedDate = new Date();
+
+    const updated = await this.performanceRepository.save(record);
+
+    await this.linkPerformanceToReview(updated.employeeId, updated.quarter, updated.financialYear, updated.id);
+    const reviewForDraft = await this.reviewRepository.findOne({
+      where: {
+        employeeId: updated.employeeId,
+        quarter: updated.quarter,
+        financialYear: updated.financialYear,
+      },
+    });
+    if (
+      reviewForDraft &&
+      (reviewForDraft.status === QuarterlyReviewStatus.DRAFT ||
+        reviewForDraft.status === QuarterlyReviewStatus.NOT_STARTED)
+    ) {
+      reviewForDraft.status = QuarterlyReviewStatus.ASSIGNED;
+      await this.reviewRepository.save(reviewForDraft);
+    }
+
+    await this.quarterlyReviewService.propagateYearlyPerformance(updated);
+    // Return via getStep so overview always includes resolved period dates
+    return this.getStep(id, step);
+  }
+
+  /**
+   * Update an employee performance record (Guarded by Submission Lock)
+   */
+  async update(
+    id: number,
+    updateDto: UpdateEmployeePerformanceDto,
+  ): Promise<EnrichedEmployeePerformance> {
+    let record = await this.performanceRepository.findOne({
+      where: { id },
+    });
+
+    if (!record) {
+      throw new NotFoundException(`Employee performance record with ID ${id} not found`);
+    }
+
+    record = await this.lockIfGrantExpired(record);
+
+    if (LOCKED_PERFORMANCE_STATUSES.includes(record.status)) {
+      throw new BadRequestException(
+        'Submission is locked. You cannot edit a submitted or reviewed evaluation without manager approval.',
+      );
+    }
+
+    const fields = { ...updateDto } as Record<string, unknown>;
+    const requestedStatus = updateDto.status;
+    delete fields.status;
+    delete fields.clearSteps;
+    if (fields.attachments == null) {
+      delete fields.attachments;
+    }
+    if (fields.projects == null) {
+      delete fields.projects;
+    }
+
+    let nextStatus = record.status;
+    if (requestedStatus) {
+      nextStatus = requestedStatus;
+    } else if (record.status === EmployeePerformanceStatus.NOT_STARTED) {
+      nextStatus = EmployeePerformanceStatus.DRAFT;
+    } else if (DRAFT_ON_SAVE_STATUSES.includes(record.status)) {
+      nextStatus = EmployeePerformanceStatus.DRAFT;
+    }
+
+    if (updateDto.clearSteps) {
+      clearPerformanceSteps(record);
+    }
+    applyPerformanceSteps(record, fields);
+    record.status = nextStatus;
+    record.lastModifiedDate = new Date();
+    if (updateDto.employeeId) {
+      record.lastModifiedBy = updateDto.employeeId;
+    }
+
+    const updated = await this.performanceRepository.save(record);
+
+    await this.linkPerformanceToReview(updated.employeeId, updated.quarter, updated.financialYear, updated.id);
+    const reviewForDraft = await this.reviewRepository.findOne({
+      where: {
+        employeeId: updated.employeeId,
+        quarter: updated.quarter,
+        financialYear: updated.financialYear,
+      },
+    });
+    if (
+      reviewForDraft &&
+      (reviewForDraft.status === QuarterlyReviewStatus.DRAFT ||
+        reviewForDraft.status === QuarterlyReviewStatus.NOT_STARTED)
+    ) {
+      reviewForDraft.status = QuarterlyReviewStatus.ASSIGNED;
+      await this.reviewRepository.save(reviewForDraft);
+    }
+
+    await this.quarterlyReviewService.propagateYearlyPerformance(updated);
+    const enrichedList = await this.enrichPerformancesWithEmployeeDetails([updated]);
+    return enrichedList[0];
+  }
+
+  /**
+   * Upload one file to MinIO and store its object key on the performance row.
+   */
+  async addAttachment(id: number, file: BufferedFile | undefined): Promise<PerformanceAttachment> {
+    let record = await this.performanceRepository.findOne({ where: { id } });
+    if (!record) {
+      throw new NotFoundException(`Employee performance record with ID ${id} not found`);
+    }
+    record = await this.lockIfGrantExpired(record);
+    if (LOCKED_PERFORMANCE_STATUSES.includes(record.status)) {
+      throw new BadRequestException(
+        'Submission is locked. You cannot edit a submitted or reviewed evaluation without manager approval.',
+      );
+    }
+    if (!file || !file.buffer?.length) {
+      throw new BadRequestException('Choose a file to upload.');
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      throw new BadRequestException('Each file must be 10 MB or smaller.');
+    }
+
+    const details = new DocumentMetaInfo();
+    details.refId = id;
+    details.refType = ReferenceType.PROJECT_DOCUMENT;
+    details.entityId = id;
+    details.entityType = EntityType.PROJECT;
+
+    const uploaded = await this.documentUploaderService.uploadImage(file, details);
+    const attachment: PerformanceAttachment = {
+      fileName: file.originalname || uploaded.fileName,
+      fileUrl: uploaded.image_url,
+      fileSize: file.size,
+      fileType: file.mimetype,
+      objectKey: uploaded.key,
+    };
+    return attachment;
+  }
+
+  /**
+   * Remove one stored file from MinIO and from the performance attachments list.
+   */
+  async removeAttachment(id: number, objectKey: string): Promise<PerformanceProjectAttachment[]> {
+    let record = await this.performanceRepository.findOne({ where: { id } });
+    if (!record) {
+      throw new NotFoundException(`Employee performance record with ID ${id} not found`);
+    }
+    record = await this.lockIfGrantExpired(record);
+    if (LOCKED_PERFORMANCE_STATUSES.includes(record.status)) {
+      throw new BadRequestException(
+        'Submission is locked. You cannot edit a submitted or reviewed evaluation without manager approval.',
+      );
+    }
+    if (!objectKey) {
+      throw new BadRequestException('Choose an attachment to remove.');
+    }
+    const projects = readPerformanceProjects(record).map((project) => ({
+      ...project,
+      attachments: (project.attachments || []).filter((item) => item.objectKey !== objectKey),
+    }));
+    const removedFromProject = JSON.stringify(projects) !== JSON.stringify(readPerformanceProjects(record));
+    if (!removedFromProject) {
+      await this.documentUploaderService.deleteMinioDoc(objectKey);
+      return projects.flatMap((project) => project.attachments || []);
+    }
+    await this.documentUploaderService.deleteMinioDoc(objectKey);
+    savePerformanceProjects(record, projects);
+    record.lastModifiedDate = new Date();
+    const saved = await this.performanceRepository.save(record);
+    return readPerformanceProjects(saved).flatMap((project) => project.attachments || []);
+  }
+
+  /**
+   * Remove one project from the employee performance record by index.
+   * Also deletes any MinIO attachments associated with that project.
+   */
+  async removeProject(id: number, projectIndex: number): Promise<PerformanceStepApiResponse> {
+    let record = await this.performanceRepository.findOne({ where: { id } });
+    if (!record) {
+      throw new NotFoundException(`Employee performance record with ID ${id} not found`);
+    }
+    record = await this.lockIfGrantExpired(record);
+    if (LOCKED_PERFORMANCE_STATUSES.includes(record.status)) {
+      throw new BadRequestException(
+        'Submission is locked. You cannot edit a submitted or reviewed evaluation without manager approval.',
+      );
+    }
+    const currentProjects = readPerformanceProjects(record);
+    if (projectIndex < 0 || projectIndex >= currentProjects.length) {
+      throw new BadRequestException(`Invalid project index: ${projectIndex}`);
+    }
+
+    const projectToRemove = currentProjects[projectIndex];
+    if (projectToRemove?.attachments && Array.isArray(projectToRemove.attachments)) {
+      for (const att of projectToRemove.attachments) {
+        if (att.objectKey) {
+          try {
+            await this.documentUploaderService.deleteMinioDoc(att.objectKey);
+          } catch (err) {
+            this.logger.warn(`Failed to delete MinIO attachment on project removal: ${att.objectKey}`);
+          }
+        }
+      }
+    }
+
+    const nextProjects = currentProjects.filter((_, idx) => idx !== projectIndex);
+    savePerformanceProjects(record, nextProjects);
+    this.markDraftIfUntouched(record);
+    record.lastModifiedDate = new Date();
+    await this.performanceRepository.save(record);
+    // Achievements step response only — not the full performance document
+    return this.getStep(id, 'achievements');
+  }
+
+  private async editablePerformance(id: number): Promise<EmployeePerformance> {
+    let record = await this.performanceRepository.findOne({ where: { id } });
+    if (!record) {
+      throw new NotFoundException(`Employee performance record with ID ${id} not found`);
+    }
+    record = await this.lockIfGrantExpired(record);
+    if (LOCKED_PERFORMANCE_STATUSES.includes(record.status)) {
+      throw new BadRequestException(
+        'Submission is locked. You cannot edit a submitted or reviewed evaluation without manager approval.',
+      );
+    }
+    return record;
+  }
+
+  private markDraftIfUntouched(record: EmployeePerformance): void {
+    if (record.status === EmployeePerformanceStatus.NOT_STARTED) {
+      record.status = EmployeePerformanceStatus.DRAFT;
+    }
+  }
+
+  async addProject(id: number, project: PerformanceProjectDto): Promise<PerformanceStepApiResponse> {
+    const record = await this.editablePerformance(id);
+    savePerformanceProjects(record, [...readPerformanceProjects(record), project as PerformanceProject]);
+    this.markDraftIfUntouched(record);
+    record.lastModifiedDate = new Date();
+    await this.performanceRepository.save(record);
+    // Achievements step response only — not the full performance document
+    return this.getStep(id, 'achievements');
+  }
+
+  async patchProject(
+    id: number,
+    projectIndex: number,
+    patch: UpdatePerformanceProjectDto,
+  ): Promise<PerformanceStepApiResponse> {
+    const record = await this.editablePerformance(id);
+    const currentProjects = [...readPerformanceProjects(record)];
+    if (projectIndex < 0 || projectIndex >= currentProjects.length) {
+      throw new BadRequestException(`Invalid project index: ${projectIndex}`);
+    }
+    const nextProject = { ...currentProjects[projectIndex] };
+    Object.entries(patch).forEach(([key, value]) => {
+      if (value !== undefined) {
+        (nextProject as unknown as Record<string, unknown>)[key] = value;
+      }
+    });
+    currentProjects[projectIndex] = nextProject;
+    savePerformanceProjects(record, currentProjects);
+    this.markDraftIfUntouched(record);
+    record.lastModifiedDate = new Date();
+    await this.performanceRepository.save(record);
+    // Achievements step response only — not the full performance document
+    return this.getStep(id, 'achievements');
+  }
+
+  /**
+   * Stream one stored attachment from MinIO for preview or download
+   */
+  async streamAttachment(objectKey: string, res: any, inline = false): Promise<void> {
+    if (!objectKey) {
+      throw new BadRequestException('Object key is required.');
+    }
+    try {
+      const metaData = await this.documentUploaderService.getMetaData(objectKey);
+      const dataStream = await this.documentUploaderService.downloadFile(objectKey);
+
+      const disposition = inline ? 'inline' : 'attachment';
+      const fileName = metaData?.filename || 'attachment';
+
+      res.set({
+        'Content-Type': metaData?.mimetype || 'application/octet-stream',
+        'Content-Disposition': `${disposition}; filename="${fileName}"`,
+        'Content-Length': dataStream.ContentLength || undefined,
+      });
+
+      if (dataStream.Body instanceof Readable) {
+        dataStream.Body.pipe(res);
+      } else if (dataStream.Body) {
+        const buffer = await (dataStream.Body as any).transformToByteArray();
+        res.send(Buffer.from(buffer));
+      } else {
+        throw new NotFoundException('File content not found.');
+      }
+    } catch (error) {
+      this.logger.error(`Error streaming attachment ${objectKey}: ${error.message}`, error.stack);
+      if (error instanceof HttpException) {
+        throw error;
+      }
+      throw new HttpException(
+        error.message || 'Failed to stream attachment',
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
+  }
+
+  /**
+   * Delete a performance record
+   */
+  async remove(id: number): Promise<{ success: boolean; message: string }> {
+    const record = await this.performanceRepository.findOne({
+      where: { id },
+    });
+
+    if (!record) {
+      throw new NotFoundException(`Employee performance record with ID ${id} not found`);
+    }
+
+    await this.performanceRepository.remove(record);
+    return {
+      success: true,
+      message: `Employee performance record with ID ${id} deleted successfully`,
+    };
+  }
+
+  private listMeta(
+    totalItems: number,
+    itemCount: number,
+    page?: number,
+    limit?: number,
+  ): PerformanceListMeta {
+    const currentPage = page && page > 0 ? page : 1;
+    const itemsPerPage = limit && limit > 0 ? limit : Math.max(itemCount, 1);
+    const totalPages = totalItems === 0 ? 0 : Math.ceil(totalItems / itemsPerPage);
+    return {
+      totalItems,
+      itemCount,
+      itemsPerPage,
+      totalPages,
+      currentPage,
+    };
+  }
+
+  private caughtError(error: unknown): { message: string; stack?: string } {
+    if (error instanceof Error) {
+      return { message: error.message, stack: error.stack };
+    }
+    return { message: 'Unknown error' };
+  }
+
+  private async assertEmployeeCanChange(record: EmployeePerformance): Promise<void> {
+    if (record.status === EmployeePerformanceStatus.EDIT_GRANTED) {
+      return;
+    }
+    const review = await this.reviewRepository.findOne({
+      where: {
+        employeeId: record.employeeId,
+        quarter: record.quarter,
+        financialYear: record.financialYear,
+      },
+    });
+    if (!review || !deadlineHasArrived(review.deadlineDate)) {
+      return;
+    }
+    const open =
+      record.status === EmployeePerformanceStatus.NOT_STARTED ||
+      record.status === EmployeePerformanceStatus.DRAFT ||
+      record.status === EmployeePerformanceStatus.ASSIGNED ||
+      record.status === EmployeePerformanceStatus.PENDING ||
+      record.status === EmployeePerformanceStatus.IN_PROGRESS;
+    if (!open) {
+      return;
+    }
+    if ((review.reassignCount || 0) >= 1) {
+      await this.closeRenewedAccess(review, record);
+      throw new BadRequestException(
+        'This review was already reassigned. Access and editing stay closed.',
+      );
+    }
+    throw new BadRequestException(
+      'The deadline is today. Submit is closed. Request access from your manager.',
+    );
+  }
+
+  private async closeRenewedAccess(
+    review: QuarterlyReview | null,
+    record: EmployeePerformance,
+  ): Promise<void> {
+    if (review && !isLockedReviewStatus(review.status)) {
+      review.status = QuarterlyReviewStatus.LOCKED;
+      await this.reviewRepository.save(review);
+    }
+    if (!isLockedReviewStatus(record.status)) {
+      record.status = EmployeePerformanceStatus.LOCKED;
+      record.lastModifiedDate = new Date();
+      await this.performanceRepository.save(record);
+    }
+  }
+
+  private async findReviewForPerformance(
+    employeeId: string,
+    quarter: EmployeePerformance['quarter'],
+    financialYear: string,
+  ): Promise<QuarterlyReview | null> {
+    if (isYearlyQuarterValue(quarter)) {
+      const reviews = await this.reviewRepository.find({
+        where: { employeeId, financialYear },
+      });
+      return (
+        reviews.find(
+          (r) =>
+            r.reviewPeriod === ReviewPeriod.YEARLY ||
+            isYearlyQuarterValue(r.quarter),
+        ) || null
+      );
+    }
+    return await this.reviewRepository.findOne({
+      where: { employeeId, quarter, financialYear },
+    });
+  }
+
+  private async removeDuplicateYearlyReviews(
+    employeeId: string,
+    financialYear: string,
+    keepId: number,
+  ): Promise<void> {
+    const reviews = await this.reviewRepository.find({
+      where: { employeeId, financialYear },
+    });
+    const duplicates = reviews.filter(
+      (r) =>
+        r.id !== keepId &&
+        (r.reviewPeriod === ReviewPeriod.YEARLY || isYearlyQuarterValue(r.quarter)),
+    );
+    if (duplicates.length) {
+      await this.reviewRepository.delete(duplicates.map((r) => r.id));
+    }
+  }
+
+  private async setReviewStatus(
+    employeeId: string,
+    quarter: EmployeePerformance['quarter'],
+    financialYear: string,
+    status: QuarterlyReviewStatus,
+    performanceId: number,
+  ): Promise<void> {
+    const review = await this.findReviewForPerformance(employeeId, quarter, financialYear);
+    if (!review) {
+      return;
+    }
+    review.status = status;
+    review.performanceId = performanceId;
+    await this.reviewRepository.save(review);
+  }
+
+  private async linkPerformanceToReview(
+    employeeId: string,
+    quarter: EmployeePerformance['quarter'],
+    financialYear: string,
+    performanceId: number,
+  ): Promise<void> {
+    const review = await this.findReviewForPerformance(employeeId, quarter, financialYear);
+    if (!review || review.performanceId === performanceId) {
+      return;
+    }
+    review.performanceId = performanceId;
+    await this.reviewRepository.save(review);
+  }
+
+  private async lockIfGrantExpired(record: EmployeePerformance): Promise<EmployeePerformance> {
+    const allowedUntil = record.editAllowedUntil;
+    const grantOpen = record.status === EmployeePerformanceStatus.EDIT_GRANTED;
+    const expired =
+      !!allowedUntil && Date.now() > new Date(allowedUntil).getTime();
+
+    if (!grantOpen || !expired || !allowedUntil) {
+      return record;
+    }
+
+    const deadline = new Date(allowedUntil).toLocaleString();
+    record.status = EmployeePerformanceStatus.SUBMITTED;
+    record.editAllowedUntil = null;
+    await this.performanceRepository.save(record);
+    await this.setReviewStatus(
+      record.employeeId,
+      record.quarter,
+      record.financialYear,
+      QuarterlyReviewStatus.PERFORMANCE_RECEIVED,
+      record.id,
+    );
+    throw new BadRequestException(
+      `The edit window granted by your manager expired on ${deadline}. Editing is locked.`,
+    );
+  }
+
+  private async attachReviewAssignment(
+    records: EnrichedEmployeePerformance[],
+  ): Promise<EnrichedEmployeePerformance[]> {
+    if (!records.length) {
+      return records;
+    }
+
+    const employeeIds = Array.from(new Set(records.map((record) => record.employeeId)));
+    const financialYears = Array.from(new Set(records.map((record) => record.financialYear)));
+    const reviews = await this.reviewRepository.find({
+      where: {
+        employeeId: In(employeeIds),
+        financialYear: In(financialYears),
+      },
+      select: [
+        'id',
+        'employeeId',
+        'quarter',
+        'financialYear',
+        'assignerId',
+        'assignedBy',
+        'managerName',
+        'assignedDate',
+        'deadlineDate',
+        'description',
+        'status',
+        'reassignCount',
+        'submittedDate',
+        'updatedAt',
+        'reviewPeriod',
+        'yearlyQuarterReviews',
+      ],
+    });
+    const assignerIds = Array.from(new Set(reviews.map((review) => review.assignerId).filter(Boolean)));
+    const assigners = assignerIds.length
+      ? await this.employeeDetailsRepository.find({
+        where: { employeeId: In(assignerIds) },
+        select: ['employeeId', 'fullName'],
+      })
+      : [];
+    const nameById = new Map(assigners.map((person) => [person.employeeId, person.fullName]));
+    const reviewsByEmployeeFy = new Map<string, QuarterlyReview[]>();
+    for (const review of reviews) {
+      const key = `${review.employeeId}|${review.financialYear}`;
+      const list = reviewsByEmployeeFy.get(key) || [];
+      list.push(review);
+      reviewsByEmployeeFy.set(key, list);
+    }
+
+    const now = new Date();
+    const requestWindowMs = appraisalWindowMs(APPRAISAL_EDIT_WINDOW_HOURS);
+    const withAccess: EnrichedEmployeePerformance[] = [];
+    for (const record of records) {
+      const fyReviews = reviewsByEmployeeFy.get(`${record.employeeId}|${record.financialYear}`) || [];
+      const review = isYearlyQuarterValue(record.quarter)
+        ? fyReviews.find(
+            (r) => r.reviewPeriod === ReviewPeriod.YEARLY || isYearlyQuarterValue(r.quarter),
+          ) || fyReviews[0]
+        : fyReviews.find((r) => r.quarter === record.quarter);
+      if (
+        review &&
+        shouldCloseRenewedAccess(review.reassignCount || 0, review.deadlineDate, record.status, now)
+      ) {
+        await this.closeRenewedAccess(review, record);
+      }
+
+      const effectiveDeadline = record.editAllowedUntil || review?.deadlineDate;
+      if (
+        effectiveDeadline &&
+        SUBMITTABLE_PERFORMANCE_STATUSES.includes(record.status) &&
+        isOneDayBeforeDeadline(effectiveDeadline, now)
+      ) {
+        void this.noticeService.notifyOneDayDeadlineReminder({
+          employeeId: record.employeeId,
+          employeeName: record.employeeName || record.employeeId,
+          quarter: record.quarter,
+          financialYear: record.financialYear,
+          deadlineDate: effectiveDeadline,
+        }).catch((err) => {
+          this.logger.warn(`Could not dispatch 1-day reminder notice on attachReviewAssignment: ${err.message}`);
+        });
+      }
+
+      const access = review
+        ? reviewAccessFlags({
+          status: record.status,
+          deadlineDate: review.deadlineDate,
+          submittedAt: record.submittedAt,
+          editAllowedUntil: record.editAllowedUntil,
+          reassignCount: review.reassignCount || 0,
+          requestWindowMs,
+          lockedAt: review.updatedAt,
+          now,
+        })
+        : null;
+      withAccess.push({
+        ...overlayPerformanceView(record),
+        assignedBy: review
+          ? nameById.get(review.assignerId) ||
+            (review.managerName &&
+            String(review.managerName).toLowerCase() !== 'admin' &&
+            review.managerName !== 'Reporting Manager'
+              ? review.managerName
+              : null) ||
+            review.managerName ||
+            review.assignerId ||
+            null
+          : null,
+        assignedDate: review?.assignedDate ?? null,
+        deadlineDate: review?.deadlineDate ?? null,
+        description: review?.description ?? null,
+        reviewId: review?.id ?? null,
+        reviewPeriod: review?.reviewPeriod,
+        yearlyQuarterReviews: review?.yearlyQuarterReviews ?? null,
+        canEdit: access ? access.canEdit : record.canEdit,
+        canRequestEdit: access ? access.canRequestEdit : record.canRequestEdit,
+        remainingRequestHours: access ? access.remainingRequestHours : record.remainingRequestHours,
+        isEditWindowActive: access ? access.isEditWindowActive : record.isEditWindowActive,
+        step: computeResumeStep(record),
+      });
+    }
+    return withAccess;
+  }
+
+  /**
+   * Helper: Batch enrich with employee details and calculate 1-day edit eligibility
+   */
+  private async enrichPerformancesWithEmployeeDetails(
+    records: EmployeePerformance[],
+  ): Promise<EnrichedEmployeePerformance[]> {
+    if (!records.length) return [];
+
+    const employeeIds = Array.from(
+      new Set(records.map((r) => r.employeeId).filter(Boolean)),
+    );
+
+    const employeeMap = new Map<string, { fullName: string; department: string; designation: string }>();
+
+    if (employeeIds.length > 0) {
+      try {
+        const employees = await this.employeeDetailsRepository.find({
+          where: { employeeId: In(employeeIds) },
+          select: ['employeeId', 'fullName', 'department', 'designation'],
+        });
+        employees.forEach((emp) => {
+          employeeMap.set(emp.employeeId, {
+            fullName: emp.fullName,
+            department: emp.department,
+            designation: emp.designation,
+          });
+        });
+      } catch (err) {
+        const caught = this.caughtError(err);
+        this.logger.warn(`Could not fetch employee details for enrichment: ${caught.message}`);
+      }
+    }
+
+    const now = new Date();
+    const requestWindowMs = appraisalWindowMs(APPRAISAL_EDIT_WINDOW_HOURS);
+
+    return records.map((r) => {
+      const empInfo = employeeMap.get(r.employeeId);
+
+      let canRequestEdit = false;
+      let remainingRequestHours = 0;
+      if (r.status === EmployeePerformanceStatus.SUBMITTED && r.submittedAt) {
+        const diffMs = now.getTime() - new Date(r.submittedAt).getTime();
+        canRequestEdit = diffMs <= requestWindowMs;
+        if (canRequestEdit) {
+          remainingRequestHours = Math.max(1, Math.round((requestWindowMs - diffMs) / (3600 * 1000)));
+        }
+      }
+
+      const isEditWindowActive = !!(
+        r.status === EmployeePerformanceStatus.EDIT_GRANTED &&
+        r.editAllowedUntil &&
+        now.getTime() <= new Date(r.editAllowedUntil).getTime()
+      );
+
+      const canEdit =
+        isEditWindowActive ||
+        r.status === EmployeePerformanceStatus.DRAFT ||
+        r.status === EmployeePerformanceStatus.NOT_STARTED;
+
+      return {
+        ...overlayPerformanceView(r),
+        employeeName: empInfo?.fullName || null,
+        department: empInfo?.department || null,
+        designation: empInfo?.designation || null,
+        canRequestEdit,
+        remainingRequestHours,
+        isEditWindowActive,
+        canEdit,
+      };
+    });
+  }
+}
+
+// Backward compatibility alias
+export const MasterEmployeePerformanceService = EmployeePerformanceService;
+export type MasterEmployeePerformanceService = EmployeePerformanceService;

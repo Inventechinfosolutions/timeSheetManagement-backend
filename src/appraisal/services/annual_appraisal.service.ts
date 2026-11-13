@@ -1,0 +1,472 @@
+import {
+  Injectable,
+  NotFoundException,
+  BadRequestException,
+  Logger,
+  HttpException,
+  HttpStatus,
+} from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
+import { AnnualAppraisalSummary } from '../entities/annual_appraisal.entity';
+import { QuarterlyReview } from '../entities/quarterly_review.entities';
+import { EmployeeDetails } from '../../employeeTimeSheet/entities/employeeDetails.entity';
+import { ManagerMapping } from '../../managerMapping/entities/managerMapping.entity';
+import { QueryAnnualAppraisalDto } from '../dto/annual_appraisal.dto';
+import { UsersService } from '../../users/service/user.service';
+import { User } from '../../users/entities/user.entity';
+import {
+  ANNUAL_SUMMARY_EMPTY_MESSAGE,
+  PASSWORD_MISMATCH_MESSAGE,
+} from '../constants/appraisal.constants';
+import {
+  QuarterlyReviewStatus,
+  QuaterlyEnum,
+  ReviewPeriod,
+} from '../enums/quarterly_review.enums';
+
+@Injectable()
+export class AnnualAppraisalService {
+  private readonly logger = new Logger(AnnualAppraisalService.name);
+
+  constructor(
+    @InjectRepository(AnnualAppraisalSummary)
+    private readonly annualRepo: Repository<AnnualAppraisalSummary>,
+    @InjectRepository(QuarterlyReview)
+    private readonly reviewRepo: Repository<QuarterlyReview>,
+    @InjectRepository(EmployeeDetails)
+    private readonly employeeRepo: Repository<EmployeeDetails>,
+    @InjectRepository(ManagerMapping)
+    private readonly managerMappingRepo: Repository<ManagerMapping>,
+    private readonly usersService: UsersService,
+  ) {}
+
+  async revealSummary(financialYear: string, password: string, user: User) {
+    const typed = password?.trim();
+    if (!typed) {
+      throw new BadRequestException(PASSWORD_MISMATCH_MESSAGE);
+    }
+    const account = user?.loginId
+      ? await this.usersService.findByLoginId(user.loginId)
+      : user?.id
+        ? await this.usersService.findById(user.id)
+        : null;
+    if (!account?.loginId) {
+      throw new BadRequestException(PASSWORD_MISMATCH_MESSAGE);
+    }
+    const userMatches = await this.matchesStoredPassword(typed, account.password);
+    const employee = userMatches
+      ? null
+      : await this.employeeRepo.findOne({
+          where: [{ employeeId: account.loginId }, { email: account.loginId }],
+        });
+    const employeeMatches = userMatches
+      ? false
+      : await this.matchesStoredPassword(typed, employee?.password);
+    if (!userMatches && !employeeMatches) {
+      throw new BadRequestException(PASSWORD_MISMATCH_MESSAGE);
+    }
+    const employeeId = await this.resolveSessionEmployeeId(account.loginId);
+    const year = financialYear.trim();
+    const record = await this.annualRepo.findOne({
+      where: { employeeId, financialYear: year },
+    });
+    return {
+      financialYear: record?.financialYear || year,
+      q1Rating: record?.q1Rating ?? null,
+      q2Rating: record?.q2Rating ?? null,
+      q3Rating: record?.q3Rating ?? null,
+      q4Rating: record?.q4Rating ?? null,
+      annualAverageRating: record?.annualAverageRating ?? null,
+      passwordVerified: true,
+    };
+  }
+
+  private async matchesStoredPassword(typed: string, stored?: string | null): Promise<boolean> {
+    if (!stored) {
+      return false;
+    }
+    if (stored.startsWith('$2')) {
+      return this.usersService.comparePassword(typed, stored);
+    }
+    return stored === typed;
+  }
+
+  private async resolveSessionEmployeeId(loginId: string): Promise<string> {
+    const byEmployeeId = await this.employeeRepo.findOne({
+      where: { employeeId: loginId },
+    });
+    if (byEmployeeId) {
+      return byEmployeeId.employeeId;
+    }
+    const byEmail = await this.employeeRepo.findOne({
+      where: { email: loginId },
+    });
+    if (byEmail) {
+      return byEmail.employeeId;
+    }
+    return loginId;
+  }
+
+  private toRatingNumber(raw: unknown): number | null {
+    if (raw == null || raw === '') return null;
+    const num = Number(raw);
+    return Number.isFinite(num) && !Number.isNaN(num) ? num : null;
+  }
+
+  private isYearlyReviewRow(review: {
+    reviewPeriod?: string | null;
+    quarter?: unknown;
+  }): boolean {
+    if (review.reviewPeriod === ReviewPeriod.YEARLY) return true;
+    if (Array.isArray(review.quarter)) return true;
+    if (review.quarter != null && typeof review.quarter === 'object') return true;
+    const quarter = String(review.quarter || '').trim().toUpperCase();
+    return (
+      quarter === 'YEARLY' ||
+      quarter === String(QuaterlyEnum.YEARLY).toUpperCase() ||
+      quarter.includes('YEARLY') ||
+      (quarter.includes('Q1') && quarter.includes('Q2') && quarter.includes('Q3') && quarter.includes('Q4'))
+    );
+  }
+
+  private isCompletedReviewStatus(status: string | null | undefined): boolean {
+    return (
+      status === QuarterlyReviewStatus.REVIEWED ||
+      status === QuarterlyReviewStatus.COMPLETED
+    );
+  }
+
+  /**
+   * Sync and calculate the annual rating for an employee in a financial year.
+   * Mode A (YEARLY): one yearly review → annualAverageRating = finalRating, mirror into Q1–Q4.
+   * Mode B (QUARTERLY): average only when all 4 quarter ratings exist.
+   */
+  async syncEmployeeAnnualRating(
+    employeeId: string,
+    financialYear: string,
+  ): Promise<AnnualAppraisalSummary> {
+    try {
+      this.logger.log(`Syncing annual appraisal for ${employeeId} (${financialYear})`);
+
+      // 1. Fetch all reviews for this employee in this financial year
+      const reviews = await this.reviewRepo.find({
+        where: { employeeId, financialYear },
+      });
+
+      // 2. Map quarter ratings and statuses
+      let q1Rating: number | null = null;
+      let q1Status: string | null = null;
+      let q2Rating: number | null = null;
+      let q2Status: string | null = null;
+      let q3Rating: number | null = null;
+      let q3Status: string | null = null;
+      let q4Rating: number | null = null;
+      let q4Status: string | null = null;
+
+      let isYearlyReview = false;
+      let yearlyFinalRating: number | null = null;
+      let yearlyStatus: string | null = null;
+      const completedRatings: number[] = [];
+
+      for (const r of reviews) {
+        const rating = this.toRatingNumber(r.finalRating ?? r.overallPerformanceRating);
+        const isReviewed = this.isCompletedReviewStatus(r.status);
+
+        if (this.isYearlyReviewRow(r)) {
+          isYearlyReview = true;
+          yearlyStatus = r.status || yearlyStatus;
+          if (rating !== null) {
+            yearlyFinalRating = rating;
+          }
+
+          // Prefer structured yearlyQuarterReviews snapshots when present
+          let snapshots = (r as { yearlyQuarterReviews?: unknown }).yearlyQuarterReviews;
+          if (typeof snapshots === 'string' && (snapshots.startsWith('{') || snapshots.startsWith('['))) {
+            try {
+              snapshots = JSON.parse(snapshots);
+            } catch {
+              snapshots = null;
+            }
+          }
+          if (snapshots && typeof snapshots === 'object') {
+            for (const slot of ['Q1', 'Q2', 'Q3', 'Q4'] as const) {
+              const snap = (snapshots as Record<string, unknown>)[slot];
+              if (!snap || typeof snap !== 'object') continue;
+              const snapObj = snap as {
+                finalRating?: unknown;
+                overallPerformanceRating?: unknown;
+                status?: string;
+              };
+              const num = this.toRatingNumber(
+                snapObj.finalRating ?? snapObj.overallPerformanceRating,
+              );
+              const snapStatus = snapObj.status || null;
+              if (slot === 'Q1') {
+                q1Rating = num ?? q1Rating;
+                q1Status = snapStatus || q1Status;
+              }
+              if (slot === 'Q2') {
+                q2Rating = num ?? q2Rating;
+                q2Status = snapStatus || q2Status;
+              }
+              if (slot === 'Q3') {
+                q3Rating = num ?? q3Rating;
+                q3Status = snapStatus || q3Status;
+              }
+              if (slot === 'Q4') {
+                q4Rating = num ?? q4Rating;
+                q4Status = snapStatus || q4Status;
+              }
+            }
+          }
+          continue;
+        }
+
+        const quarter = typeof r.quarter === 'string' ? r.quarter.toUpperCase() : '';
+        if (quarter === QuaterlyEnum.Q1) {
+          q1Rating = rating;
+          q1Status = r.status;
+          if (isReviewed && rating !== null) completedRatings.push(rating);
+        } else if (quarter === QuaterlyEnum.Q2) {
+          q2Rating = rating;
+          q2Status = r.status;
+          if (isReviewed && rating !== null) completedRatings.push(rating);
+        } else if (quarter === QuaterlyEnum.Q3) {
+          q3Rating = rating;
+          q3Status = r.status;
+          if (isReviewed && rating !== null) completedRatings.push(rating);
+        } else if (quarter === QuaterlyEnum.Q4) {
+          q4Rating = rating;
+          q4Status = r.status;
+          if (isReviewed && rating !== null) completedRatings.push(rating);
+        }
+      }
+
+      // Mode A: one yearly appraisal — mirror final rating/status into Q1–Q4 for UI pills
+      if (isYearlyReview) {
+        q1Status = q1Status || yearlyStatus;
+        q2Status = q2Status || yearlyStatus;
+        q3Status = q3Status || yearlyStatus;
+        q4Status = q4Status || yearlyStatus;
+        if (yearlyFinalRating !== null) {
+          q1Rating = yearlyFinalRating;
+          q2Rating = yearlyFinalRating;
+          q3Rating = yearlyFinalRating;
+          q4Rating = yearlyFinalRating;
+        }
+      }
+
+      const quarterRatings = [q1Rating, q2Rating, q3Rating, q4Rating].filter(
+        (rating): rating is number => rating !== null,
+      );
+      const annualAverageRating = isYearlyReview
+        ? yearlyFinalRating
+        : quarterRatings.length === 4
+          ? Number((quarterRatings.reduce((sum, rating) => sum + rating, 0) / 4).toFixed(2))
+          : null;
+
+      const completedQuartersCount = isYearlyReview
+        ? this.isCompletedReviewStatus(yearlyStatus) && yearlyFinalRating !== null
+          ? 4
+          : [q1Status, q2Status, q3Status, q4Status].filter((status) =>
+              this.isCompletedReviewStatus(status),
+            ).length
+        : completedRatings.length;
+
+      // 4. Fetch employee & manager details
+      const emp = await this.employeeRepo.findOne({ where: { employeeId } });
+      const mapping = await this.managerMappingRepo.findOne({ where: { employeeId } });
+
+      let record = await this.annualRepo.findOne({
+        where: { employeeId, financialYear },
+      });
+
+      if (!record) {
+        record = this.annualRepo.create({
+          employeeId,
+          financialYear,
+          employeeName: emp?.fullName || reviews[0]?.employeeName || null,
+          department: emp?.department || reviews[0]?.department || null,
+          designation: emp?.designation || reviews[0]?.designation || null,
+          managerId: mapping?.managerId || reviews[0]?.assignerId || null,
+          managerName: mapping?.managerName || reviews[0]?.managerName || null,
+        });
+      }
+
+      await this.annualRepo.query(
+        `INSERT INTO annual_appraisal_summary
+          (employeeId, employeeName, department, designation, managerId, managerName, financialYear,
+           q1Rating, q1Status, q2Rating, q2Status, q3Rating, q3Status, q4Rating, q4Status,
+           annualAverageRating, completedQuartersCount,
+           createdAt, updatedAt)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(6), NOW(6))
+         ON DUPLICATE KEY UPDATE
+           employeeName = VALUES(employeeName),
+           department = VALUES(department),
+           designation = VALUES(designation),
+           managerId = VALUES(managerId),
+           managerName = VALUES(managerName),
+           q1Rating = VALUES(q1Rating),
+           q1Status = VALUES(q1Status),
+           q2Rating = VALUES(q2Rating),
+           q2Status = VALUES(q2Status),
+           q3Rating = VALUES(q3Rating),
+           q3Status = VALUES(q3Status),
+           q4Rating = VALUES(q4Rating),
+           q4Status = VALUES(q4Status),
+           annualAverageRating = VALUES(annualAverageRating),
+           completedQuartersCount = VALUES(completedQuartersCount),
+           updatedAt = NOW(6)`,
+        [
+          employeeId,
+          emp?.fullName || reviews[0]?.employeeName || record.employeeName || null,
+          emp?.department || reviews[0]?.department || record.department || null,
+          emp?.designation || reviews[0]?.designation || record.designation || null,
+          mapping?.managerId || reviews[0]?.assignerId || record.managerId || null,
+          mapping?.managerName || reviews[0]?.managerName || record.managerName || null,
+          financialYear,
+          q1Rating,
+          q1Status,
+          q2Rating,
+          q2Status,
+          q3Rating,
+          q3Status,
+          q4Rating,
+          q4Status,
+          annualAverageRating,
+          completedQuartersCount,
+        ],
+      );
+
+      const saved = await this.annualRepo.findOne({ where: { employeeId, financialYear } });
+      if (!saved) {
+        throw new HttpException(
+          'The annual summary row was not written.',
+          HttpStatus.INTERNAL_SERVER_ERROR,
+        );
+      }
+      this.logger.log(`Annual summary saved for ${employeeId} ${financialYear} id=${saved.id}`);
+      return saved;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      const stack = error instanceof Error ? error.stack : undefined;
+      this.logger.error(`Error syncing annual appraisal: ${message}`, stack);
+      if (error instanceof HttpException) throw error;
+      throw new HttpException(
+        `Failed to sync annual appraisal: ${message}`,
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
+  }
+
+  /**
+   * Sync all employees for an entire financial year
+   */
+  async syncAllForFinancialYear(financialYear: string): Promise<{ syncedCount: number; message: string }> {
+    const reviews = await this.reviewRepo
+      .createQueryBuilder('r')
+      .select('DISTINCT r.employeeId', 'employeeId')
+      .where('r.financialYear = :financialYear', { financialYear })
+      .getRawMany();
+
+    let count = 0;
+    for (const item of reviews) {
+      if (item.employeeId) {
+        await this.syncEmployeeAnnualRating(item.employeeId, financialYear);
+        count++;
+      }
+    }
+
+    return {
+      syncedCount: count,
+      message: `Successfully synced annual appraisal ratings for ${count} employees in FY ${financialYear}.`,
+    };
+  }
+
+  /**
+   * Find all annual appraisal records with filters
+   */
+  async findAll(query?: QueryAnnualAppraisalDto): Promise<{
+    data: AnnualAppraisalSummary[];
+    total: number;
+    page?: number;
+    limit?: number;
+  }> {
+    const qb = this.annualRepo.createQueryBuilder('a');
+
+    if (query?.employeeId?.trim()) {
+      qb.andWhere('(a.employeeId = :exactEmp OR a.employeeId LIKE :likeEmp)', {
+        exactEmp: query.employeeId.trim(),
+        likeEmp: `%${query.employeeId.trim()}%`,
+      });
+    }
+
+    if (query?.financialYear?.trim()) {
+      qb.andWhere('a.financialYear = :fy', { fy: query.financialYear.trim() });
+    }
+
+    if (query?.department?.trim()) {
+      qb.andWhere('a.department LIKE :dept', { dept: `%${query.department.trim()}%` });
+    }
+
+    if (query?.managerId?.trim()) {
+      qb.andWhere('a.managerId = :mgr', { mgr: query.managerId.trim() });
+    }
+
+    if (query?.rating) {
+      qb.andWhere('ROUND(a.annualAverageRating) = :rating', { rating: query.rating });
+    }
+
+    if (query?.q?.trim()) {
+      const keyword = `%${query.q.trim()}%`;
+      qb.andWhere(
+        '(a.employeeId LIKE :keyword OR a.employeeName LIKE :keyword OR a.department LIKE :keyword OR a.financialYear LIKE :keyword)',
+        { keyword },
+      );
+    }
+
+    qb.orderBy('a.id', 'DESC');
+
+    const total = await qb.getCount();
+
+    if (query?.page && query?.limit) {
+      const skip = (query.page - 1) * query.limit;
+      qb.skip(skip).take(query.limit);
+    }
+
+    const data = await qb.getMany();
+    return {
+      data,
+      total,
+      page: query?.page,
+      limit: query?.limit,
+    };
+  }
+
+  /**
+   * Get all annual summaries for a specific employee across years
+   */
+  async findByEmployee(employeeId: string): Promise<AnnualAppraisalSummary[]> {
+    return await this.annualRepo.find({
+      where: { employeeId },
+      order: { financialYear: 'DESC' },
+    });
+  }
+
+  /**
+   * Get a specific employee's summary for a specific financial year
+   */
+  async findOne(employeeId: string, financialYear: string): Promise<AnnualAppraisalSummary> {
+    const record = await this.annualRepo.findOne({
+      where: { employeeId, financialYear },
+    });
+
+    if (!record) {
+      // Auto-sync if not present yet
+      return await this.syncEmployeeAnnualRating(employeeId, financialYear);
+    }
+
+    return record;
+  }
+}

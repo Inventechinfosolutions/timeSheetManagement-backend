@@ -1,0 +1,371 @@
+import {
+  Controller,
+  Get,
+  Post,
+  Put,
+  Patch,
+  Delete,
+  Param,
+  Body,
+  Query,
+  ParseIntPipe,
+  Logger,
+  HttpStatus,
+  HttpCode,
+  UseGuards,
+  Req,
+  Headers,
+  Header,
+} from '@nestjs/common';
+import {
+  ApiTags,
+  ApiOperation,
+  ApiParam,
+  ApiQuery,
+  ApiBody,
+  ApiOkResponse,
+  ApiCreatedResponse,
+  ApiBadRequestResponse,
+  ApiNotFoundResponse,
+  ApiInternalServerErrorResponse,
+} from '@nestjs/swagger';
+import { QuarterlyReviewService } from '../services/quarterly_review.service';
+import { AppraisalDeadlineCronService } from '../services/appraisal_deadline.cron';
+import {
+  CreateQuarterlyReviewDto,
+  QueryQuarterlyReviewDto,
+  SearchQuarterlyReviewDto,
+  UpdateQuarterlyReviewDto,
+  ManagerEvaluationDto,
+  ExportQuarterlyReviewDto,
+  ReassignQuarterlyReviewDto,
+} from '../dto/quarterly_review.dto';
+import { RevealedEvaluationDto } from '../dto/reveal_rating.dto';
+import { QuarterlyReview } from '../entities/quarterly_review.entities';
+import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
+import { User } from '../../users/entities/user.entity';
+import { UserType } from '../../users/enums/user-type.enum';
+import { isCeoOrGmUser } from '../../users/utils/admin-access';
+
+@ApiTags('Quarterly Review')
+@Controller('quarterly-review&performance')
+export class QuarterlyReviewPerformanceController {
+  constructor(
+    private readonly reviewService: QuarterlyReviewService,
+    private readonly deadlineCronService: AppraisalDeadlineCronService,
+  ) {}
+
+  @Post('trigger-deadline-check')
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({ summary: 'Trigger appraisal deadline checks and 1-day reminders' })
+  async triggerDeadlineCheck() {
+    return await this.deadlineCronService.remindOrCloseOpenReviews();
+  }
+
+  /**
+   * Review list with the matching performance row.
+   * Used by the employee history, the manager table, and the edit load.
+   * GET /api/quarterly-review&performance
+   */
+  @Get()
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({ summary: 'Get quarterly reviews with the matching performance row' })
+  @ApiOkResponse({ description: 'Returns the review list with performance details. Manager evaluation fields are omitted for employees.' })
+  async getAll(@Query() query: QueryQuarterlyReviewDto, @Req() req: { user: User }) {
+    if (isCeoOrGmUser(req.user)) {
+      query.employeeRole = UserType.MANAGER;
+    }
+    return await this.reviewService.findAll(
+      query,
+      this.reviewService.hidesManagerEvaluation(req.user),
+    );
+  }
+
+  @Post(':id/reassign')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Re-assign an overdue or locked quarterly review' })
+  async reassignReview(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: ReassignQuarterlyReviewDto,
+    @Req() req: { user: User },
+  ) {
+    return await this.reviewService.reassignReview(id, dto, req.user);
+  }
+}
+
+@ApiTags('Quarterly Review')
+@Controller(['quarterly-review', 'quaterly-review', 'master-quaterly-review'])
+export class QuarterlyReviewController {
+  private readonly logger = new Logger(QuarterlyReviewController.name);
+
+  constructor(private readonly reviewService: QuarterlyReviewService) {}
+
+  /**
+   * FR-01: Employee Dashboard View
+   * GET /api/quarterly-review/dashboard/employee/:employeeId
+   */
+  @Get('dashboard/employee/:employeeId')
+  @ApiOperation({
+    summary: 'Employee Dashboard View (FR-01)',
+    description: 'Displays current quarter, submission status, due date, submitted date, and rating status.',
+  })
+  async getEmployeeDashboard(@Param('employeeId') employeeId: string) {
+    return await this.reviewService.getEmployeeDashboard(employeeId);
+  }
+
+  /**
+   * FR-01: Manager Dashboard View
+   * GET /api/quarterly-review/dashboard/manager/:managerId
+   */
+  @Get('dashboard/manager/:managerId')
+  @ApiOperation({
+    summary: 'Manager Dashboard View (FR-01)',
+    description: 'Displays team member list, pending reviews, completed reviews, and review statistics.',
+  })
+  async getManagerDashboard(@Param('managerId') managerId: string) {
+    return await this.reviewService.getManagerDashboard(managerId);
+  }
+
+  /**
+   * FR-08: Employee Rating Visibility (Restricted View)
+   * GET /api/quarterly-review/:id/employee-view?employeeId=...
+   */
+  @Get(':id/employee-view')
+  @ApiOperation({
+    summary: 'Employee Rating Visibility (FR-08)',
+    description: 'Returns review status and final rating. Strictly masks manager comments and evaluation notes.',
+  })
+  async getEmployeeView(
+    @Param('id', ParseIntPipe) id: number,
+    @Query('employeeId') employeeId: string,
+  ) {
+    return await this.reviewService.getEmployeeView(id, employeeId);
+  }
+
+  @Get(':id/reveal-rating')
+  @UseGuards(JwtAuthGuard)
+  @Header('Cache-Control', 'no-store, no-cache, must-revalidate, private, max-age=0')
+  @Header('Pragma', 'no-cache')
+  @Header('Expires', '0')
+  @ApiOperation({
+    summary: 'Reveal the manager evaluation after the login password check',
+    description: 'Returns RevealedEvaluationDto only when employeeId matches the signed-in employee and this review, the password matches, and both rows are COMPLETED. Never cache — password required on every reveal.',
+  })
+  @ApiQuery({ name: 'employeeId', required: true })
+  @ApiOkResponse({ type: RevealedEvaluationDto })
+  async revealRating(
+    @Param('id', ParseIntPipe) id: number,
+    @Query('employeeId') employeeId: string,
+    @Headers('x-appraisal-password') headerPassword: string | string[],
+    @Req() req: { user: User },
+  ) {
+    const password = Array.isArray(headerPassword) ? headerPassword[0] : headerPassword;
+    return await this.reviewService.revealRating(id, employeeId, password, req.user);
+  }
+
+  @Get(':id/evaluation')
+  @UseGuards(JwtAuthGuard)
+  @Header('Cache-Control', 'no-store')
+  @ApiOperation({
+    summary: 'Manager evaluation fields only',
+    description: 'Scores and comments for the evaluation matrix. Does not include the employee self-review.',
+  })
+  @ApiOkResponse({ type: RevealedEvaluationDto })
+  async getEvaluation(
+    @Param('id', ParseIntPipe) id: number,
+    @Req() req: { user: User },
+  ) {
+    return await this.reviewService.getManagerEvaluation(id, req.user);
+  }
+
+  /**
+   * Manager View with full submission, remarks and attachments
+   * GET /api/quarterly-review/:id/manager-view?managerId=...
+   */
+  @Get(':id/manager-view')
+  @ApiOperation({
+    summary: 'Manager Review View (FR-05)',
+    description: 'Returns full review including employee submission, ratings, remarks, and attachments.',
+  })
+  async getManagerView(
+    @Param('id', ParseIntPipe) id: number,
+    @Query('managerId') managerId: string,
+  ) {
+    return await this.reviewService.getManagerView(id, managerId);
+  }
+
+  /**
+   * FR-05, FR-06, FR-07: Submit Manager Evaluation (PUT by ID)
+   * PUT /api/quarterly-review/:id/evaluate
+   */
+  @Put(':id/evaluate')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Submit Manager Evaluation (PUT /:id/evaluate)',
+    description: 'Records 1-5 parameter ratings, remarks, calculates average score, and locks review.',
+  })
+  @ApiParam({ name: 'id', type: Number, description: 'Quarterly review ID' })
+  @ApiBody({ type: ManagerEvaluationDto })
+  async evaluateReview(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() evalDto: ManagerEvaluationDto,
+    @Req() req: { user: User },
+  ) {
+    return await this.reviewService.evaluateReview(id, evalDto, req.user);
+  }
+
+  @Patch(':id/evaluate')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Save or submit a manager evaluation with PATCH' })
+  async patchEvaluation(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() evalDto: ManagerEvaluationDto,
+    @Req() req: { user: User },
+  ) {
+    return await this.reviewService.evaluateReview(id, evalDto, req.user);
+  }
+
+  /**
+   * Re-assign & Unlock a Quarterly Review (Set new deadline and reset status to ASSIGNED)
+   * POST /api/quarterly-review/:id/reassign
+   */
+  @Post(':id/reassign')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Re-assign an overdue or locked quarterly review',
+    description: 'Updates deadline date, sets assignedDate to today, sets review status to ASSIGNED, and resets employee performance status to NOT_STARTED.',
+  })
+  @ApiParam({ name: 'id', type: Number, description: 'Quarterly review ID' })
+  @ApiBody({ type: ReassignQuarterlyReviewDto })
+  async reassignReview(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: ReassignQuarterlyReviewDto,
+    @Req() req: { user: User },
+  ) {
+    return await this.reviewService.reassignReview(id, dto, req.user);
+  }
+
+
+  /**
+   * FR-09: Manager Download Reports (Export Data)
+   * GET /api/quarterly-review/export
+   */
+  @Get('export')
+  @ApiOperation({
+    summary: 'Manager Download Reports (FR-09)',
+    description: 'Exports evaluation data filtered by quarter, department, rating, and status.',
+  })
+  async exportReports(@Query() exportDto: ExportQuarterlyReviewDto) {
+    return await this.reviewService.exportReports(exportDto);
+  }
+
+  /**
+   * GET ALL: Fetch all reviews
+   * GET /api/quarterly-review
+   * The employee history list that includes the performance row is GET /api/quarterly-review&performance.
+   */
+  @Get()
+  @ApiOperation({ summary: 'Get all quarterly reviews (getAll)' })
+  @ApiOkResponse({ description: 'Returns list of quarterly reviews.' })
+  async getAll(@Query() query: QueryQuarterlyReviewDto) {
+    return await this.reviewService.findAll(query);
+  }
+
+  /**
+   * GET BY SEARCH: Search reviews
+   * GET /api/quarterly-review/search
+   */
+  @Get('search')
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({ summary: 'Search quarterly reviews' })
+  async getBySearch(
+    @Query() searchDto: SearchQuarterlyReviewDto,
+    @Req() req: { user: User },
+  ) {
+    if (isCeoOrGmUser(req.user)) {
+      searchDto.employeeRole = UserType.MANAGER;
+      searchDto.role = UserType.MANAGER;
+    }
+    return await this.reviewService.getBySearch(searchDto);
+  }
+
+  /**
+   * GET BY PARAMS: Filter reviews
+   * GET /api/quarterly-review/params
+   */
+  @Get('params')
+  @ApiOperation({ summary: 'Filter quarterly reviews by parameters' })
+  async getByParams(@Query() params: QueryQuarterlyReviewDto) {
+    return await this.reviewService.getByParams(params);
+  }
+
+  /**
+   * GET BY ID: Fetch single review
+   * GET /api/quarterly-review/:id
+   */
+  @Get(':id')
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({ summary: 'Get a quarterly review by ID' })
+  async getById(@Param('id', ParseIntPipe) id: number, @Req() req: { user: User }) {
+    return await this.reviewService.findOne(id, this.reviewService.hidesManagerEvaluation(req.user), req.user);
+  }
+
+  /**
+   * POST: Create review cycle (with Duplicate Check)
+   * POST /api/quarterly-review
+   */
+  @Post()
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({ summary: 'Create a new quarterly review cycle' })
+  @ApiBody({ type: CreateQuarterlyReviewDto })
+  async create(@Body() createDto: CreateQuarterlyReviewDto, @Req() req: { user: User }) {
+    return await this.reviewService.create(createDto, req.user);
+  }
+
+  /**
+   * PUT: Update review
+   * PUT /api/quarterly-review/:id
+   */
+  @Put(':id')
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({ summary: 'Update a quarterly review' })
+  async update(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() updateDto: UpdateQuarterlyReviewDto,
+    @Req() req: { user: User },
+  ) {
+    return await this.reviewService.update(id, updateDto, req.user);
+  }
+
+  @Patch(':id')
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({ summary: 'Update a quarterly review with only the sent fields' })
+  async patch(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() updateDto: UpdateQuarterlyReviewDto,
+    @Req() req: { user: User },
+  ) {
+    return await this.reviewService.update(id, updateDto, req.user);
+  }
+
+  /**
+   * DELETE: Remove review
+   * DELETE /api/quarterly-review/:id
+   */
+  @Delete(':id')
+  @ApiOperation({ summary: 'Delete a quarterly review' })
+  async remove(@Param('id', ParseIntPipe) id: number) {
+    return await this.reviewService.remove(id);
+  }
+}
+
+// Aliases
+export const QuaterlyReviewController = QuarterlyReviewController;
+export type QuaterlyReviewController = QuarterlyReviewController;
+export const MasterQuaterlyReviewController = QuarterlyReviewController;
+export type MasterQuaterlyReviewController = QuarterlyReviewController;
