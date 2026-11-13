@@ -797,6 +797,7 @@ export class QuarterlyReviewService {
       // Dual flow (safe default = old COMPLETED path when no employee-assigner mapping):
       // EMPLOYEE assigner first submit → AWAITING_MANAGER_FINAL_REVIEW (+ notify manager).
       // Manager final (or manager-assigner / no mapping) → COMPLETED as before.
+      // Routing is decided at employee submit via appraisal_mapping (assignerId may be remapped).
       const appraisalMapping = await this.appraisalMappingService.findActiveByEmployeeId(
         review.employeeId,
       );
@@ -806,11 +807,28 @@ export class QuarterlyReviewService {
       const sessionEmployeeId = user?.loginId
         ? await this.resolveSessionEmployeeId(String(user.loginId))
         : null;
+      const sameEmployeeId = (a?: string | null, b?: string | null) =>
+        !!a &&
+        !!b &&
+        String(a).trim().localeCompare(String(b).trim(), undefined, {
+          sensitivity: 'accent',
+        }) === 0;
+      const mappedEmployeeAssignerId =
+        appraisalMapping?.assignerType === AppraisalAssignerType.EMPLOYEE
+          ? String(appraisalMapping.assignerId || '').trim()
+          : '';
+      const isMappedEmployeeAssignerSession = sameEmployeeId(
+        sessionEmployeeId,
+        mappedEmployeeAssignerId,
+      );
+      const isReportingManagerSession = sameEmployeeId(
+        sessionEmployeeId,
+        review.managerId,
+      );
+
       // Employee-assigner cannot edit after forward or after manager completes.
       if (
-        appraisalMapping?.assignerType === AppraisalAssignerType.EMPLOYEE &&
-        sessionEmployeeId &&
-        sessionEmployeeId === appraisalMapping.assignerId &&
+        isMappedEmployeeAssignerSession &&
         (alreadyAwaitingManager || evaluationFinished)
       ) {
         throw new ForbiddenException(
@@ -819,11 +837,38 @@ export class QuarterlyReviewService {
             : 'Evaluation is completed. Only the manager can edit it.',
         );
       }
+      // When appraisal_mapping points to an EMPLOYEE assigner, manager cannot first-pass
+      // until status is AWAITING_MANAGER_FINAL_REVIEW (or already completed for edits).
+      if (
+        mappedEmployeeAssignerId &&
+        !isMappedEmployeeAssignerSession &&
+        !alreadyAwaitingManager &&
+        !evaluationFinished
+      ) {
+        throw new ForbiddenException(
+          'This appraisal is assigned to the mapped reviewer first. Wait until they forward it for manager final review.',
+        );
+      }
+      // First-pass flow only when the mapped employee-assigner is the one submitting.
       const isEmployeeAssignerFlow =
-        !!appraisalMapping &&
-        appraisalMapping.assignerType === AppraisalAssignerType.EMPLOYEE &&
+        isMappedEmployeeAssignerSession &&
         !alreadyAwaitingManager &&
         !evaluationFinished;
+
+      // Manager final path: only reporting manager (or admin) after assigner forwards.
+      if (
+        alreadyAwaitingManager &&
+        !evaluationFinished &&
+        !isMappedEmployeeAssignerSession &&
+        !hasAdminAccess(user) &&
+        sessionEmployeeId &&
+        review.managerId &&
+        !isReportingManagerSession
+      ) {
+        throw new ForbiddenException(
+          'Only the reporting manager can complete the final review.',
+        );
+      }
 
       // Confirmations: assigner first-pass → assignerConfirmation; manager final → managerConfirmation.
       if (isEmployeeAssignerFlow) {
@@ -885,9 +930,9 @@ export class QuarterlyReviewService {
           assignedDate: review.assignedDate,
           deadlineDate: review.deadlineDate,
           submittedDate: new Date(),
-          submittedBy: appraisalMapping.assignerId,
+          submittedBy: mappedEmployeeAssignerId || sessionEmployeeId || review.assignerId,
           status: QuarterlyReviewStatus.AWAITING_MANAGER_FINAL_REVIEW,
-          lastModifiedBy: appraisalMapping.assignerId,
+          lastModifiedBy: mappedEmployeeAssignerId || sessionEmployeeId || review.assignerId,
           details: `Assigner submitted evaluation (score: ${review.finalRating ?? 'N/A'}); awaiting manager final comment`,
         });
         review.auditHistory = appendAuditEntry(review.auditHistory, awaitEntry);
@@ -901,7 +946,10 @@ export class QuarterlyReviewService {
           employeeName: saved.employeeName || saved.employeeId,
           quarter: saved.quarter,
           financialYear: saved.financialYear,
-          assignerName: appraisalMapping.assignerName || appraisalMapping.assignerId,
+          assignerName:
+            appraisalMapping?.assignerName ||
+            mappedEmployeeAssignerId ||
+            review.assignerId,
         });
         return this.toEvaluationPatchResponse(saved, evalDto, anyScoreSent);
       }
@@ -1025,17 +1073,25 @@ export class QuarterlyReviewService {
     };
     teamReviews: EnrichedQuarterlyReview[];
   }> {
-    // 1. Fetch team members mapped to this manager
+    // 1. Fetch team members mapped to this manager + appraisal_mapping employees for this viewer
     const teamMappings = await this.managerMappingRepository.find({
       where: { managerId },
     });
     const teamEmployeeIds = teamMappings.map((m) => m.employeeId).filter(Boolean);
+    const mappedAsAssigner = await this.appraisalMappingService.findByAssigner(managerId);
+    const mappedEmployeeIds = mappedAsAssigner
+      .filter((m) => m.assignerType === AppraisalAssignerType.EMPLOYEE)
+      .map((m) => m.employeeId)
+      .filter(Boolean);
+    const visibilityEmployeeIds = Array.from(
+      new Set([...teamEmployeeIds, ...mappedEmployeeIds]),
+    );
 
     let reviews: QuarterlyReview[] = [];
-    if (teamEmployeeIds.length > 0) {
+    if (visibilityEmployeeIds.length > 0) {
       reviews = await this.reviewRepository.find({
         where: [
-          { employeeId: In(teamEmployeeIds) },
+          { employeeId: In(visibilityEmployeeIds) },
           { assignerId: managerId },
         ],
         order: { id: 'DESC' },
@@ -1047,16 +1103,51 @@ export class QuarterlyReviewService {
       });
     }
 
-    // Deduplicate by ID; hide other-assigner team rows until awaiting manager final / completed.
-    const managerVisibleFromOtherAssigner = new Set<string>([
+    const activeMappings = visibilityEmployeeIds.length
+      ? await this.appraisalMappingService.findActiveByEmployeeIds(visibilityEmployeeIds)
+      : [];
+    const heldForOtherAssigner = new Set(
+      activeMappings
+        .filter(
+          (m) =>
+            m.assignerType === AppraisalAssignerType.EMPLOYEE &&
+            String(m.assignerId || '').trim().localeCompare(managerId, undefined, {
+              sensitivity: 'accent',
+            }) !== 0,
+        )
+        .map((m) => m.employeeId),
+    );
+    const managerVisibleAfterMappingForward = new Set<string>([
       QuarterlyReviewStatus.AWAITING_MANAGER_FINAL_REVIEW,
       QuarterlyReviewStatus.COMPLETED,
       QuarterlyReviewStatus.REVIEWED,
     ]);
+    const mappedAssignerVisible = new Set<string>([
+      QuarterlyReviewStatus.PERFORMANCE_RECEIVED,
+      QuarterlyReviewStatus.EVALUATION_IN_PROGRESS,
+      QuarterlyReviewStatus.AWAITING_MANAGER_FINAL_REVIEW,
+      QuarterlyReviewStatus.COMPLETED,
+      QuarterlyReviewStatus.REVIEWED,
+      QuarterlyReviewStatus.REQUESTED_FOR_EDIT,
+      QuarterlyReviewStatus.EDIT_GRANTED,
+    ]);
+    const mappedEmployeeSet = new Set(mappedEmployeeIds);
+
+    // Live mapping decides first-pass visibility (review.assignerId stays who assigned).
     const uniqueReviews = Array.from(new Map(reviews.map((r) => [r.id, r])).values()).filter(
-      (r) =>
-        r.assignerId === managerId ||
-        managerVisibleFromOtherAssigner.has(String(r.status || '')),
+      (r) => {
+        const status = String(r.status || '');
+        if (mappedEmployeeSet.has(r.employeeId) && mappedAssignerVisible.has(status)) {
+          return true;
+        }
+        if (r.assignerId === managerId) {
+          if (heldForOtherAssigner.has(r.employeeId)) {
+            return managerVisibleAfterMappingForward.has(status);
+          }
+          return true;
+        }
+        return managerVisibleAfterMappingForward.has(status);
+      },
     );
 
     const completed = uniqueReviews.filter((r) => this.isEvaluationFinished(r.status));
@@ -1534,25 +1625,86 @@ export class QuarterlyReviewService {
           .map((m) => m.employeeId)
           .filter((id): id is string => Boolean(id) && id !== assignerId);
 
-        // Own assignments always visible. Team rows assigned by someone else (employee assigner)
-        // only after AWAITING_MANAGER_FINAL_REVIEW or finished (COMPLETED/REVIEWED).
-        const managerVisibleFromOtherAssigner = [
+        // Live appraisal_mapping: who evaluates first (assignerId on review stays who assigned).
+        const mappedAsAssigner = await this.appraisalMappingService.findByAssigner(assignerId);
+        const mappedEmployeeIds = mappedAsAssigner
+          .filter((m) => m.assignerType === AppraisalAssignerType.EMPLOYEE)
+          .map((m) => m.employeeId)
+          .filter(Boolean);
+
+        const visibilityEmployeeIds = Array.from(
+          new Set([...teamEmployeeIds, ...mappedEmployeeIds]),
+        );
+        const activeMappings = visibilityEmployeeIds.length
+          ? await this.appraisalMappingService.findActiveByEmployeeIds(visibilityEmployeeIds)
+          : [];
+        // Employees whose first pass belongs to someone else (EMPLOYEE mapping ≠ this viewer).
+        const heldForOtherAssigner = activeMappings
+          .filter(
+            (m) =>
+              m.assignerType === AppraisalAssignerType.EMPLOYEE &&
+              String(m.assignerId || '').trim().localeCompare(assignerId, undefined, {
+                sensitivity: 'accent',
+              }) !== 0,
+          )
+          .map((m) => m.employeeId)
+          .filter(Boolean);
+
+        // Manager sees these only after mapped employee-assigner forwards / completes.
+        const managerVisibleAfterMappingForward = [
           QuarterlyReviewStatus.AWAITING_MANAGER_FINAL_REVIEW,
           QuarterlyReviewStatus.COMPLETED,
           QuarterlyReviewStatus.REVIEWED,
         ];
-        if (teamEmployeeIds.length > 0) {
-          qb.andWhere(
-            `(review.assignerId = :assignerId OR (
-              review.employeeId IN (:...teamEmployeeIds)
-              AND review.assignerId != :assignerId
-              AND review.status IN (:...managerVisibleFromOtherAssigner)
-            ))`,
-            { assignerId, teamEmployeeIds, managerVisibleFromOtherAssigner },
+        // Mapped employee-assigner sees submitted / in-progress / forwarded / done.
+        const mappedAssignerVisibleStatuses = [
+          QuarterlyReviewStatus.PERFORMANCE_RECEIVED,
+          QuarterlyReviewStatus.EVALUATION_IN_PROGRESS,
+          QuarterlyReviewStatus.AWAITING_MANAGER_FINAL_REVIEW,
+          QuarterlyReviewStatus.COMPLETED,
+          QuarterlyReviewStatus.REVIEWED,
+          QuarterlyReviewStatus.REQUESTED_FOR_EDIT,
+          QuarterlyReviewStatus.EDIT_GRANTED,
+        ];
+
+        const clauses: string[] = [];
+        const paramsBag: Record<string, unknown> = { assignerId };
+
+        // 1) Mapped employee-assigner (e.g. Shiva): see mapped employees even when assignerId is manager.
+        if (mappedEmployeeIds.length > 0) {
+          clauses.push(
+            `(review.employeeId IN (:...mappedEmployeeIds) AND review.status IN (:...mappedAssignerVisibleStatuses))`,
           );
-        } else {
-          qb.andWhere('review.assignerId = :assignerId', { assignerId });
+          paramsBag.mappedEmployeeIds = mappedEmployeeIds;
+          paramsBag.mappedAssignerVisibleStatuses = mappedAssignerVisibleStatuses;
         }
+
+        // 2) Own assignments (assignerId = me), but hide first-pass when mapping points to someone else.
+        if (heldForOtherAssigner.length > 0) {
+          clauses.push(
+            `(review.assignerId = :assignerId AND (
+              review.employeeId NOT IN (:...heldForOtherAssigner)
+              OR review.status IN (:...managerVisibleAfterMappingForward)
+            ))`,
+          );
+          paramsBag.heldForOtherAssigner = heldForOtherAssigner;
+          paramsBag.managerVisibleAfterMappingForward = managerVisibleAfterMappingForward;
+        } else {
+          clauses.push(`(review.assignerId = :assignerId)`);
+        }
+
+        // 3) Team rows with a different review.assignerId — only after forward/complete.
+        if (teamEmployeeIds.length > 0) {
+          clauses.push(
+            `(review.employeeId IN (:...teamEmployeeIds)
+              AND review.assignerId != :assignerId
+              AND review.status IN (:...managerVisibleAfterMappingForward))`,
+          );
+          paramsBag.teamEmployeeIds = teamEmployeeIds;
+          paramsBag.managerVisibleAfterMappingForward = managerVisibleAfterMappingForward;
+        }
+
+        qb.andWhere(`(${clauses.join(' OR ')})`, paramsBag);
         qb.andWhere('review.employeeId != :assignerId', { assignerId });
       }
 
@@ -2084,6 +2236,7 @@ export class QuarterlyReviewService {
       new Set([
         ...reviews.map((r) => r.employeeId),
         ...reviews.map((r) => r.assignerId),
+        ...reviews.map((r) => r.managerId),
       ].filter(Boolean)),
     );
 
@@ -2213,10 +2366,24 @@ export class QuarterlyReviewService {
 
       const empInfo = empMap.get(r.employeeId);
       const assignerInfo = empMap.get(r.assignerId);
+      const reportingManagerInfo = r.managerId ? empMap.get(r.managerId) : null;
       const department = r.department || empInfo?.department || null;
       const employeeName = r.employeeName || empInfo?.fullName || r.employeeId;
       const designation = r.designation || empInfo?.designation || null;
+      // Assigned By: prefer reporting/creating manager when assignerId was re-routed
+      // to an employee-assigner on submit (appraisal_mapping EMPLOYEE).
       const managerName =
+        (r.managerId &&
+        r.assignerId &&
+        r.managerId !== r.assignerId
+          ? reportingManagerInfo?.fullName ||
+            (r.managerName &&
+            r.managerName !== r.assignerId &&
+            r.managerName !== 'Reporting Manager' &&
+            String(r.managerName).toLowerCase() !== 'admin'
+              ? r.managerName
+              : null)
+          : null) ||
         assignerInfo?.fullName ||
         (r.managerName &&
         r.managerName !== r.assignerId &&

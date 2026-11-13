@@ -492,6 +492,16 @@ export class EmployeePerformanceService {
         review.performanceId = saved.id;
         review.status = reviewStatus;
         review.auditHistory = appendAuditEntry(review.auditHistory, submitEntry);
+        // Keep assignerId as who assigned (manager). Who evaluates first = appraisal_mapping (live).
+        if (!review.managerId) {
+          const mgrMap = await this.managerMappingRepository.findOne({
+            where: { employeeId: dto.employeeId },
+          });
+          if (mgrMap?.managerId) review.managerId = mgrMap.managerId;
+          if (!review.managerName && mgrMap?.managerName) {
+            review.managerName = mgrMap.managerName;
+          }
+        }
         await this.reviewRepository.save(review);
       } else {
         // Auto-create QuarterlyReview master only if manager never assigned one
@@ -514,6 +524,7 @@ export class EmployeePerformanceService {
           submittedDate: submittedAt,
           performanceId: saved.id,
           assignerId: mapping?.managerId || 'MANAGER',
+          managerId: mapping?.managerId || null,
           managerName: mapping?.managerName || 'Reporting Manager',
           auditHistory: [submitEntry],
         });
@@ -530,8 +541,10 @@ export class EmployeePerformanceService {
         financialYear: dto.financialYear,
       };
       await this.noticeService.notifyEmployeeOfSubmission(notice);
-      // Appraisal mapping: employee-assigner gets submission notice; otherwise keep old manager notice.
-      const appraisalMapping = await this.appraisalMappingService.findActiveByEmployeeId(dto.employeeId);
+      // Notify who should evaluate first: appraisal_mapping EMPLOYEE → mapped assigner; else manager.
+      const appraisalMapping = await this.appraisalMappingService.findActiveByEmployeeId(
+        dto.employeeId,
+      );
       if (
         appraisalMapping &&
         appraisalMapping.assignerType === AppraisalAssignerType.EMPLOYEE
@@ -1770,7 +1783,13 @@ export class EmployeePerformanceService {
         'yearlyQuarterReviews',
       ],
     });
-    const assignerIds = Array.from(new Set(reviews.map((review) => review.assignerId).filter(Boolean)));
+    const assignerIds = Array.from(
+      new Set(
+        reviews
+          .flatMap((review) => [review.assignerId, review.managerId])
+          .filter(Boolean),
+      ),
+    );
     const assigners = assignerIds.length
       ? await this.employeeDetailsRepository.find({
         where: { employeeId: In(assignerIds) },
@@ -1835,7 +1854,12 @@ export class EmployeePerformanceService {
       withAccess.push({
         ...overlayPerformanceView(record),
         assignedBy: review
-          ? nameById.get(review.assignerId) ||
+          ? (review.managerId &&
+            review.assignerId &&
+            review.managerId !== review.assignerId
+              ? nameById.get(review.managerId) || review.managerName
+              : null) ||
+            nameById.get(review.assignerId) ||
             (review.managerName &&
             String(review.managerName).toLowerCase() !== 'admin' &&
             review.managerName !== 'Reporting Manager'
