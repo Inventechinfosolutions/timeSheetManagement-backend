@@ -164,38 +164,40 @@ export class MasterHolidayService {
   }
 
 
-async findByYear(year: number): Promise<any[]> {
-  this.logger.log(`Fetching holidays for year: ${year}`);
+  async findByYear(year: number): Promise<any[]> {
+    this.logger.log(`Fetching holidays for year: ${year}`);
 
-  try {
-    const holidays = await this.holidayRepository
-      .createQueryBuilder('holiday')
-      .where('YEAR(holiday.date) = :year', { year })
-      .orderBy('holiday.date', 'ASC')
-      .getMany();
+    try {
+      const fromDate = `${year}-01-01`;
+      const toDate = `${year}-12-31`;
+      const holidays = await this.holidayRepository
+        .createQueryBuilder('holiday')
+        .where('holiday.date >= :fromDate', { fromDate })
+        .andWhere('holiday.date <= :toDate', { toDate })
+        .orderBy('holiday.date', 'ASC')
+        .getMany();
 
-    this.logger.log(
-      `Retrieved ${holidays.length} holidays for year ${year}`,
-    );
+      this.logger.log(
+        `Retrieved ${holidays.length} holidays for year ${year}`,
+      );
 
-    return holidays.map(holiday =>
-      MasterHolidayMapper.toResponseDto(holiday),
-    );
+      return holidays.map((holiday) =>
+        MasterHolidayMapper.toResponseDto(holiday),
+      );
+    } catch (error) {
+      this.logger.error(
+        `Failed to fetch holidays for year ${year}: ${error.message}`,
+        error.stack,
+      );
 
-  } catch (error) {
-    this.logger.error(
-      `Failed to fetch holidays for year ${year}: ${error.message}`,
-      error.stack,
-    );
+      if (error instanceof HttpException) throw error;
 
-    if (error instanceof HttpException) throw error;
-
-    throw new HttpException(
-      `Failed to fetch holidays: ${error.message}`,
-      HttpStatus.INTERNAL_SERVER_ERROR,
-    );
+      throw new HttpException(
+        `Failed to fetch holidays: ${error.message}`,
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
   }
-}
    async findOne(id: number): Promise<any> {
     this.logger.log(`Fetching holiday with ID: ${id}`);
     try {
