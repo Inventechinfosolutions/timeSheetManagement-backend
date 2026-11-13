@@ -6,6 +6,7 @@ import {
   IsOptional,
   IsBoolean,
   IsInt,
+  IsNumber,
   IsObject,
   Min,
   Max,
@@ -368,23 +369,26 @@ export class CreateEmployeePerformanceDto {
   nextQuarterLearningGoals?: string;
 
   // --- Step 5: Environment ---
-  @ApiPropertyOptional({ description: 'Work environment satisfaction rating (1-5)' })
+  @ApiPropertyOptional({ description: 'Work environment satisfaction rating (1-5, decimals OK)' })
   @IsOptional()
-  @IsInt()
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 1 })
   @Min(1)
   @Max(5)
   workEnvironmentRating?: number;
 
-  @ApiPropertyOptional({ description: 'Tools and resources rating (1-5)' })
+  @ApiPropertyOptional({ description: 'Tools and resources rating (1-5, one decimal)' })
   @IsOptional()
-  @IsInt()
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 1 })
   @Min(1)
   @Max(5)
   toolsResourcesRating?: number;
 
-  @ApiPropertyOptional({ description: 'Manager support rating (1-5)' })
+  @ApiPropertyOptional({ description: 'Manager support rating (1-5, one decimal)' })
   @IsOptional()
-  @IsInt()
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 1 })
   @Min(1)
   @Max(5)
   managerSupportRating?: number;
@@ -395,9 +399,10 @@ export class CreateEmployeePerformanceDto {
   challengesAffectingProductivity?: string;
 
   // --- Step 6: Review & Final Submission ---
-  @ApiPropertyOptional({ description: 'Overall self-rating (1-5)' })
+  @ApiPropertyOptional({ description: 'Overall self-rating (1-5, one decimal)' })
   @IsOptional()
-  @IsInt()
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 1 })
   @Min(1)
   @Max(5)
   overallSelfRating?: number;

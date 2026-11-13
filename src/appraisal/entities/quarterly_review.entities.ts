@@ -122,8 +122,8 @@ export class QuarterlyReview extends BaseEntity {
   })
   status!: QuarterlyReviewStatus;
 
-  // Evaluation Metrics (1 to 5 scale, Nullable until reviewed)
-  @Column({ type: 'decimal', precision: 3, scale: 2, nullable: true })
+  // Evaluation Metrics (1 to 5 scale, one decimal — Nullable until reviewed)
+  @Column({ type: 'decimal', precision: 3, scale: 1, nullable: true })
   overallPerformanceRating!: number | null;
 
   @Column({ type: 'decimal', precision: 3, scale: 1, nullable: true })
@@ -147,7 +147,7 @@ export class QuarterlyReview extends BaseEntity {
   @Column({ type: 'decimal', precision: 3, scale: 1, nullable: true })
   innovationProblemSolving!: number | null;
 
-  @Column({ type: 'decimal', precision: 3, scale: 2, nullable: true })
+  @Column({ type: 'decimal', precision: 3, scale: 1, nullable: true })
   finalRating!: number | null;
 
   @Column({ type: 'varchar', length: 100, nullable: true })

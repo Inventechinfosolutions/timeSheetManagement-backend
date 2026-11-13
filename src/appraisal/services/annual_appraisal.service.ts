@@ -263,7 +263,7 @@ export class AnnualAppraisalService {
       const annualAverageRating = isYearlyReview
         ? yearlyFinalRating
         : quarterRatings.length === 4
-          ? Number((quarterRatings.reduce((sum, rating) => sum + rating, 0) / 4).toFixed(2))
+          ? Number((quarterRatings.reduce((sum, rating) => sum + rating, 0) / 4).toFixed(1))
           : null;
 
       const completedQuartersCount = isYearlyReview

@@ -762,14 +762,14 @@ export class QuarterlyReviewService {
         ].filter((s): s is number => s !== undefined && s !== null && s > 0);
 
         const sum = scores.reduce((acc, curr) => acc + curr, 0);
-        const calculated = scores.length > 0 ? Number((sum / scores.length).toFixed(2)) : null;
+        const calculated = scores.length > 0 ? Number((sum / scores.length).toFixed(1)) : null;
         const finalRating = calculated ?? evalDto.finalRating ?? evalDto.overallPerformanceRating ?? null;
         const ratingDescription = finalRating
           ? RATING_DESCRIPTIONS[Math.round(Number(finalRating))] || 'Meets Expectations'
           : 'Meets Expectations';
 
         if (finalRating !== null && finalRating !== undefined) {
-          const rounded = Number(Number(finalRating).toFixed(2));
+          const rounded = Number(Number(finalRating).toFixed(1));
           review.overallPerformanceRating = rounded;
           review.finalRating = rounded;
         }
@@ -1069,7 +1069,7 @@ export class QuarterlyReviewService {
 
     const averageTeamRating =
       ratedScores.length > 0
-        ? Number((ratedScores.reduce((a, b) => a + b, 0) / ratedScores.length).toFixed(2))
+        ? Number((ratedScores.reduce((a, b) => a + b, 0) / ratedScores.length).toFixed(1))
         : null;
 
     const ratingDistribution: Record<string, number> = {
@@ -1646,11 +1646,36 @@ export class QuarterlyReviewService {
 
     const enrichedList = await this.enrichReviewsWithDetails([review]);
     const enriched = enrichedList[0];
-    return hideEvaluation ? this.withoutEvaluation(enriched) : enriched;
+    // Employee-assigner viewing a review they assigned must see final rating / scores
+    let hide = hideEvaluation;
+    if (hide && user) {
+      hide = await this.shouldHideEvaluation(user, {
+        reviewAssignerId: enriched?.assignerId,
+      });
+    }
+    return hide ? this.withoutEvaluation(enriched) : enriched;
   }
 
+  /** Employees hide scores on their own appraisals; assigners keep scores on reviews they assigned. */
   hidesManagerEvaluation(user?: User): boolean {
     return user?.userType === UserType.EMPLOYEE;
+  }
+
+  async shouldHideEvaluation(
+    user?: User,
+    opts?: { listAssignerId?: string; reviewAssignerId?: string },
+  ): Promise<boolean> {
+    if (!this.hidesManagerEvaluation(user)) return false;
+    const loginId = user?.loginId || (user as { employeeId?: string })?.employeeId;
+    if (!loginId) return true;
+    const sessionId = await this.resolveSessionEmployeeId(String(loginId));
+    if (opts?.listAssignerId?.trim() && opts.listAssignerId.trim() === sessionId) {
+      return false;
+    }
+    if (opts?.reviewAssignerId?.trim() && opts.reviewAssignerId.trim() === sessionId) {
+      return false;
+    }
+    return true;
   }
 
   private withoutEvaluation<T extends EnrichedQuarterlyReview>(review: T): T {
@@ -1795,7 +1820,7 @@ export class QuarterlyReviewService {
         throw new BadRequestException('Enter a final rating from 1 to 5.');
       }
       const rounded = Math.min(5, Math.max(1, Math.round(typed)));
-      review.finalRating = Number(typed.toFixed(2));
+      review.finalRating = Number(typed.toFixed(1));
       review.ratingDescription = RATING_DESCRIPTIONS[rounded] || 'Meets Expectations';
       review.status = QuarterlyReviewStatus.COMPLETED;
       review.reviewedDate = new Date();

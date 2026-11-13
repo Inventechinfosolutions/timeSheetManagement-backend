@@ -75,10 +75,10 @@ export class QuarterlyReviewPerformanceController {
     if (isCeoOrGmUser(req.user)) {
       query.employeeRole = UserType.MANAGER;
     }
-    return await this.reviewService.findAll(
-      query,
-      this.reviewService.hidesManagerEvaluation(req.user),
-    );
+    const hideEvaluation = await this.reviewService.shouldHideEvaluation(req.user, {
+      listAssignerId: query.assignerId,
+    });
+    return await this.reviewService.findAll(query, hideEvaluation);
   }
 
   @Post(':id/reassign')

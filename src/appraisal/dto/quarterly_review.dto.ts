@@ -136,7 +136,7 @@ export class ManagerEvaluationDto {
   @ApiPropertyOptional({ example: 4, description: 'Productivity rating (1-5)' })
   @IsOptional()
   @Type(() => Number)
-  @IsNumber()
+  @IsNumber({ maxDecimalPlaces: 1 })
   @Min(1)
   @Max(5)
   productivity?: number;
@@ -144,7 +144,7 @@ export class ManagerEvaluationDto {
   @ApiPropertyOptional({ example: 4, description: 'Quality of Work rating (1-5)' })
   @IsOptional()
   @Type(() => Number)
-  @IsNumber()
+  @IsNumber({ maxDecimalPlaces: 1 })
   @Min(1)
   @Max(5)
   qualityOfWork?: number;
@@ -152,7 +152,7 @@ export class ManagerEvaluationDto {
   @ApiPropertyOptional({ example: 5, description: 'Ownership & Responsibility rating (1-5)' })
   @IsOptional()
   @Type(() => Number)
-  @IsNumber()
+  @IsNumber({ maxDecimalPlaces: 1 })
   @Min(1)
   @Max(5)
   ownership?: number;
@@ -160,7 +160,7 @@ export class ManagerEvaluationDto {
   @ApiPropertyOptional({ example: 5, description: 'Ownership & Responsibility rating (1-5)' })
   @IsOptional()
   @Type(() => Number)
-  @IsNumber()
+  @IsNumber({ maxDecimalPlaces: 1 })
   @Min(1)
   @Max(5)
   ownershipResponsibility?: number;
@@ -168,7 +168,7 @@ export class ManagerEvaluationDto {
   @ApiPropertyOptional({ example: 4, description: 'Communication rating (1-5)' })
   @IsOptional()
   @Type(() => Number)
-  @IsNumber()
+  @IsNumber({ maxDecimalPlaces: 1 })
   @Min(1)
   @Max(5)
   communication?: number;
@@ -176,7 +176,7 @@ export class ManagerEvaluationDto {
   @ApiPropertyOptional({ example: 5, description: 'Team Collaboration rating (1-5)' })
   @IsOptional()
   @Type(() => Number)
-  @IsNumber()
+  @IsNumber({ maxDecimalPlaces: 1 })
   @Min(1)
   @Max(5)
   teamCollaboration?: number;
@@ -184,7 +184,7 @@ export class ManagerEvaluationDto {
   @ApiPropertyOptional({ example: 4, description: 'Innovation & Problem Solving rating (1-5)' })
   @IsOptional()
   @Type(() => Number)
-  @IsNumber()
+  @IsNumber({ maxDecimalPlaces: 1 })
   @Min(1)
   @Max(5)
   innovation?: number;
@@ -192,7 +192,7 @@ export class ManagerEvaluationDto {
   @ApiPropertyOptional({ example: 4, description: 'Innovation & Problem Solving rating (1-5)' })
   @IsOptional()
   @Type(() => Number)
-  @IsNumber()
+  @IsNumber({ maxDecimalPlaces: 1 })
   @Min(1)
   @Max(5)
   innovationProblemSolving?: number;
@@ -226,7 +226,7 @@ export class ManagerEvaluationDto {
   @ApiPropertyOptional({ example: 4, description: 'Overall performance rating (1-5)' })
   @IsOptional()
   @Type(() => Number)
-  @IsNumber()
+  @IsNumber({ maxDecimalPlaces: 1 })
   @Min(1)
   @Max(5)
   overallPerformanceRating?: number;
@@ -234,7 +234,7 @@ export class ManagerEvaluationDto {
   @ApiPropertyOptional({ example: 4, description: 'Technical / Job Skills rating (1-5)' })
   @IsOptional()
   @Type(() => Number)
-  @IsNumber()
+  @IsNumber({ maxDecimalPlaces: 1 })
   @Min(1)
   @Max(5)
   technicalJobSkills?: number;
@@ -283,7 +283,7 @@ export class ManagerEvaluationDto {
   @ApiPropertyOptional({ example: 4, description: 'Final performance rating chosen by manager (1-5)' })
   @IsOptional()
   @Type(() => Number)
-  @IsNumber()
+  @IsNumber({ maxDecimalPlaces: 1 })
   @Min(1)
   @Max(5)
   finalRating?: number;
@@ -293,49 +293,49 @@ export class UpdateQuarterlyReviewDto extends PartialType(CreateQuarterlyReviewD
   @ApiPropertyOptional({ example: 4, description: 'Overall performance rating (1-5)' })
   @IsOptional()
   @Type(() => Number)
-  @IsNumber()
+  @IsNumber({ maxDecimalPlaces: 1 })
   overallPerformanceRating?: number;
 
   @ApiPropertyOptional({ example: 4, description: 'Productivity rating (1-5)' })
   @IsOptional()
   @Type(() => Number)
-  @IsNumber()
+  @IsNumber({ maxDecimalPlaces: 1 })
   productivity?: number;
 
   @ApiPropertyOptional({ example: 4, description: 'Quality of Work rating (1-5)' })
   @IsOptional()
   @Type(() => Number)
-  @IsNumber()
+  @IsNumber({ maxDecimalPlaces: 1 })
   qualityOfWork?: number;
 
   @ApiPropertyOptional({ example: 4, description: 'Technical / Job Skills rating (1-5)' })
   @IsOptional()
   @Type(() => Number)
-  @IsNumber()
+  @IsNumber({ maxDecimalPlaces: 1 })
   technicalJobSkills?: number;
 
   @ApiPropertyOptional({ example: 5, description: 'Ownership rating (1-5)' })
   @IsOptional()
   @Type(() => Number)
-  @IsNumber()
+  @IsNumber({ maxDecimalPlaces: 1 })
   ownershipResponsibility?: number;
 
   @ApiPropertyOptional({ example: 4, description: 'Communication rating (1-5)' })
   @IsOptional()
   @Type(() => Number)
-  @IsNumber()
+  @IsNumber({ maxDecimalPlaces: 1 })
   communication?: number;
 
   @ApiPropertyOptional({ example: 5, description: 'Team Collaboration rating (1-5)' })
   @IsOptional()
   @Type(() => Number)
-  @IsNumber()
+  @IsNumber({ maxDecimalPlaces: 1 })
   teamCollaboration?: number;
 
   @ApiPropertyOptional({ example: 4, description: 'Innovation rating (1-5)' })
   @IsOptional()
   @Type(() => Number)
-  @IsNumber()
+  @IsNumber({ maxDecimalPlaces: 1 })
   innovationProblemSolving?: number;
 
   @ApiPropertyOptional({ description: 'Performance strengths' })
@@ -391,7 +391,7 @@ export class UpdateQuarterlyReviewDto extends PartialType(CreateQuarterlyReviewD
   @ApiPropertyOptional({ example: 4.5, description: 'Manager-entered average score from 1 to 5' })
   @IsOptional()
   @Type(() => Number)
-  @IsNumber()
+  @IsNumber({ maxDecimalPlaces: 1 })
   @Min(1)
   @Max(5)
   finalRating?: number;
