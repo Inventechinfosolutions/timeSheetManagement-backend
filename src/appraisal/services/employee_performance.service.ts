@@ -1078,8 +1078,11 @@ export class EmployeePerformanceService {
 
       if (params?.q?.trim()) {
         const keyword = `%${params.q.trim()}%`;
+        // Employee Appraisal search: financial year, quarter, and status only.
         qb.andWhere(
-          '(ep.employeeId LIKE :keyword OR ep.stepAchievements LIKE :keyword OR ep.financialYear LIKE :keyword OR ep.status LIKE :keyword)',
+          `(ep.financialYear LIKE :keyword
+            OR ep.status LIKE :keyword
+            OR CAST(ep.quarter AS CHAR) LIKE :keyword)`,
           { keyword },
         );
       }
