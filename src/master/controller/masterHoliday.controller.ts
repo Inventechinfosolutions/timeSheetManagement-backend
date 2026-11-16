@@ -304,30 +304,26 @@ export class MasterHolidayController {
     }
   }
 
-  
-@Get('year/:year')
-@ApiOperation({ summary: 'Get holidays by year' })
-@ApiParam({
-  name: 'year',
-  type: Number,
-  example: 2025,
-})
-async findByYear(
-  @Param('year', ParseIntPipe) year: number,
-) {
-  try {
-    this.logger.log(`Fetching holidays for year: ${year}`);
-
-    return await this.masterHolidayService.findByYear(year);
-
-  } catch (error) {
-    this.logger.error(
-      `Error fetching holidays for year ${year}: ${error.message}`,
-      error.stack,
-    );
-    throw error;
+  @Get('year/:year')
+  @ApiOperation({ summary: 'Get holidays by year' })
+  @ApiParam({
+    name: 'year',
+    type: Number,
+    example: 2025,
+  })
+  @ApiResponse({ status: 200, description: 'Returns holidays for the specified year' })
+  async findByYear(@Param('year', ParseIntPipe) year: number) {
+    try {
+      this.logger.log(`Fetching holidays for year: ${year}`);
+      return await this.masterHolidayService.findByYear(year);
+    } catch (error) {
+      this.logger.error(
+        `Error fetching holidays for year ${year}: ${error.message}`,
+        error.stack,
+      );
+      throw error;
+    }
   }
-}
 
   @Get(':id')
   @ApiOperation({ summary: 'Get a holiday by id' })
