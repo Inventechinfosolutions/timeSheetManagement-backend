@@ -3861,6 +3861,535 @@ export class EmployeeAttendanceService {
     }
   }
 
+  /**
+   * Matrix PDF — portrait: summary table + full-month day/status (same as Excel data).
+   * Same filters as Excel; all matching employees. Dept stays single-line.
+   */
+  async generateMonthlyMatrixPdfReport(
+    month: number,
+    year: number,
+    managerName?: string,
+    managerId?: string,
+    search?: string,
+    department?: string,
+    status?: string,
+  ): Promise<Buffer> {
+    this.logger.log(
+      `Generating matrix PDF for ${month}/${year}. Search: ${search || 'None'}, Dept: ${department || 'None'}, Status: ${status || 'None'}`,
+    );
+
+    const data = await this.getMonthlyReportData(
+      month,
+      year,
+      managerName,
+      managerId,
+      search,
+      department,
+      status,
+      1,
+      10000,
+    );
+
+    const employees: any[] = data?.employees || [];
+    const days: any[] = data?.days || [];
+    const daysInMonth = data?.daysInMonth || days.length || 30;
+    const monthName = new Date(year, month - 1, 1).toLocaleString('en-US', {
+      month: 'long',
+    });
+    const deptLabel =
+      department && department.trim() && department !== 'All Departments'
+        ? department.trim()
+        : 'All Departments';
+
+    const employeeCount = employees.length;
+    const employeeLabel = `${employeeCount} ${employeeCount === 1 ? 'Employee' : 'Employees'}`;
+
+    const totals = employees.reduce(
+      (acc, emp) => ({
+        present: acc.present + (emp.summary?.fullDays || 0),
+        wfh: acc.wfh + (emp.summary?.wfh || 0),
+        cv: acc.cv + (emp.summary?.clientVisit || 0),
+        leave: acc.leave + (emp.summary?.leaves || 0),
+        notUpdated: acc.notUpdated + (emp.summary?.notUpdated || 0),
+      }),
+      { present: 0, wfh: 0, cv: 0, leave: 0, notUpdated: 0 },
+    );
+
+    const statusFill = (text: string): string | null => {
+      const t = (text || '').toLowerCase();
+      if (!t || t === 'upcoming' || t === '—') return null;
+      if (t.includes('weekend')) return '#ED3E3E';
+      if (t.includes('holiday') || t.includes('leave') || t.includes('absent'))
+        return '#ED3E3E';
+      if (t.includes('wfh') || t.includes('work from home')) return '#ADD8E6';
+      if (t.includes('client') || t.includes('cv')) return '#FFA07A';
+      if (t.includes('half')) return '#FFFFE0';
+      if (t.includes('not updated') || t.includes('pending')) return '#FFFF00';
+      if (t.includes('inactive')) return '#FFCDD2';
+      if (
+        t.includes('full') ||
+        t.includes('office') ||
+        t.includes('present') ||
+        t.includes('locked')
+      )
+        return '#90EE90';
+      return '#90EE90';
+    };
+
+    const pageDays =
+      days.length > 0
+        ? days
+        : Array.from({ length: daysInMonth }, (_, i) => {
+            const day = i + 1;
+            const dateObj = new Date(year, month - 1, day);
+            const m = String(month).padStart(2, '0');
+            const d = String(day).padStart(2, '0');
+            return {
+              date: `${year}-${m}-${d}`,
+              dayNum: day,
+              dayLabel: `${day}-${dateObj.toLocaleDateString('en-US', { month: 'short' })}`,
+              dayName: dateObj.toLocaleDateString('en-US', { weekday: 'long' }),
+            };
+          });
+
+    return new Promise((resolve, reject) => {
+      try {
+        const doc = new PDFDocument({
+          size: 'A4',
+          margin: 36,
+          bufferPages: true,
+        });
+        const buffers: Buffer[] = [];
+        doc.on('data', (chunk) => buffers.push(chunk));
+        doc.on('end', () => resolve(Buffer.concat(buffers)));
+        doc.on('error', reject);
+
+        const blueColor = '#2B3674';
+        const grayColor = '#505050';
+        const pageWidth = doc.page.width;
+        const left = 36;
+        const contentWidth = pageWidth - 72;
+
+        // Columns must sum exactly to contentWidth (aligned card like UI)
+        const cols: Array<{
+          key: string;
+          w: number;
+          headerBg: string;
+          cellBg?: string;
+          textColor?: string;
+        }> = [
+          { key: '#', w: 22, headerBg: blueColor },
+          { key: 'Name', w: 100, headerBg: blueColor },
+          { key: 'ID', w: 56, headerBg: blueColor },
+          { key: 'Dept', w: 100, headerBg: blueColor },
+          {
+            key: 'Present',
+            w: 46,
+            headerBg: blueColor,
+            cellBg: '#ECFDF5',
+            textColor: '#15803D',
+          },
+          {
+            key: 'WFH',
+            w: 38,
+            headerBg: blueColor,
+            cellBg: '#EFF6FF',
+            textColor: '#0369A1',
+          },
+          {
+            key: 'CV',
+            w: 36,
+            headerBg: blueColor,
+            cellBg: '#FFF7ED',
+            textColor: '#C2410C',
+          },
+          {
+            key: 'Leave',
+            w: 40,
+            headerBg: blueColor,
+            cellBg: '#FEF2F2',
+            textColor: '#DC2626',
+          },
+          {
+            key: 'Not Updated',
+            w: 85,
+            headerBg: '#EA580C',
+            cellBg: '#FEF3C7',
+            textColor: '#92400E',
+          },
+        ];
+        // 22+100+56+100+46+38+36+40+85 = 523
+
+        const rowH = 18;
+        let y = 0;
+
+        /** Force single-line cell text — never wrap into next row */
+        const fitOneLine = (
+          text: string,
+          maxWidth: number,
+          fontSize: number,
+          bold?: boolean,
+        ) => {
+          const raw = String(text ?? '').replace(/\s+/g, ' ').trim();
+          doc
+            .fontSize(fontSize)
+            .font(bold ? 'Helvetica-Bold' : 'Helvetica');
+          if (doc.widthOfString(raw) <= maxWidth) return raw;
+          let t = raw;
+          while (t.length > 0 && doc.widthOfString(`${t}…`) > maxWidth) {
+            t = t.slice(0, -1);
+          }
+          return t ? `${t}…` : '';
+        };
+
+        const cellText = (
+          text: string,
+          x: number,
+          yy: number,
+          w: number,
+          opts: {
+            align?: 'left' | 'center' | 'right';
+            bold?: boolean;
+            color?: string;
+            size?: number;
+          } = {},
+        ) => {
+          const size = opts.size || 8;
+          const fitted = fitOneLine(text, w - 4, size, opts.bold);
+          // No width/height — prevents PDFKit wrapping into next row (Dept collision)
+          const textX =
+            opts.align === 'left'
+              ? x + 2
+              : x + Math.max(2, (w - doc.widthOfString(fitted)) / 2);
+          doc
+            .fillColor(opts.color || blueColor)
+            .fontSize(size)
+            .font(opts.bold ? 'Helvetica-Bold' : 'Helvetica')
+            .text(fitted, textX, yy + 5, { lineBreak: false });
+        };
+
+        const ensureSpace = (needed: number, redrawSummaryHeader = false) => {
+          if (y + needed > doc.page.height - 48) {
+            doc.addPage();
+            y = 36;
+            if (redrawSummaryHeader) drawTableHeader();
+          }
+        };
+
+        const drawTableHeader = () => {
+          let x = left;
+          cols.forEach((c) => {
+            doc.fillColor(c.headerBg).rect(x, y, c.w, rowH).fill();
+            cellText(c.key, x, y, c.w, {
+              bold: true,
+              color: '#FFFFFF',
+              size: 7.5,
+            });
+            x += c.w;
+          });
+          doc
+            .strokeColor('#CBD5E1')
+            .lineWidth(0.6)
+            .rect(left, y, contentWidth, rowH)
+            .stroke();
+          y += rowH;
+        };
+
+        // Header banner
+        doc.fillColor(blueColor).rect(0, 0, pageWidth, 88).fill();
+        doc
+          .fillColor('white')
+          .fontSize(18)
+          .font('Helvetica-Bold')
+          .text('WORKSPHERE', left, 30, { lineBreak: false });
+        doc
+          .fillColor('white')
+          .fontSize(14)
+          .font('Helvetica-Bold')
+          .text('ATTENDANCE REPORT', left, 28, {
+            width: contentWidth,
+            align: 'right',
+            lineBreak: false,
+          });
+        doc
+          .fillColor('#DCEBFC')
+          .fontSize(10)
+          .font('Helvetica')
+          .text(`${monthName} ${year}`, left, 48, {
+            width: contentWidth,
+            align: 'right',
+            lineBreak: false,
+          });
+
+        y = 106;
+        doc
+          .fillColor(blueColor)
+          .fontSize(11)
+          .font('Helvetica-Bold')
+          .text('REPORT DETAILS', left, y, { lineBreak: false });
+        y += 14;
+        doc
+          .strokeColor('#CCCCCC')
+          .lineWidth(1)
+          .moveTo(left, y)
+          .lineTo(left + contentWidth, y)
+          .stroke();
+        y += 12;
+
+        const fromDate = new Date(year, month - 1, 1).toLocaleDateString(
+          'en-US',
+          { month: 'short', day: '2-digit', year: 'numeric' },
+        );
+        const toDate = new Date(
+          year,
+          month - 1,
+          daysInMonth,
+        ).toLocaleDateString('en-US', {
+          month: 'short',
+          day: '2-digit',
+          year: 'numeric',
+        });
+        const generatedDate = new Date().toLocaleDateString('en-US', {
+          month: 'short',
+          day: 'numeric',
+          year: 'numeric',
+        });
+
+        const drawDetail = (
+          label: string,
+          value: string,
+          x: number,
+          yy: number,
+        ) => {
+          doc
+            .fillColor(grayColor)
+            .fontSize(9)
+            .font('Helvetica')
+            .text(label, x, yy, { lineBreak: false });
+          doc
+            .fillColor(blueColor)
+            .font('Helvetica-Bold')
+            .text(value, x + 82, yy, {
+              width: 150,
+              lineBreak: false,
+              ellipsis: true,
+            });
+        };
+
+        drawDetail('Department:', deptLabel, left, y);
+        drawDetail('Generated:', generatedDate, left + 270, y);
+        y += 16;
+        drawDetail('From Date:', fromDate, left, y);
+        drawDetail('To Date:', toDate, left + 270, y);
+        y += 16;
+        drawDetail('Total Employees:', employeeLabel, left, y);
+        drawDetail('Period Days:', `${daysInMonth} Days`, left + 270, y);
+        y += 20;
+
+        // 1) Summary card/table (like UI matrix)
+        drawTableHeader();
+
+        employees.forEach((emp, index) => {
+          ensureSpace(rowH, true);
+          const vals = [
+            String(index + 1),
+            emp.fullName || 'N/A',
+            emp.employeeId || 'N/A',
+            emp.department || 'General',
+            String(emp.summary?.fullDays || 0),
+            String(emp.summary?.wfh || 0),
+            String(emp.summary?.clientVisit || 0),
+            String(emp.summary?.leaves || 0),
+            String(emp.summary?.notUpdated || 0),
+          ];
+
+          let x = left;
+          cols.forEach((c, i) => {
+            const bg =
+              c.cellBg || (index % 2 === 1 ? '#F8FAFC' : '#FFFFFF');
+            doc.fillColor(bg).rect(x, y, c.w, rowH).fill();
+            cellText(vals[i], x, y, c.w, {
+              bold: i === 1 || i >= 4,
+              color: c.textColor || blueColor,
+              size: i >= 4 ? 8.5 : 7.5,
+              align: i === 1 || i === 3 ? 'left' : 'center',
+            });
+            x += c.w;
+          });
+          doc
+            .strokeColor('#E2E8F0')
+            .lineWidth(0.4)
+            .rect(left, y, contentWidth, rowH)
+            .stroke();
+          y += rowH;
+        });
+
+        // Total Summary footer — columns stay aligned
+        ensureSpace(rowH, true);
+        const footVals = [
+          '',
+          'Total Summary',
+          employeeLabel,
+          '',
+          String(totals.present),
+          String(totals.wfh),
+          String(totals.cv),
+          String(totals.leave),
+          String(totals.notUpdated),
+        ];
+        let fx = left;
+        cols.forEach((c, i) => {
+          doc.fillColor('#EEF2FF').rect(fx, y, c.w, rowH).fill();
+          cellText(footVals[i], fx, y, c.w, {
+            bold: true,
+            color: c.textColor || blueColor,
+            size: 7.5,
+            align: i === 1 || i === 2 ? 'left' : 'center',
+          });
+          fx += c.w;
+        });
+        doc
+          .strokeColor('#CBD5E1')
+          .lineWidth(0.6)
+          .rect(left, y, contentWidth, rowH)
+          .stroke();
+        y += rowH + 16;
+
+        // 2) Below summary — full-month day/status details (same data as Excel)
+        ensureSpace(28);
+        doc
+          .fillColor(blueColor)
+          .fontSize(11)
+          .font('Helvetica-Bold')
+          .text('DAILY ATTENDANCE (Full Month)', left, y, { lineBreak: false });
+        y += 12;
+        doc
+          .strokeColor('#CCCCCC')
+          .moveTo(left, y)
+          .lineTo(left + contentWidth, y)
+          .stroke();
+        y += 10;
+
+        const dayCols = [
+          { key: 'Date', w: 70 },
+          { key: 'Day', w: 90 },
+          { key: 'Status', w: contentWidth - 160 },
+        ];
+        const dayRowH = 15;
+
+        employees.forEach((emp, empIndex) => {
+          ensureSpace(40);
+          const empTitle = fitOneLine(
+            `${empIndex + 1}. ${emp.fullName || 'N/A'}  (${emp.employeeId || 'N/A'})  —  ${emp.department || 'General'}`,
+            contentWidth,
+            9,
+            true,
+          );
+          doc
+            .fillColor(blueColor)
+            .fontSize(9)
+            .font('Helvetica-Bold')
+            .text(empTitle, left, y, { lineBreak: false });
+          y += 12;
+
+          ensureSpace(dayRowH);
+          let hx = left;
+          dayCols.forEach((c) => {
+            doc.fillColor(blueColor).rect(hx, y, c.w, dayRowH).fill();
+            const label = fitOneLine(c.key, c.w - 4, 8, true);
+            doc
+              .fillColor('#FFFFFF')
+              .fontSize(8)
+              .font('Helvetica-Bold')
+              .text(label, hx + 2, y + 4, { lineBreak: false });
+            hx += c.w;
+          });
+          y += dayRowH;
+
+          pageDays.forEach((day: any, di: number) => {
+            ensureSpace(dayRowH);
+            const statusText =
+              emp.dailyStatus?.[day.date]?.text ||
+              emp.dailyStatus?.[day.date]?.type ||
+              '—';
+            const fill = statusFill(String(statusText));
+
+            if (di % 2 === 1 && !fill) {
+              doc
+                .fillColor('#F8FAFC')
+                .rect(left, y, contentWidth, dayRowH)
+                .fill();
+            }
+            if (fill) {
+              doc
+                .fillColor(fill)
+                .rect(
+                  left + dayCols[0].w + dayCols[1].w,
+                  y,
+                  dayCols[2].w,
+                  dayRowH,
+                )
+                .fill();
+            }
+            doc
+              .strokeColor('#E2E8F0')
+              .lineWidth(0.4)
+              .rect(left, y, contentWidth, dayRowH)
+              .stroke();
+
+            const isDark =
+              String(statusText).toLowerCase().includes('weekend') ||
+              String(statusText).toLowerCase().includes('leave') ||
+              String(statusText).toLowerCase().includes('absent');
+
+            const dayVals = [
+              day.dayLabel || String(day.dayNum),
+              day.dayName || '',
+              String(statusText),
+            ];
+            let cx = left;
+            dayVals.forEach((v, i) => {
+              const fitted = fitOneLine(v, dayCols[i].w - 4, 7.5, i === 2);
+              const useWhite = i === 2 && !!fill && isDark;
+              const tx =
+                cx +
+                Math.max(2, (dayCols[i].w - doc.widthOfString(fitted)) / 2);
+              doc
+                .fillColor(useWhite ? '#FFFFFF' : blueColor)
+                .fontSize(7.5)
+                .font(i === 2 ? 'Helvetica-Bold' : 'Helvetica')
+                .text(fitted, tx, y + 4, { lineBreak: false });
+              cx += dayCols[i].w;
+            });
+            y += dayRowH;
+          });
+
+          y += 10;
+        });
+
+        // Page numbers
+        const pageCount = doc.bufferedPageRange().count;
+        for (let i = 0; i < pageCount; i++) {
+          doc.switchToPage(i);
+          doc
+            .fillColor('#94A3B8')
+            .fontSize(8)
+            .font('Helvetica')
+            .text(
+              `WorkSphere Management System  |  Page ${i + 1} of ${pageCount}`,
+              left,
+              doc.page.height - 28,
+              { width: contentWidth, align: 'center', lineBreak: false },
+            );
+        }
+
+        doc.end();
+      } catch (err) {
+        reject(err);
+      }
+    });
+  }
+
   async generateIndividualPdfReport(
     employeeId: string,
     startDate: Date,
