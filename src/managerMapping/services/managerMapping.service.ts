@@ -33,6 +33,7 @@ export class ManagerMappingService {
     searchTerm?: string,
     status?: ManagerMappingStatus,
     managerName?: string,
+    paginateResults = true,
   ): Promise<Pagination<ManagerMappingDTO>> {
     this.logger.log(`Fetching all ManagerMappings with pagination and search. Filter Manager: ${managerName || 'None'}`);
     try {
@@ -55,13 +56,19 @@ export class ManagerMappingService {
 
       if (managerName) {
         queryBuilder
-          .leftJoin('employee_details', 'manager', 'managerMapping.managerName = manager.full_name') // Using leftJoin instead of join to avoid issues with missing details for some mappings
+          .leftJoin('employee_details', 'manager', 'managerMapping.managerId = manager.employee_id')
           .leftJoin('users', 'user', 'manager.employee_id = user.loginId')
           .andWhere(
-            '(managerMapping.managerName = :managerName OR managerMapping.managerId = :managerName OR user.loginId = :managerName OR manager.employee_id = :managerName)',
+            `(
+              managerMapping.managerId = :managerName
+              OR manager.employee_id = :managerName
+              OR user.loginId = :managerName
+            )`,
             { managerName },
           )
-          .andWhere('user.status = :activeStatus', { activeStatus: UserStatus.ACTIVE });
+          .andWhere('(user.status IS NULL OR user.status = :activeStatus)', {
+            activeStatus: UserStatus.ACTIVE,
+          });
       }
 
       // Add search functionality if searchTerm is provided
@@ -91,7 +98,7 @@ export class ManagerMappingService {
         `Total matching rows (before pagination): ${totalMatching}`,
       );
 
-      if (options && options.limit) {
+      if (paginateResults && options && options.limit) {
         const limitNum = Number(options.limit) || 1;
         const requestedPage = Number(options.page) || 1;
         const totalPages = Math.ceil(totalMatching / limitNum);
@@ -117,13 +124,13 @@ export class ManagerMappingService {
         .leftJoin("users", "m_user", "m_details.employee_id = m_user.loginId")
         .addSelect("m_user.loginId", "managerId");
 
-      const paginatedResult = await paginate<ManagerMapping>(
-        queryBuilder,
-        options,
-      );
+      const paginatedResult = paginateResults
+        ? await paginate<ManagerMapping>(queryBuilder, options)
+        : null;
+      const entities = paginatedResult ? paginatedResult.items : await queryBuilder.getMany();
       // After pagination, we need to get the managerId for these items.
       const rawItems = await Promise.all(
-        paginatedResult.items.map(async (entity) => {
+        entities.map(async (entity) => {
           const dto = ManagerMappingMapper.fromEntityToDTO(entity);
           if (dto) {
             if (!dto.managerId) {
@@ -155,9 +162,22 @@ export class ManagerMappingService {
         (item): item is ManagerMappingDTO => item !== undefined,
       );
 
+      if (paginatedResult) {
+        return {
+          ...paginatedResult,
+          items,
+        };
+      }
+
       return {
-        ...paginatedResult,
         items,
+        meta: {
+          itemCount: items.length,
+          totalItems: items.length,
+          itemsPerPage: items.length,
+          totalPages: 1,
+          currentPage: 1,
+        },
       };
     } catch (error) {
       this.logger.error('Error fetching ManagerMappings with pagination and search', error.stack);
