@@ -53,13 +53,18 @@ export class EmployeeAttendanceController {
   @ApiOperation({ summary: 'Download monthly attendance Excel report' })
   @ApiQuery({ name: 'month', type: Number })
   @ApiQuery({ name: 'year', type: Number })
+  @ApiQuery({ name: 'search', type: String, required: false })
+  @ApiQuery({ name: 'department', type: String, required: false })
+  @ApiQuery({ name: 'status', type: String, required: false })
   async downloadReport(
     @Query() query: DownloadAttendanceDto,
     @Req() req: any,
     @Res() res: Response,
   ) {
     try {
-      this.logger.log(`Downloading monthly report for month: ${query.month}, year: ${query.year}`);
+      this.logger.log(
+        `Downloading monthly report for month: ${query.month}, year: ${query.year}, search: ${query.search || 'None'}, dept: ${query.department || 'None'}, status: ${query.status || 'None'}`,
+      );
       const user = req.user;
       let managerName: string | undefined;
       let managerId: string | undefined;
@@ -74,7 +79,10 @@ export class EmployeeAttendanceController {
         query.month,
         query.year,
         managerName,
-        managerId
+        managerId,
+        query.search,
+        query.department,
+        query.status,
       );
 
       res.set({

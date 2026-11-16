@@ -67,6 +67,26 @@ export class EmployeeDetailsService {
     private readonly employeeAttendanceService: EmployeeAttendanceService,
   ) { }
 
+  /** Shared pagination meta for list endpoints (no duplicate top-level totalItems). */
+  private buildPagination(
+    page: number,
+    limit: number,
+    total: number,
+    itemCount: number,
+  ) {
+    const safePage = Math.max(1, Number(page) || 1);
+    const safeLimit = Math.max(1, Number(limit) || 10);
+    const safeTotal = Math.max(0, Number(total) || 0);
+    const safeItemCount = Math.max(0, Number(itemCount) || 0);
+    return {
+      page: safePage,
+      limit: safeLimit,
+      total: safeTotal,
+      totalPages: Math.ceil(safeTotal / safeLimit) || 0,
+      itemCount: safeItemCount, // rows on the current page
+    };
+  }
+
   async createEmployee(
     createEmployeeDetailsDto: EmployeeDetailsDto,
   ): Promise<any> {
@@ -253,7 +273,16 @@ export class EmployeeDetailsService {
     includeSelf: boolean = false,
     userStatus?: string,
     role?: string,
-  ): Promise<{ data: EmployeeDetails[]; totalItems: number }> {
+  ): Promise<{
+    data: EmployeeDetails[];
+    pagination: {
+      page: number;
+      limit: number;
+      total: number;
+      totalPages: number;
+      itemCount: number;
+    };
+  }> {
     try {
       this.logger.log('Fetching employees with filter:', {
         search,
@@ -362,7 +391,15 @@ export class EmployeeDetailsService {
         user: undefined // Remove the nested user object to keep response clean
       }));
 
-      return { data: enrichedData, totalItems };
+      return {
+        data: enrichedData,
+        pagination: this.buildPagination(
+          page,
+          limit,
+          totalItems,
+          enrichedData.length,
+        ),
+      };
     } catch (error) {
       this.logger.error(
         `Error fetching employees: ${error.message}`,
@@ -499,7 +536,16 @@ export class EmployeeDetailsService {
     managerName?: string,
     managerId?: string,
     includeSelf: boolean = false,
-  ): Promise<{ data: any[]; totalItems: number }> {
+  ): Promise<{
+    data: any[];
+    pagination: {
+      page: number;
+      limit: number;
+      total: number;
+      totalPages: number;
+      itemCount: number;
+    };
+  }> {
     try {
       this.logger.log('Fetching employees for timesheet list with filter:', {
         search,
@@ -729,7 +775,10 @@ export class EmployeeDetailsService {
         }));
       }
 
-      return { data, totalItems };
+      return {
+        data,
+        pagination: this.buildPagination(page, limit, totalItems, data.length),
+      };
     } catch (error) {
       this.logger.error(`Error fetching timesheet list: ${error.message}`, error.stack);
       throw new HttpException('Failed to fetch timesheet list', HttpStatus.INTERNAL_SERVER_ERROR);
