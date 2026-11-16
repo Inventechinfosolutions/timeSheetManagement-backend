@@ -2840,14 +2840,18 @@ export class EmployeeAttendanceService {
     year: number,
     managerName?: string,
     managerId?: string,
+    search?: string,
+    department?: string,
+    status?: string,
   ): Promise<Buffer> {
     this.logger.log(
-      `Generating monthly report for ${month}/${year}. Filter Manager: ${managerName || 'None'}`,
+      `Generating monthly report for ${month}/${year}. Filter Manager: ${managerName || 'None'}, Search: ${search || 'None'}, Dept: ${department || 'None'}, Status: ${status || 'None'}`,
     );
     try {
-      // 1. Fetch employees (filtered by manager if provided)
+      // 1. Fetch employees (filtered by manager / search / department if provided)
       // Include ACTIVE and INACTIVE only if inactiveDate is in this month
       // (Excel shows them for that month; from next month they are excluded)
+      // No pagination: export all rows matching filters
       const query = this.employeeDetailsRepository
         .createQueryBuilder('employee')
         .leftJoin(User, 'user_filter', 'user_filter.loginId = employee.employeeId');
@@ -2894,8 +2898,22 @@ export class EmployeeAttendanceService {
         );
       }
 
+      if (search && search.trim()) {
+        const trimmedSearch = search.trim();
+        query.andWhere(
+          '(LOWER(employee.fullName) LIKE LOWER(:searchQuery) OR LOWER(employee.employeeId) LIKE LOWER(:searchQuery))',
+          { searchQuery: `%${trimmedSearch}%` },
+        );
+      }
+
+      if (department && department.trim() && department !== 'All Departments') {
+        query.andWhere('LOWER(employee.department) = LOWER(:deptFilter)', {
+          deptFilter: department.trim(),
+        });
+      }
+
       query.orderBy('employee.fullName', 'ASC');
-      const employees = await query.getMany();
+      let employees = await query.getMany();
 
       // 2. Fetch all holidays and weekends (metadata)
       const startDate = new Date(year, month - 1, 1);
@@ -2970,6 +2988,65 @@ export class EmployeeAttendanceService {
           empMap.set(dateKey, record);
         }
       });
+
+      // Status filter (Submitted / Pending) — same rules as monthly matrix UI; no pagination
+      if (status && status.trim() && status.trim().toLowerCase() !== 'all') {
+        const statusFilter = status.trim().toLowerCase();
+        const todayStr = dayjs().format('YYYY-MM-DD');
+
+        const countNotUpdated = (employee: (typeof employees)[number]): number => {
+          const inactiveDateStr = employee.inactiveDate
+            ? dayjs(employee.inactiveDate).format('YYYY-MM-DD')
+            : null;
+          const empAttendanceMap = attendanceMap.get(employee.employeeId);
+          let notUpdated = 0;
+
+          for (let day = 1; day <= daysInMonth; day++) {
+            const m = String(month).padStart(2, '0');
+            const d = String(day).padStart(2, '0');
+            const dateKey = `${year}-${m}-${d}`;
+            const dateObj = new Date(dateKey + 'T00:00:00');
+            const isSun = dateObj.getDay() === 0;
+            const isSat = dateObj.getDay() === 6;
+            const holidayName = holidayMap.get(dateKey);
+
+            if (inactiveDateStr && dateKey >= inactiveDateStr) continue;
+            if (holidayName) continue;
+            if (isSun) continue;
+
+            const record = empAttendanceMap?.get(dateKey);
+
+            if (isSat) {
+              const hasWork =
+                record && record.totalHours !== null && record.totalHours > 0;
+              if (!hasWork) continue;
+            }
+
+            if (record) {
+              if (
+                !record.status ||
+                record.status === AttendanceStatus.NOT_UPDATED ||
+                record.status === AttendanceStatus.PENDING
+              ) {
+                notUpdated++;
+              }
+              continue;
+            }
+
+            if (dateKey <= todayStr) {
+              notUpdated++;
+            }
+          }
+
+          return notUpdated;
+        };
+
+        if (statusFilter === 'submitted') {
+          employees = employees.filter((emp) => countNotUpdated(emp) === 0);
+        } else if (statusFilter === 'pending') {
+          employees = employees.filter((emp) => countNotUpdated(emp) > 0);
+        }
+      }
 
       // 4. Create Workbook
       const workbook = new ExcelJS.Workbook();
@@ -3332,6 +3409,8 @@ export class EmployeeAttendanceService {
     search?: string,
     department?: string,
     status?: string,
+    page: number = 1,
+    limit: number = 10,
   ): Promise<any> {
     this.logger.log(
       `Fetching monthly report data for ${month}/${year}. Filter Manager: ${managerName || 'None'}, Search: ${search || 'None'}, Dept: ${department || 'None'}, Status: ${status || 'None'}`,
@@ -3734,7 +3813,7 @@ export class EmployeeAttendanceService {
       });
 
       let filteredEmployees = employeeRows;
-      if (status && status.trim() && status.toLowerCase() !== 'all') {
+      if (status && status.trim() && status.trim().toLowerCase() !== 'all') {
         const s = status.trim().toLowerCase();
         if (s === 'submitted') {
           filteredEmployees = employeeRows.filter(
@@ -3747,12 +3826,27 @@ export class EmployeeAttendanceService {
         }
       }
 
+      const total = filteredEmployees.length;
+      const totalPages = Math.ceil(total / limit);
+      const employeeOffset = (page - 1) * limit;
+      const paginatedEmployees = filteredEmployees.slice(
+        employeeOffset,
+        employeeOffset + limit,
+      );
+
       return {
         month: Number(month),
         year: Number(year),
         daysInMonth,
         days,
-        employees: filteredEmployees,
+        employees: paginatedEmployees,
+        pagination: {
+          page,
+          limit,
+          total,
+          totalPages,
+          itemCount: paginatedEmployees.length, // rows on the current page
+        },
       };
     } catch (error) {
       this.logger.error(

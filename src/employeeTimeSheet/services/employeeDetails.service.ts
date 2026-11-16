@@ -73,6 +73,26 @@ export class EmployeeDetailsService {
     private readonly employeeAttendanceService: EmployeeAttendanceService,
   ) { }
 
+  /** Shared pagination meta for list endpoints (no duplicate top-level totalItems). */
+  private buildPagination(
+    page: number,
+    limit: number,
+    total: number,
+    itemCount: number,
+  ) {
+    const safePage = Math.max(1, Number(page) || 1);
+    const safeLimit = Math.max(1, Number(limit) || 10);
+    const safeTotal = Math.max(0, Number(total) || 0);
+    const safeItemCount = Math.max(0, Number(itemCount) || 0);
+    return {
+      page: safePage,
+      limit: safeLimit,
+      total: safeTotal,
+      totalPages: Math.ceil(safeTotal / safeLimit) || 0,
+      itemCount: safeItemCount, // rows on the current page
+    };
+  }
+
   async createEmployee(
     createEmployeeDetailsDto: EmployeeDetailsDto,
   ): Promise<any> {
@@ -261,10 +281,13 @@ export class EmployeeDetailsService {
     role?: string,
   ): Promise<{
     data: EmployeeDetails[];
-    totalItems: number;
-    page: number;
-    limit: number;
-    totalPages: number;
+    pagination: {
+      page: number;
+      limit: number;
+      total: number;
+      totalPages: number;
+      itemCount: number;
+    };
   }> {
     try {
       this.logger.log('Fetching employees with filter:', {
@@ -374,14 +397,14 @@ export class EmployeeDetailsService {
         user: undefined // Remove the nested user object to keep response clean
       }));
 
-      const totalPages = totalItems > 0 ? Math.ceil(totalItems / limit) : 0;
-
       return {
         data: enrichedData,
-        totalItems,
-        page,
-        limit,
-        totalPages,
+        pagination: this.buildPagination(
+          page,
+          limit,
+          totalItems,
+          enrichedData.length,
+        ),
       };
     } catch (error) {
       this.logger.error(
@@ -594,10 +617,13 @@ export class EmployeeDetailsService {
     includeSelf: boolean = false,
   ): Promise<{
     data: any[];
-    totalItems: number;
-    page: number;
-    limit: number;
-    totalPages: number;
+    pagination: {
+      page: number;
+      limit: number;
+      total: number;
+      totalPages: number;
+      itemCount: number;
+    };
   }> {
     try {
       this.logger.log('Fetching employees for timesheet list with filter:', {
@@ -828,14 +854,9 @@ export class EmployeeDetailsService {
         }));
       }
 
-      const totalPages = totalItems > 0 ? Math.ceil(totalItems / limit) : 0;
-
       return {
         data,
-        totalItems,
-        page,
-        limit,
-        totalPages,
+        pagination: this.buildPagination(page, limit, totalItems, data.length),
       };
     } catch (error) {
       this.logger.error(`Error fetching timesheet list: ${error.message}`, error.stack);
