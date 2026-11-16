@@ -141,6 +141,70 @@ export class EmployeeAttendanceController {
   }
 
   @UseGuards(JwtAuthGuard, ReceptionistReadOnlyGuard)
+  @Get('download-matrix-pdf')
+  @ApiOperation({
+    summary:
+      'Download monthly attendance matrix PDF (filtered; all matching employees)',
+  })
+  @ApiQuery({ name: 'month', type: Number })
+  @ApiQuery({ name: 'year', type: Number })
+  @ApiQuery({ name: 'search', type: String, required: false })
+  @ApiQuery({ name: 'department', type: String, required: false })
+  @ApiQuery({ name: 'status', type: String, required: false })
+  async downloadMatrixPdf(
+    @Query() query: DownloadAttendanceDto,
+    @Req() req: any,
+    @Res() res: Response,
+  ) {
+    try {
+      this.logger.log(
+        `Downloading matrix PDF for month: ${query.month}, year: ${query.year}, search: ${query.search || 'None'}, dept: ${query.department || 'None'}, status: ${query.status || 'None'}`,
+      );
+      const user = req.user;
+      let managerName: string | undefined;
+      let managerId: string | undefined;
+
+      const roleUpper = (user?.role || '').toUpperCase();
+      if (
+        user &&
+        !hasAdminAccess(user) &&
+        (user.userType === UserType.MANAGER ||
+          roleUpper.includes('MNG') ||
+          roleUpper.includes(UserType.MANAGER))
+      ) {
+        managerName = user.aliasLoginName;
+        managerId = user.loginId;
+      }
+
+      const buffer =
+        await this.employeeAttendanceService.generateMonthlyMatrixPdfReport(
+          query.month,
+          query.year,
+          managerName,
+          managerId,
+          query.search,
+          query.department,
+          query.status,
+        );
+
+      res.set({
+        ...NO_CACHE_HEADERS,
+        'Content-Type': 'application/pdf',
+        'Content-Disposition': `attachment; filename=Attendance_Report_${query.month}_${query.year}.pdf`,
+        'Content-Length': buffer.length,
+      });
+
+      res.send(buffer);
+    } catch (error) {
+      this.logger.error(
+        `Error downloading matrix PDF: ${error.message}`,
+        error.stack,
+      );
+      throw error;
+    }
+  }
+
+  @UseGuards(JwtAuthGuard, ReceptionistReadOnlyGuard)
   @Get('download-pdf')
   @ApiOperation({ summary: 'Download monthly attendance PDF report' })
   @ApiQuery({ name: 'month', type: Number })
