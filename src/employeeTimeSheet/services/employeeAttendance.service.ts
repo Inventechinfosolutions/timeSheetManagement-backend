@@ -3332,6 +3332,8 @@ export class EmployeeAttendanceService {
     search?: string,
     department?: string,
     status?: string,
+    page: number = 1,
+    limit: number = 10,
   ): Promise<any> {
     this.logger.log(
       `Fetching monthly report data for ${month}/${year}. Filter Manager: ${managerName || 'None'}, Search: ${search || 'None'}, Dept: ${department || 'None'}, Status: ${status || 'None'}`,
@@ -3734,7 +3736,7 @@ export class EmployeeAttendanceService {
       });
 
       let filteredEmployees = employeeRows;
-      if (status && status.trim() && status.toLowerCase() !== 'all') {
+      if (status && status.trim() && status.trim().toLowerCase() !== 'all') {
         const s = status.trim().toLowerCase();
         if (s === 'submitted') {
           filteredEmployees = employeeRows.filter(
@@ -3747,12 +3749,26 @@ export class EmployeeAttendanceService {
         }
       }
 
+      const total = filteredEmployees.length;
+      const totalPages = Math.ceil(total / limit);
+      const employeeOffset = (page - 1) * limit;
+      const paginatedEmployees = filteredEmployees.slice(
+        employeeOffset,
+        employeeOffset + limit,
+      );
+
       return {
         month: Number(month),
         year: Number(year),
         daysInMonth,
         days,
-        employees: filteredEmployees,
+        employees: paginatedEmployees,
+        pagination: {
+          page,
+          limit,
+          total,
+          totalPages,
+        },
       };
     } catch (error) {
       this.logger.error(

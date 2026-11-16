@@ -97,6 +97,8 @@ export class EmployeeAttendanceController {
   @ApiQuery({ name: 'month', type: Number })
   @ApiQuery({ name: 'year', type: Number })
   @ApiQuery({ name: 'status', type: String, required: false })
+  @ApiQuery({ name: 'page', type: Number, required: false, example: 1 })
+  @ApiQuery({ name: 'limit', type: Number, required: false, example: 10 })
   async getMonthlyReportData(
     @Query() query: DownloadAttendanceDto,
     @Req() req: any,
@@ -121,6 +123,8 @@ export class EmployeeAttendanceController {
         query.search,
         query.department,
         query.status,
+        query.page,
+        query.limit,
       );
     } catch (error) {
       this.logger.error(`Error fetching monthly report data: ${error.message}`, error.stack);
@@ -656,6 +660,5 @@ export class EmployeeAttendanceController {
   }
 
 }
-
 
 
