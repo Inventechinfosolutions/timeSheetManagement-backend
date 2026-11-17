@@ -21,6 +21,24 @@ export const duplicateAssignmentMessage = (
   financialYear: string,
 ): string =>
   `${employeeId} already has a review for ${quarter} ${financialYear}. A different quarter or a different year can still be assigned.`;
+
+export const yearlyAlreadyAssignedMessage = (
+  employeeId: string,
+  financialYear: string,
+): string =>
+  `${employeeId} already has a yearly review for ${financialYear}.`;
+
+export const yearlyBlocksQuarterlyMessage = (
+  employeeId: string,
+  financialYear: string,
+): string =>
+  `${employeeId} already has a yearly review for ${financialYear}. Quarterly reviews cannot be assigned for the same year.`;
+
+export const quarterlyBlocksYearlyMessage = (
+  employeeId: string,
+  financialYear: string,
+): string =>
+  `Yearly appraisal cannot be assigned for ${employeeId} in ${financialYear} because quarterly review(s) already exist for this year. Check which quarters are already assigned and continue in Quarterly view.`;
 export const MILLISECONDS_PER_HOUR = 60 * 60 * 1000;
 
 export const appraisalWindowMs = (hours: number): number =>
@@ -40,6 +58,8 @@ export const LOCKED_PERFORMANCE_STATUSES: readonly EmployeePerformanceStatus[] =
 
 export const SUBMITTABLE_PERFORMANCE_STATUSES: readonly EmployeePerformanceStatus[] = [
   EmployeePerformanceStatus.NOT_STARTED,
+  EmployeePerformanceStatus.ASSIGNED,
+  EmployeePerformanceStatus.REASSIGNED,
   EmployeePerformanceStatus.DRAFT,
   EmployeePerformanceStatus.PENDING,
   EmployeePerformanceStatus.IN_PROGRESS,
@@ -50,6 +70,8 @@ export const SUBMITTABLE_PERFORMANCE_STATUSES: readonly EmployeePerformanceStatu
 
 export const DRAFT_ON_SAVE_STATUSES: readonly EmployeePerformanceStatus[] = [
   EmployeePerformanceStatus.NOT_STARTED,
+  EmployeePerformanceStatus.ASSIGNED,
+  EmployeePerformanceStatus.REASSIGNED,
   EmployeePerformanceStatus.PENDING,
   EmployeePerformanceStatus.IN_PROGRESS,
 ];

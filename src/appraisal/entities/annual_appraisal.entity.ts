@@ -33,35 +33,35 @@ export class AnnualAppraisalSummary extends BaseEntity {
   @Column({ type: 'varchar', length: 50, nullable: false })
   financialYear: string; // e.g. '2025-2026'
 
-  // Quarter 1
-  @Column({ type: 'decimal', precision: 3, scale: 2, nullable: true })
+  // Quarter 1 — one decimal (e.g. 4.4)
+  @Column({ type: 'decimal', precision: 3, scale: 1, nullable: true })
   q1Rating: number | null;
 
   @Column({ type: 'varchar', length: 50, nullable: true })
   q1Status: string | null; // 'REVIEWED', 'SUBMITTED', 'PENDING', null
 
   // Quarter 2
-  @Column({ type: 'decimal', precision: 3, scale: 2, nullable: true })
+  @Column({ type: 'decimal', precision: 3, scale: 1, nullable: true })
   q2Rating: number | null;
 
   @Column({ type: 'varchar', length: 50, nullable: true })
   q2Status: string | null;
 
   // Quarter 3
-  @Column({ type: 'decimal', precision: 3, scale: 2, nullable: true })
+  @Column({ type: 'decimal', precision: 3, scale: 1, nullable: true })
   q3Rating: number | null;
 
   @Column({ type: 'varchar', length: 50, nullable: true })
   q3Status: string | null;
 
   // Quarter 4
-  @Column({ type: 'decimal', precision: 3, scale: 2, nullable: true })
+  @Column({ type: 'decimal', precision: 3, scale: 1, nullable: true })
   q4Rating: number | null;
 
   @Column({ type: 'varchar', length: 50, nullable: true })
   q4Status: string | null;
 
-  @Column({ type: 'decimal', precision: 3, scale: 2, nullable: true })
+  @Column({ type: 'decimal', precision: 3, scale: 1, nullable: true })
   annualAverageRating: number | null;
 
   @Column({ type: 'int', default: 0 })

@@ -1,4 +1,4 @@
-import { Entity, PrimaryGeneratedColumn, Column, Unique } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, Index } from 'typeorm';
 import { BaseEntity } from '../../common/core/models/base.entity';
 import { QuaterlyEnum } from '../enums/quarterly_review.enums';
 import { EmployeePerformanceStatus } from '../enums/employee_performance.enums';
@@ -17,7 +17,7 @@ export {
 } from '../interfaces/employee_performance.interface';
 
 @Entity('employee_performance')
-@Unique(['employeeId', 'quarter', 'financialYear'])
+@Index(['employeeId', 'financialYear'])
 export class EmployeePerformance extends BaseEntity {
   @PrimaryGeneratedColumn()
   id!: number;
@@ -26,11 +26,37 @@ export class EmployeePerformance extends BaseEntity {
   employeeId!: string;
 
   @Column({
-    type: 'enum',
-    enum: QuaterlyEnum,
+    type: 'varchar',
+    length: 500,
     nullable: false,
+    transformer: {
+      to: (value: any) => {
+        if (value === null || value === undefined) return null;
+        return typeof value === 'object' ? JSON.stringify(value) : String(value);
+      },
+      from: (value: any) => {
+        if (typeof value === 'string') {
+          const trimmed = value.trim();
+          if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+            try {
+              return JSON.parse(trimmed);
+            } catch {
+              return value;
+            }
+          }
+          if (trimmed.startsWith('"') && trimmed.endsWith('"')) {
+            try {
+              return JSON.parse(trimmed);
+            } catch {
+              return value;
+            }
+          }
+        }
+        return value;
+      },
+    },
   })
-  quarter!: QuaterlyEnum;
+  quarter!: any;
 
   @Column({ type: 'varchar', length: 50, nullable: false })
   financialYear!: string;

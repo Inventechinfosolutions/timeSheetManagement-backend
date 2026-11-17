@@ -1,4 +1,6 @@
-﻿export enum ReviewEmployeeType {
+import { QuaterlyEnum } from '../../master/enums/quaterly.enums';
+
+export enum ReviewEmployeeType {
   EMPLOYEE = 'EMPLOYEE',
   INTERN = 'INTERN',
   MANAGER = 'MANAGER',
@@ -17,6 +19,8 @@ export enum QuarterlyReviewStatus {
   PENDING = 'PENDING',
   IN_PROGRESS = 'IN_PROGRESS',
   EVALUATION_IN_PROGRESS = 'EVALUATION_IN_PROGRESS',
+  /** Employee-assigner finished evaluation; waiting for manager final comment. */
+  AWAITING_MANAGER_FINAL_REVIEW = 'AWAITING_MANAGER_FINAL_REVIEW',
   SUBMITTED = 'SUBMITTED',
   UNDER_REVIEW = 'UNDER_REVIEW',
   REVIEWED = 'REVIEWED',
@@ -25,6 +29,8 @@ export enum QuarterlyReviewStatus {
   APPROVED = 'APPROVED',
   EDIT_GRANTED = 'EDIT_GRANTED',
   ASSIGNED = 'ASSIGNED',
+  /** Reopened after deadline miss / unlock — employee can submit again. */
+  REASSIGNED = 'REASSIGNED',
   PERFORMANCE_RECEIVED = 'PERFORMANCE_RECEIVED',
   REQUESTED_FOR_EDIT = 'REQUESTED_FOR_EDIT',
   APPROVED_FOR_EDITING = 'APPROVED_FOR_EDITING',
@@ -36,7 +42,19 @@ export enum QuarterlyReviewStatus {
 export const QuaterlyReviewStatus = QuarterlyReviewStatus;
 export type QuaterlyReviewStatus = QuarterlyReviewStatus;
 
-export { QuaterlyEnum, QuarterlyEnum} from '../../master/enums/quaterly.enums';
+export { QuaterlyEnum, QuarterlyEnum } from '../../master/enums/quaterly.enums';
+
+export enum ReviewPeriod {
+  QUARTERLY = 'QUARTERLY',
+  YEARLY = 'YEARLY',
+}
+
+export const YEARLY_QUARTERS = [
+  QuaterlyEnum.Q1,
+  QuaterlyEnum.Q2,
+  QuaterlyEnum.Q3,
+  QuaterlyEnum.Q4,
+] as const;
 
 export enum PerformanceStrengthsEnum {
   TECHNICAL_EXCELLENCE = 'TECHNICAL_EXCELLENCE',
@@ -80,6 +98,7 @@ export enum AppraisalNoticeType {
   QUARTER_REASSIGNED = 'APPRAISAL_QUARTER_REASSIGNED',
   SUBMISSION_CONFIRMED = 'APPRAISAL_SUBMISSION_CONFIRMED',
   SUBMISSION_RECEIVED = 'APPRAISAL_SUBMISSION_RECEIVED',
+  ASSIGNER_EVALUATION_SUBMITTED = 'APPRAISAL_ASSIGNER_EVALUATION_SUBMITTED',
   EDIT_REQUESTED = 'APPRAISAL_EDIT_REQUESTED',
   EDIT_REQUEST_SENT = 'APPRAISAL_EDIT_REQUEST_SENT',
   EDIT_GRANTED = 'APPRAISAL_EDIT_GRANTED',

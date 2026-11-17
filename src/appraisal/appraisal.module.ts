@@ -3,14 +3,17 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { QuarterlyReview } from './entities/quarterly_review.entities';
 import { EmployeePerformance } from './entities/employee_performance.entity';
 import { AnnualAppraisalSummary } from './entities/annual_appraisal.entity';
+import { AppraisalMapping } from './entities/appraisal_mapping.entity';
 import { EmployeeDetails } from '../employeeTimeSheet/entities/employeeDetails.entity';
 import { ManagerMapping } from '../managerMapping/entities/managerMapping.entity';
 import { QuarterlyReviewService } from './services/quarterly_review.service';
 import { EmployeePerformanceService } from './services/employee_performance.service';
 import { AnnualAppraisalService } from './services/annual_appraisal.service';
+import { AppraisalMappingService } from './services/appraisal_mapping.service';
 import { QuarterlyReviewController, QuarterlyReviewPerformanceController } from './controller/quarterly_review.controller';
 import { EmployeePerformanceController } from './controller/employee_performance.controller';
 import { AnnualAppraisalController } from './controller/annual_appraisal.controller';
+import { AppraisalMappingController } from './controller/appraisal_mapping.controller';
 import { AppraisalNoticeService } from './services/appraisal_notice.service';
 import { AppraisalDeadlineCronService } from './services/appraisal_deadline.cron';
 import { Notification } from '../notifications/entities/notification.entity';
@@ -24,6 +27,7 @@ import { MasterModule } from '../master/master.module';
       QuarterlyReview,
       EmployeePerformance,
       AnnualAppraisalSummary,
+      AppraisalMapping,
       EmployeeDetails,
       ManagerMapping,
       Notification,
@@ -37,11 +41,13 @@ import { MasterModule } from '../master/master.module';
     QuarterlyReviewPerformanceController,
     EmployeePerformanceController,
     AnnualAppraisalController,
+    AppraisalMappingController,
   ],
   providers: [
     QuarterlyReviewService,
     EmployeePerformanceService,
     AnnualAppraisalService,
+    AppraisalMappingService,
     AppraisalNoticeService,
     AppraisalDeadlineCronService,
   ],
@@ -49,6 +55,7 @@ import { MasterModule } from '../master/master.module';
     QuarterlyReviewService,
     EmployeePerformanceService,
     AnnualAppraisalService,
+    AppraisalMappingService,
     AppraisalDeadlineCronService,
     TypeOrmModule,
   ],

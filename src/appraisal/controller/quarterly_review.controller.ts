@@ -15,6 +15,7 @@ import {
   UseGuards,
   Req,
   Headers,
+  Header,
 } from '@nestjs/common';
 import {
   ApiTags,
@@ -44,7 +45,7 @@ import { QuarterlyReview } from '../entities/quarterly_review.entities';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { User } from '../../users/entities/user.entity';
 import { UserType } from '../../users/enums/user-type.enum';
-import { isCeoUser } from '../../users/utils/admin-access';
+import { isCeoOrGmUser } from '../../users/utils/admin-access';
 
 @ApiTags('Quarterly Review')
 @Controller('quarterly-review&performance')
@@ -71,13 +72,13 @@ export class QuarterlyReviewPerformanceController {
   @ApiOperation({ summary: 'Get quarterly reviews with the matching performance row' })
   @ApiOkResponse({ description: 'Returns the review list with performance details. Manager evaluation fields are omitted for employees.' })
   async getAll(@Query() query: QueryQuarterlyReviewDto, @Req() req: { user: User }) {
-    if (isCeoUser(req.user)) {
+    if (isCeoOrGmUser(req.user)) {
       query.employeeRole = UserType.MANAGER;
     }
-    return await this.reviewService.findAll(
-      query,
-      this.reviewService.hidesManagerEvaluation(req.user),
-    );
+    const hideEvaluation = await this.reviewService.shouldHideEvaluation(req.user, {
+      listAssignerId: query.assignerId,
+    });
+    return await this.reviewService.findAll(query, hideEvaluation);
   }
 
   @Post(':id/reassign')
@@ -144,9 +145,12 @@ export class QuarterlyReviewController {
 
   @Get(':id/reveal-rating')
   @UseGuards(JwtAuthGuard)
+  @Header('Cache-Control', 'no-store, no-cache, must-revalidate, private, max-age=0')
+  @Header('Pragma', 'no-cache')
+  @Header('Expires', '0')
   @ApiOperation({
     summary: 'Reveal the manager evaluation after the login password check',
-    description: 'Returns RevealedEvaluationDto only when employeeId matches the signed-in employee and this review, the password matches, and both rows are COMPLETED.',
+    description: 'Returns RevealedEvaluationDto only when employeeId matches the signed-in employee and this review, the password matches, and both rows are COMPLETED. Never cache — password required on every reveal.',
   })
   @ApiQuery({ name: 'employeeId', required: true })
   @ApiOkResponse({ type: RevealedEvaluationDto })
@@ -158,6 +162,21 @@ export class QuarterlyReviewController {
   ) {
     const password = Array.isArray(headerPassword) ? headerPassword[0] : headerPassword;
     return await this.reviewService.revealRating(id, employeeId, password, req.user);
+  }
+
+  @Get(':id/evaluation')
+  @UseGuards(JwtAuthGuard)
+  @Header('Cache-Control', 'no-store')
+  @ApiOperation({
+    summary: 'Manager evaluation fields only',
+    description: 'Scores and comments for the evaluation matrix. Does not include the employee self-review.',
+  })
+  @ApiOkResponse({ type: RevealedEvaluationDto })
+  async getEvaluation(
+    @Param('id', ParseIntPipe) id: number,
+    @Req() req: { user: User },
+  ) {
+    return await this.reviewService.getManagerEvaluation(id, req.user);
   }
 
   /**
@@ -261,8 +280,16 @@ export class QuarterlyReviewController {
    * GET /api/quarterly-review/search
    */
   @Get('search')
+  @UseGuards(JwtAuthGuard)
   @ApiOperation({ summary: 'Search quarterly reviews' })
-  async getBySearch(@Query() searchDto: SearchQuarterlyReviewDto) {
+  async getBySearch(
+    @Query() searchDto: SearchQuarterlyReviewDto,
+    @Req() req: { user: User },
+  ) {
+    if (isCeoOrGmUser(req.user)) {
+      searchDto.employeeRole = UserType.MANAGER;
+      searchDto.role = UserType.MANAGER;
+    }
     return await this.reviewService.getBySearch(searchDto);
   }
 

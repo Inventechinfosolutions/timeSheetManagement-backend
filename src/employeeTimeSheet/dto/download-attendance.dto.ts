@@ -1,4 +1,4 @@
-import { IsNotEmpty, IsNumber, Min, Max, IsOptional, IsString } from 'class-validator';
+import { IsNotEmpty, IsNumber, Min, Max, IsOptional, IsString,IsInt, } from 'class-validator';
 import { Type } from 'class-transformer';
 
 export class DownloadAttendanceDto {
@@ -39,4 +39,17 @@ export class DownloadAttendanceDto {
   @IsOptional()
   @IsString()
   status?: string;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  page: number = 1;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(100)
+  limit: number = 10;
 }

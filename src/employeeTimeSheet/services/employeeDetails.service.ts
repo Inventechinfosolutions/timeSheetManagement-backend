@@ -28,6 +28,10 @@ import * as ExcelJS from 'exceljs';
 import { BulkUploadResultDto, BulkUploadErrorDto } from '../dto/bulk-upload-result.dto';
 import { EmployeeAttendanceService } from './employeeAttendance.service';
 import { ManagerMapping, ManagerMappingStatus } from '../../managerMapping/entities/managerMapping.entity';
+import {
+  AppraisalMapping,
+  AppraisalMappingStatus,
+} from '../../appraisal/entities/appraisal_mapping.entity';
 import { EmployeeAttendance } from '../entities/employeeAttendance.entity';
 import { LeaveRequest } from '../entities/leave-request.entity';
 import { TimesheetBlocker } from '../entities/timesheetBlocker.entity';
@@ -53,6 +57,8 @@ export class EmployeeDetailsService {
     private readonly userRepository: Repository<User>,
     @InjectRepository(ManagerMapping)
     private readonly managerMappingRepository: Repository<ManagerMapping>,
+    @InjectRepository(AppraisalMapping)
+    private readonly appraisalMappingRepository: Repository<AppraisalMapping>,
     @InjectRepository(EmployeeAttendance)
     private readonly employeeAttendanceRepository: Repository<EmployeeAttendance>,
     @InjectRepository(LeaveRequest)
@@ -66,6 +72,26 @@ export class EmployeeDetailsService {
     private readonly documentUploaderService: DocumentUploaderService,
     private readonly employeeAttendanceService: EmployeeAttendanceService,
   ) { }
+
+  /** Shared pagination meta for list endpoints (no duplicate top-level totalItems). */
+  private buildPagination(
+    page: number,
+    limit: number,
+    total: number,
+    itemCount: number,
+  ) {
+    const safePage = Math.max(1, Number(page) || 1);
+    const safeLimit = Math.max(1, Number(limit) || 10);
+    const safeTotal = Math.max(0, Number(total) || 0);
+    const safeItemCount = Math.max(0, Number(itemCount) || 0);
+    return {
+      page: safePage,
+      limit: safeLimit,
+      total: safeTotal,
+      totalPages: Math.ceil(safeTotal / safeLimit) || 0,
+      itemCount: safeItemCount, // rows on the current page
+    };
+  }
 
   async createEmployee(
     createEmployeeDetailsDto: EmployeeDetailsDto,
@@ -253,7 +279,16 @@ export class EmployeeDetailsService {
     includeSelf: boolean = false,
     userStatus?: string,
     role?: string,
-  ): Promise<{ data: EmployeeDetails[]; totalItems: number }> {
+  ): Promise<{
+    data: EmployeeDetails[];
+    pagination: {
+      page: number;
+      limit: number;
+      total: number;
+      totalPages: number;
+      itemCount: number;
+    };
+  }> {
     try {
       this.logger.log('Fetching employees with filter:', {
         search,
@@ -362,7 +397,15 @@ export class EmployeeDetailsService {
         user: undefined // Remove the nested user object to keep response clean
       }));
 
-      return { data: enrichedData, totalItems };
+      return {
+        data: enrichedData,
+        pagination: this.buildPagination(
+          page,
+          limit,
+          totalItems,
+          enrichedData.length,
+        ),
+      };
     } catch (error) {
       this.logger.error(
         `Error fetching employees: ${error.message}`,
@@ -379,7 +422,10 @@ export class EmployeeDetailsService {
     department?: string,
     role?: string,
     search?: string,
-  ): Promise<any[]> {
+    excludeMapped: boolean = true,
+    /** When set: appraisal assigner-scoped response with two groups. */
+    assignerEmployeeId?: string,
+  ): Promise<any[] | Record<string, any>> {
     try {
       const query = this.employeeDetailsRepository
         .createQueryBuilder('employee')
@@ -409,12 +455,18 @@ export class EmployeeDetailsService {
       }
 
       if (role) {
-        const roles = role.split(',');
+        const roles = role.split(',').map((r) => r.trim()).filter(Boolean);
         query.andWhere('employee.role IN (:...roles)', { roles });
 
-        // If fetching employees, exclude those who are already mapped to a manager
-        // UNLESS the manager they are mapped to is INACTIVE.
-        if (roles.includes(UserType.EMPLOYEE)) {
+        // Manager Mapping only (role=EMPLOYEE): hide people already under an active manager.
+        // Appraisal dept list (MANAGER,EMPLOYEE) and assigner-scoped mode skip this.
+        const employeeOnly =
+          roles.length === 1 && roles.includes(UserType.EMPLOYEE);
+        if (
+          !assignerEmployeeId &&
+          excludeMapped &&
+          employeeOnly
+        ) {
           query.leftJoin(ManagerMapping, 'mm', 'mm.employeeId = employee.employeeId AND mm.status = :mappingStatus', { mappingStatus: ManagerMappingStatus.ACTIVE });
 
           // Join to check manager status using Entity classes
@@ -433,14 +485,78 @@ export class EmployeeDetailsService {
 
       const data = await query.getMany();
 
-      return data.map((emp: any) => ({
-        id: emp.id,
-        fullName: emp.fullName,
-        employeeId: emp.employeeId,
-        department: emp.department,
-        role: emp.role,
-        userStatus: emp.user?.status || UserStatus.DRAFT,
-      }));
+      // Appraisal flags shared by flat + assigner-scoped list-select
+      const appraisalRows = await this.appraisalMappingRepository.find({
+        where: { status: AppraisalMappingStatus.ACTIVE },
+        select: ['id', 'employeeId', 'assignerId'],
+      });
+      const mappedByEmployeeId = new Map<
+        string,
+        { assignerId: string; mappingId: number }
+      >();
+      const assignerIds = new Set<string>();
+      for (const row of appraisalRows) {
+        if (row.employeeId) {
+          mappedByEmployeeId.set(row.employeeId, {
+            assignerId: row.assignerId,
+            mappingId: row.id,
+          });
+        }
+        if (row.assignerId) {
+          assignerIds.add(row.assignerId);
+        }
+      }
+
+      const toPerson = (emp: any) => {
+        const mappedInfo = mappedByEmployeeId.get(emp.employeeId);
+        const mappedAssignerId = mappedInfo?.assignerId || null;
+        return {
+          id: emp.id,
+          fullName: emp.fullName,
+          employeeId: emp.employeeId,
+          department: emp.department,
+          role: emp.role,
+          userStatus: emp.user?.status || UserStatus.DRAFT,
+          mapped: Boolean(mappedInfo),
+          isAssigner: assignerIds.has(emp.employeeId),
+          assignerId: mappedAssignerId,
+          /** appraisal_mapping.id when this person is mapped (for edit/unmap) */
+          mappingId: mappedInfo?.mappingId ?? null,
+        };
+      };
+
+      // Appraisal Mapping: assigner selected → two groups for that department
+      if (assignerEmployeeId) {
+        const mappedUnderSelected = new Set<string>();
+        const mappedUnderAnyone = new Set(mappedByEmployeeId.keys());
+        for (const [employeeId, info] of mappedByEmployeeId.entries()) {
+          if (info.assignerId === assignerEmployeeId) {
+            mappedUnderSelected.add(employeeId);
+          }
+        }
+
+        const mappedToAssigner: any[] = [];
+        const unmappedInDepartment: any[] = [];
+        for (const emp of data as any[]) {
+          if (!emp.employeeId || emp.employeeId === assignerEmployeeId) continue;
+          if (mappedUnderSelected.has(emp.employeeId)) {
+            mappedToAssigner.push(toPerson(emp));
+          } else if (!mappedUnderAnyone.has(emp.employeeId)) {
+            unmappedInDepartment.push(toPerson(emp));
+          }
+          // Mapped under another assigner → omit from both lists
+        }
+
+        return {
+          assignerId: assignerEmployeeId,
+          department: department || null,
+          mappedToAssigner,
+          unmappedInDepartment,
+        };
+      }
+
+      // Flat list: all matching ACTIVE people + appraisal flags
+      return data.map((emp: any) => toPerson(emp));
     } catch (error) {
       this.logger.error(`Error fetching employee list select: ${error.message}`, error.stack);
       throw new HttpException('Failed to fetch employee list', HttpStatus.INTERNAL_SERVER_ERROR);
@@ -499,7 +615,16 @@ export class EmployeeDetailsService {
     managerName?: string,
     managerId?: string,
     includeSelf: boolean = false,
-  ): Promise<{ data: any[]; totalItems: number }> {
+  ): Promise<{
+    data: any[];
+    pagination: {
+      page: number;
+      limit: number;
+      total: number;
+      totalPages: number;
+      itemCount: number;
+    };
+  }> {
     try {
       this.logger.log('Fetching employees for timesheet list with filter:', {
         search,
@@ -729,7 +854,10 @@ export class EmployeeDetailsService {
         }));
       }
 
-      return { data, totalItems };
+      return {
+        data,
+        pagination: this.buildPagination(page, limit, totalItems, data.length),
+      };
     } catch (error) {
       this.logger.error(`Error fetching timesheet list: ${error.message}`, error.stack);
       throw new HttpException('Failed to fetch timesheet list', HttpStatus.INTERNAL_SERVER_ERROR);

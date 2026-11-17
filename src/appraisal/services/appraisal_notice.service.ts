@@ -144,8 +144,57 @@ export class AppraisalNoticeService {
     await this.notifyManager(input, buildSubmissionNotice(input), AppraisalNoticeType.SUBMISSION_RECEIVED);
   }
 
+  /** Notify the appraisal assigner (when assignerType is EMPLOYEE) — not the reporting manager. */
+  async notifyAssignerOfSubmission(
+    input: AppraisalNoticeInput & { assignerId: string },
+  ): Promise<void> {
+    const assignerId = input.assignerId?.trim();
+    if (!assignerId) return;
+    const assigner = await this.employeeDetailsRepository.findOne({
+      where: { employeeId: assignerId },
+    });
+    await this.deliver(
+      assignerId,
+      assigner?.email,
+      assigner?.fullName || assignerId,
+      buildSubmissionNotice(input),
+      AppraisalNoticeType.SUBMISSION_RECEIVED,
+    );
+  }
+
+  async notifyManagerOfFinalReviewNeeded(
+    input: AppraisalNoticeInput & { assignerName?: string | null },
+  ): Promise<void> {
+    const employeeName = String(input.employeeName || input.employeeId || 'Employee').trim();
+    const assignerName = String(input.assignerName || 'the assigner').trim() || 'the assigner';
+    const content: AppraisalNoticeContent = {
+      title: `Appraisal ready for final review (${input.quarter} ${input.financialYear})`,
+      message:
+        `${employeeName}'s appraisal has been reviewed and forwarded by assigner ${assignerName} ` +
+        `and is now awaiting your final review. Please do final review, add your comment, and complete the appraisal.`,
+    };
+    await this.notifyManager(input, content, AppraisalNoticeType.ASSIGNER_EVALUATION_SUBMITTED);
+  }
+
   async notifyManagerOfEditRequest(input: AppraisalNoticeInput): Promise<void> {
     await this.notifyManager(input, buildEditRequestNotice(input), AppraisalNoticeType.EDIT_REQUESTED);
+  }
+
+  async notifyAssignerOfEditRequest(
+    input: AppraisalNoticeInput & { assignerId: string },
+  ): Promise<void> {
+    const assignerId = input.assignerId?.trim();
+    if (!assignerId) return;
+    const assigner = await this.employeeDetailsRepository.findOne({
+      where: { employeeId: assignerId },
+    });
+    await this.deliver(
+      assignerId,
+      assigner?.email,
+      assigner?.fullName || assignerId,
+      buildEditRequestNotice(input),
+      AppraisalNoticeType.EDIT_REQUESTED,
+    );
   }
 
   async notifyEmployeeOfEditRequestSent(input: AppraisalNoticeInput): Promise<void> {

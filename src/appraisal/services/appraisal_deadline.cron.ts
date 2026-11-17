@@ -13,6 +13,7 @@ import { createAuditEntry, appendAuditEntry } from '../utils/audit-history.helpe
 
 const OPEN_REVIEW_STATUSES: QuarterlyReviewStatus[] = [
   QuarterlyReviewStatus.ASSIGNED,
+  QuarterlyReviewStatus.REASSIGNED,
   QuarterlyReviewStatus.NOT_STARTED,
   QuarterlyReviewStatus.DRAFT,
   QuarterlyReviewStatus.PENDING,

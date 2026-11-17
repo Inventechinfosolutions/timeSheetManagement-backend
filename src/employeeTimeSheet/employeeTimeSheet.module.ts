@@ -11,6 +11,7 @@ import { EmployeeDetails } from './entities/employeeDetails.entity';
 import { InternDetails } from './entities/internDetails.entity';
 import { User } from '../users/entities/user.entity';
 import { ManagerMapping } from '../managerMapping/entities/managerMapping.entity';
+import { AppraisalMapping } from '../appraisal/entities/appraisal_mapping.entity';
 import { UsersModule } from '../users/users.module';
 import { AuthModule } from '../auth/auth.module';
 import { MasterModule } from '../master/master.module';
@@ -50,6 +51,7 @@ import { MasterDepartment } from '../master/models/master-department.entity';
       AttendenceEditRequest,
       DocumentMetaInfo,
       ManagerMapping,
+      AppraisalMapping,
       MasterHolidays,
       Notification,
       LeaveManager,

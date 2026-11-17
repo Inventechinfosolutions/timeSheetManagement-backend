@@ -4,6 +4,7 @@ const UNSUBMITTED_STATUSES: readonly string[] = [
   QuarterlyReviewStatus.NOT_STARTED,
   QuarterlyReviewStatus.DRAFT,
   QuarterlyReviewStatus.ASSIGNED,
+  QuarterlyReviewStatus.REASSIGNED,
   QuarterlyReviewStatus.PENDING,
   QuarterlyReviewStatus.IN_PROGRESS,
   QuarterlyReviewStatus.EDIT_GRANTED,

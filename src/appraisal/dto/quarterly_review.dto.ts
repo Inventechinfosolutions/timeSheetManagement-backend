@@ -9,6 +9,7 @@ import {
   IsBoolean,
   Min,
   Max,
+  ValidateIf,
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional, PartialType } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
@@ -17,6 +18,7 @@ import {
   ReviewAssignedBy,
   QuarterlyReviewStatus,
   QuaterlyEnum,
+  ReviewPeriod,
 } from '../enums/quarterly_review.enums';
 
 export class CreateQuarterlyReviewDto {
@@ -45,14 +47,24 @@ export class CreateQuarterlyReviewDto {
   @IsString()
   financialYear: string;
 
-  @ApiProperty({
+  @ApiPropertyOptional({
+    enum: ReviewPeriod,
+    example: ReviewPeriod.QUARTERLY,
+    description: 'QUARTERLY creates one quarter. YEARLY stores ["Q1","Q2","Q3","Q4"] once in the quarter column.',
+  })
+  @IsOptional()
+  @IsEnum(ReviewPeriod)
+  reviewPeriod?: ReviewPeriod;
+
+  @ApiPropertyOptional({
     enum: QuaterlyEnum,
     example: QuaterlyEnum.Q1,
-    description: 'Quarter (Q1, Q2, Q3, Q4)',
+    description: 'Quarter (Q1, Q2, Q3, Q4). Required when reviewPeriod is QUARTERLY; omitted when reviewPeriod is YEARLY (["Q1","Q2","Q3","Q4"] is stored once in quarter column).',
   })
+  @ValidateIf((dto) => dto.reviewPeriod !== ReviewPeriod.YEARLY)
   @IsNotEmpty()
   @IsEnum(QuaterlyEnum)
-  quarter: QuaterlyEnum;
+  quarter?: QuaterlyEnum;
 
   @ApiPropertyOptional({
     example: '2025-04-01',
@@ -124,7 +136,7 @@ export class ManagerEvaluationDto {
   @ApiPropertyOptional({ example: 4, description: 'Productivity rating (1-5)' })
   @IsOptional()
   @Type(() => Number)
-  @IsNumber()
+  @IsNumber({ maxDecimalPlaces: 1 })
   @Min(1)
   @Max(5)
   productivity?: number;
@@ -132,7 +144,7 @@ export class ManagerEvaluationDto {
   @ApiPropertyOptional({ example: 4, description: 'Quality of Work rating (1-5)' })
   @IsOptional()
   @Type(() => Number)
-  @IsNumber()
+  @IsNumber({ maxDecimalPlaces: 1 })
   @Min(1)
   @Max(5)
   qualityOfWork?: number;
@@ -140,7 +152,7 @@ export class ManagerEvaluationDto {
   @ApiPropertyOptional({ example: 5, description: 'Ownership & Responsibility rating (1-5)' })
   @IsOptional()
   @Type(() => Number)
-  @IsNumber()
+  @IsNumber({ maxDecimalPlaces: 1 })
   @Min(1)
   @Max(5)
   ownership?: number;
@@ -148,7 +160,7 @@ export class ManagerEvaluationDto {
   @ApiPropertyOptional({ example: 5, description: 'Ownership & Responsibility rating (1-5)' })
   @IsOptional()
   @Type(() => Number)
-  @IsNumber()
+  @IsNumber({ maxDecimalPlaces: 1 })
   @Min(1)
   @Max(5)
   ownershipResponsibility?: number;
@@ -156,7 +168,7 @@ export class ManagerEvaluationDto {
   @ApiPropertyOptional({ example: 4, description: 'Communication rating (1-5)' })
   @IsOptional()
   @Type(() => Number)
-  @IsNumber()
+  @IsNumber({ maxDecimalPlaces: 1 })
   @Min(1)
   @Max(5)
   communication?: number;
@@ -164,7 +176,7 @@ export class ManagerEvaluationDto {
   @ApiPropertyOptional({ example: 5, description: 'Team Collaboration rating (1-5)' })
   @IsOptional()
   @Type(() => Number)
-  @IsNumber()
+  @IsNumber({ maxDecimalPlaces: 1 })
   @Min(1)
   @Max(5)
   teamCollaboration?: number;
@@ -172,7 +184,7 @@ export class ManagerEvaluationDto {
   @ApiPropertyOptional({ example: 4, description: 'Innovation & Problem Solving rating (1-5)' })
   @IsOptional()
   @Type(() => Number)
-  @IsNumber()
+  @IsNumber({ maxDecimalPlaces: 1 })
   @Min(1)
   @Max(5)
   innovation?: number;
@@ -180,7 +192,7 @@ export class ManagerEvaluationDto {
   @ApiPropertyOptional({ example: 4, description: 'Innovation & Problem Solving rating (1-5)' })
   @IsOptional()
   @Type(() => Number)
-  @IsNumber()
+  @IsNumber({ maxDecimalPlaces: 1 })
   @Min(1)
   @Max(5)
   innovationProblemSolving?: number;
@@ -214,7 +226,7 @@ export class ManagerEvaluationDto {
   @ApiPropertyOptional({ example: 4, description: 'Overall performance rating (1-5)' })
   @IsOptional()
   @Type(() => Number)
-  @IsNumber()
+  @IsNumber({ maxDecimalPlaces: 1 })
   @Min(1)
   @Max(5)
   overallPerformanceRating?: number;
@@ -222,7 +234,7 @@ export class ManagerEvaluationDto {
   @ApiPropertyOptional({ example: 4, description: 'Technical / Job Skills rating (1-5)' })
   @IsOptional()
   @Type(() => Number)
-  @IsNumber()
+  @IsNumber({ maxDecimalPlaces: 1 })
   @Min(1)
   @Max(5)
   technicalJobSkills?: number;
@@ -258,6 +270,11 @@ export class ManagerEvaluationDto {
   @IsBoolean()
   managerConfirmation?: boolean;
 
+  @ApiPropertyOptional({ description: 'Assigner Confirmation Checkbox (employee-assigner first pass)' })
+  @IsOptional()
+  @IsBoolean()
+  assignerConfirmation?: boolean;
+
   @ApiPropertyOptional({ description: 'Flag to save as draft instead of finalizing' })
   @IsOptional()
   @IsBoolean()
@@ -266,7 +283,7 @@ export class ManagerEvaluationDto {
   @ApiPropertyOptional({ example: 4, description: 'Final performance rating chosen by manager (1-5)' })
   @IsOptional()
   @Type(() => Number)
-  @IsNumber()
+  @IsNumber({ maxDecimalPlaces: 1 })
   @Min(1)
   @Max(5)
   finalRating?: number;
@@ -276,49 +293,49 @@ export class UpdateQuarterlyReviewDto extends PartialType(CreateQuarterlyReviewD
   @ApiPropertyOptional({ example: 4, description: 'Overall performance rating (1-5)' })
   @IsOptional()
   @Type(() => Number)
-  @IsNumber()
+  @IsNumber({ maxDecimalPlaces: 1 })
   overallPerformanceRating?: number;
 
   @ApiPropertyOptional({ example: 4, description: 'Productivity rating (1-5)' })
   @IsOptional()
   @Type(() => Number)
-  @IsNumber()
+  @IsNumber({ maxDecimalPlaces: 1 })
   productivity?: number;
 
   @ApiPropertyOptional({ example: 4, description: 'Quality of Work rating (1-5)' })
   @IsOptional()
   @Type(() => Number)
-  @IsNumber()
+  @IsNumber({ maxDecimalPlaces: 1 })
   qualityOfWork?: number;
 
   @ApiPropertyOptional({ example: 4, description: 'Technical / Job Skills rating (1-5)' })
   @IsOptional()
   @Type(() => Number)
-  @IsNumber()
+  @IsNumber({ maxDecimalPlaces: 1 })
   technicalJobSkills?: number;
 
   @ApiPropertyOptional({ example: 5, description: 'Ownership rating (1-5)' })
   @IsOptional()
   @Type(() => Number)
-  @IsNumber()
+  @IsNumber({ maxDecimalPlaces: 1 })
   ownershipResponsibility?: number;
 
   @ApiPropertyOptional({ example: 4, description: 'Communication rating (1-5)' })
   @IsOptional()
   @Type(() => Number)
-  @IsNumber()
+  @IsNumber({ maxDecimalPlaces: 1 })
   communication?: number;
 
   @ApiPropertyOptional({ example: 5, description: 'Team Collaboration rating (1-5)' })
   @IsOptional()
   @Type(() => Number)
-  @IsNumber()
+  @IsNumber({ maxDecimalPlaces: 1 })
   teamCollaboration?: number;
 
   @ApiPropertyOptional({ example: 4, description: 'Innovation rating (1-5)' })
   @IsOptional()
   @Type(() => Number)
-  @IsNumber()
+  @IsNumber({ maxDecimalPlaces: 1 })
   innovationProblemSolving?: number;
 
   @ApiPropertyOptional({ description: 'Performance strengths' })
@@ -366,10 +383,15 @@ export class UpdateQuarterlyReviewDto extends PartialType(CreateQuarterlyReviewD
   @IsBoolean()
   managerConfirmation?: boolean;
 
+  @ApiPropertyOptional({ description: 'Assigner Confirmation' })
+  @IsOptional()
+  @IsBoolean()
+  assignerConfirmation?: boolean;
+
   @ApiPropertyOptional({ example: 4.5, description: 'Manager-entered average score from 1 to 5' })
   @IsOptional()
   @Type(() => Number)
-  @IsNumber()
+  @IsNumber({ maxDecimalPlaces: 1 })
   @Min(1)
   @Max(5)
   finalRating?: number;
@@ -410,6 +432,14 @@ export class QueryQuarterlyReviewDto {
   @IsOptional()
   @IsEnum(QuaterlyEnum)
   quarter?: QuaterlyEnum;
+
+  @ApiPropertyOptional({
+    enum: ReviewPeriod,
+    description: 'Filter by review period. YEARLY returns the single yearly row with Q1-Q4 JSON.',
+  })
+  @IsOptional()
+  @IsEnum(ReviewPeriod)
+  reviewPeriod?: ReviewPeriod;
 
   @ApiPropertyOptional({ enum: ReviewAssignedBy, description: 'Filter by assignedBy role' })
   @IsOptional()
