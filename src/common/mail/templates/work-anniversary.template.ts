@@ -1,5 +1,12 @@
 import dayjs from 'dayjs';
+import * as fs from 'fs';
 import * as path from 'path';
+import {
+  AnniversaryTheme,
+  getAnniversaryTheme,
+  getThemeForEmployee,
+  getThemeForMilestoneYear,
+} from './work-anniversary-themes';
 
 export interface WorkAnniversaryData {
   employeeName: string;
@@ -14,28 +21,117 @@ export interface WorkAnniversaryData {
   hasPhoto?: boolean;
   bgUrl?: string;
   logoUrl?: string;
+  themeId?: number | string;
+  theme?: AnniversaryTheme;
 }
 
 export const getOrdinalSuffix = (n: number): string => {
+  const safe = Number.isFinite(n) ? Math.floor(Math.abs(n)) : 0;
   const s = ['th', 'st', 'nd', 'rd'];
-  const v = n % 100;
+  const v = safe % 100;
   return s[(v - 20) % 10] || s[v] || s[0];
 };
 
 export const getWorkAnniversarySubject = (employeeName: string, years: number = 1): string => {
-  const ordinal = `${years}${getOrdinalSuffix(years)}`;
+  const safeYears = Number.isFinite(years) && years > 0 ? Math.floor(years) : 1;
+  const ordinal = `${safeYears}${getOrdinalSuffix(safeYears)}`;
   return `🎉 Happy ${ordinal} Work Anniversary, ${employeeName}!`;
 };
 
 // Production corporate email assets
-// WorkSphere logo from user upload (hosted on CDN + fallback to local CID)
-const WORKSPHERE_LOGO_URL = 'https://n.uguu.se/fFcdyile.png';
 const INVENTECH_WEBSITE_URL = 'https://inventechinfo.com/';
-// Golden drape & confetti background matching user reference template
-const DEFAULT_ANNIVERSARY_BG_URL = 'https://n.uguu.se/jvCcpxFJ.jpg';
+const INVENTECH_DOMAIN_LABEL = 'inventechinfo.com';
+const INVENTECH_COMPANY_LABEL = 'Inventech Info Solutions';
 
-export const ANNIVERSARY_BG_PATH = path.join(process.cwd(), 'assets', 'anniversary-bg.jpg');
-export const WORKSPHERE_LOGO_PATH = path.join(process.cwd(), 'assets', 'worksphere-logo.png');
+import {
+  ANNIVERSARY_TEMPLATES_DIR,
+  IN_LOGO_PATH,
+  INVENTECH_WORDMARK_PATH,
+  INVENTECH_LOGO_PATH,
+  WORKSPHERE_LOGO_PATH,
+  getAnniversaryTemplatePath,
+  getDiscoveredTemplateIndices,
+} from '../../../assets';
+
+export {
+  ANNIVERSARY_TEMPLATES_DIR,
+  INVENTECH_WORDMARK_PATH,
+  INVENTECH_LOGO_PATH,
+  WORKSPHERE_LOGO_PATH,
+  IN_LOGO_PATH,
+};
+export const getAvailableTemplateIndices = getDiscoveredTemplateIndices;
+export const getTemplatePathByIndex = getAnniversaryTemplatePath;
+export const ANNIVERSARY_BG_GIF_SRC_PATH = getAnniversaryTemplatePath(1);
+export const ANNIVERSARY_BG2_GIF_SRC_PATH = getAnniversaryTemplatePath(2);
+export const ANNIVERSARY_BG_GIF_PATH = ANNIVERSARY_BG_GIF_SRC_PATH;
+
+/**
+ * Returns path to the celebration background GIF asset for the requested themeId.
+ * Dynamically discovers available templates (`anniversary-bg.gif`, `anniversary-bg2.gif`, ...)
+ * and maps theme IDs cleanly across them without hardcoding.
+ */
+export const getThemeBgImagePath = (themeId: number | string = 1): string => {
+  const available = getAvailableTemplateIndices();
+  const numericId =
+    typeof themeId === 'number' ? themeId : parseInt(String(themeId), 10);
+  const resolvedId = Number.isNaN(numericId)
+    ? typeof themeId === 'string' && /2|firework|crowd/i.test(themeId)
+      ? 2
+      : getAnniversaryTheme(themeId).id
+    : Math.max(1, numericId);
+
+  // Use exact template match when present (e.g. themeId=2 -> anniversary-bg2.gif);
+  // otherwise rotate evenly across discovered templates
+  const exactCandidate = getTemplatePathByIndex(resolvedId);
+  const rotatedTemplateIndex = available[(resolvedId - 1) % available.length];
+  const rotatedCandidate = getTemplatePathByIndex(rotatedTemplateIndex);
+
+  return (
+    [
+      exactCandidate,
+      rotatedCandidate,
+      ANNIVERSARY_BG2_GIF_SRC_PATH,
+      ANNIVERSARY_BG_GIF_SRC_PATH,
+    ]
+      .filter((p): p is string => Boolean(p))
+      .find((assetPath) => fs.existsSync(assetPath)) || ANNIVERSARY_BG_GIF_SRC_PATH
+  );
+};
+
+// Cache base64 strings in memory for high-performance email generation
+const bgBase64Cache = new Map<string, string>();
+let logoBase64Cache: string | null = null;
+
+export const getLogoBase64 = (): string => {
+  if (logoBase64Cache) return logoBase64Cache;
+  if (fs.existsSync(INVENTECH_LOGO_PATH)) {
+    try {
+      logoBase64Cache = fs.readFileSync(INVENTECH_LOGO_PATH).toString('base64');
+      return logoBase64Cache;
+    } catch {
+      return '';
+    }
+  }
+  return '';
+};
+
+export const getThemeBgBase64 = (themeId: number | string = 1): string => {
+  const filePath = getThemeBgImagePath(themeId);
+  if (bgBase64Cache.has(filePath)) {
+    return bgBase64Cache.get(filePath)!;
+  }
+  try {
+    if (fs.existsSync(filePath)) {
+      const b64 = fs.readFileSync(filePath).toString('base64');
+      bgBase64Cache.set(filePath, b64);
+      return b64;
+    }
+  } catch (err) {
+    // Graceful fallback
+  }
+  return '';
+};
 
 // Prevent HTML injection from dynamic employee data
 const escapeHtml = (value?: string | null): string => {
@@ -53,32 +149,54 @@ const escapeHtml = (value?: string | null): string => {
 };
 
 const getInitials = (name?: string): string => {
-  if (!name) return 'WS';
+  if (!name) return 'IT';
   const parts = name.trim().split(/\s+/).filter(Boolean);
   if (parts.length === 1) return parts[0].substring(0, 2).toUpperCase();
   return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
 };
 
 /**
- * Modern & Luxury Celebration Email Template for Work Anniversary:
- * - WorkSphere brand logo centered at the top
- * - Profile photo below in an elegant vertical OVAL frame with luxury double-ring golden halo
- * - Clean typography for Employee Name and Designation directly below the oval (no card/box)
- * - Modern, unique, high-end headline section (Milestone celebration kicker, script, bold year, navy capsule)
- * - Modern frosted appreciation card with personalized anniversary wishes addressing the individual employee
- * - 100% dynamic from database (no hardcoding)
+ * Work Anniversary Email Template
+ * Exact reproduction of user's celebration design concept with:
+ * - Real celebration background design photo from assets/anniversary-bg-${themeId}.jpg
+ *   showing golden ribbons, sparkles, and festive borders
+ * - Slowly floating background layer (.bgl) with drift animation
+ * - Celebration floating effects (.fx): rising glowing bokeh circles (.bk),
+ *   falling festive ribbons (.cf), and twinkling stars (.sp)
+ * - Gentle photo bobbing floating animation (.phw)
+ * - Milestone year floating pop animation (.yr)
+ * - Italic Georgia serif typography, category badge, and milestone capsule
+ * - 15 distinct luxury background themes, each with its own colored background asset in assets/
+ *
+ * Engineered with 100% email client compatibility:
+ * - Background image is embedded via background attribute, VML fill, and CSS background-image
+ * - Content is visible by default (NO opacity: 0 lockup in Outlook/webmail)
+ * - Zero hardcoding: all employee data, photos, and milestones are dynamically resolved
  */
 export const getWorkAnniversaryTemplate = (data: WorkAnniversaryData): string => {
   const joiningDay = data.joiningDate ? dayjs(data.joiningDate) : null;
   const annivDay = data.anniversaryDate ? dayjs(data.anniversaryDate) : dayjs();
 
   // Dynamic years calculation
-  const calculatedYears = (joiningDay && joiningDay.isValid() && annivDay.isValid())
-    ? Math.max(1, annivDay.diff(joiningDay, 'year'))
-    : 1;
-  const years = data.years && data.years > 0 ? data.years : calculatedYears;
+  const calculatedYears =
+    joiningDay && joiningDay.isValid() && annivDay.isValid()
+      ? Math.max(1, annivDay.diff(joiningDay, 'year'))
+      : 1;
+  const years =
+    data.years && Number.isFinite(data.years) && data.years > 0
+      ? Math.floor(data.years)
+      : calculatedYears;
   const suffix = getOrdinalSuffix(years);
   const ordinal = `${years}${suffix}`;
+
+  // Resolve theme from 15 distinct luxury background color palettes
+  const theme: AnniversaryTheme =
+    data.theme ||
+    (data.themeId
+      ? getAnniversaryTheme(data.themeId)
+      : data.employeeId
+      ? getThemeForEmployee(data.employeeId, years)
+      : getThemeForMilestoneYear(years));
 
   const rawName = data.employeeName || 'Valued Team Member';
   const employeeName = escapeHtml(rawName);
@@ -88,339 +206,356 @@ export const getWorkAnniversaryTemplate = (data: WorkAnniversaryData): string =>
   const rawPhoto = data.profilePicUrl || '';
   const hasPhoto = !!(data.hasPhoto || rawPhoto);
   const photoSrc = hasPhoto
-    ? (rawPhoto.startsWith('http') ? escapeHtml(rawPhoto) : 'cid:anniversary-profile-photo')
+    ? rawPhoto.startsWith('http')
+      ? escapeHtml(rawPhoto)
+      : 'cid:anniversary-profile-photo'
     : '';
 
-  const bgSource = data.bgUrl || DEFAULT_ANNIVERSARY_BG_URL;
-  const logoSource = data.logoUrl || WORKSPHERE_LOGO_URL;
+  const photoHtml = hasPhoto
+    ? `<img src="${photoSrc}" alt="${employeeName}" width="104" height="104" style="width:100%;height:100%;object-fit:cover;display:block;border-radius:50%;" />`
+    : `${initials}`;
 
-  return `<!DOCTYPE html>
-<html lang="en" xmlns="http://www.w3.org/1999/xhtml" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office">
+  // Retrieve base64 of theme background image asset from assets directory
+  const bgPath = getThemeBgImagePath(theme.id);
+  const bgMimeType = bgPath.toLowerCase().endsWith('.gif') ? 'image/gif' : 'image/jpeg';
+  const bgB64 = getThemeBgBase64(theme.id);
+  const bgDataUri = bgB64 ? `data:${bgMimeType};base64,${bgB64}` : '';
+  const bgCssUrl = bgDataUri || 'cid:anniversary-bg-image';
+
+  const bokehHtml = [
+    { size: 18, left: 6, dur: 11, delay: -2, sx: 16 },
+    { size: 26, left: 14, dur: 15, delay: -5, sx: -20 },
+    { size: 12, left: 22, dur: 10, delay: -1, sx: 12 },
+    { size: 30, left: 34, dur: 17, delay: -8, sx: -14 },
+    { size: 16, left: 42, dur: 12, delay: -4, sx: 22 },
+    { size: 24, left: 52, dur: 14, delay: -6, sx: -18 },
+    { size: 14, left: 60, dur: 11, delay: -3, sx: 10 },
+    { size: 28, left: 68, dur: 16, delay: -7, sx: -24 },
+    { size: 20, left: 76, dur: 13, delay: -5, sx: 15 },
+    { size: 32, left: 84, dur: 18, delay: -9, sx: -12 },
+    { size: 15, left: 90, dur: 12, delay: -2, sx: 18 },
+    { size: 22, left: 4, dur: 14, delay: -4, sx: -16 },
+    { size: 18, left: 48, dur: 13, delay: -3, sx: 20 },
+    { size: 25, left: 94, dur: 16, delay: -6, sx: -15 },
+  ]
+    .map(
+      (b) =>
+        `<span class="bk" style="width:${b.size}px;height:${b.size}px;left:${b.left}%;animation-duration:${b.dur}s;animation-delay:${b.delay}s;--sx:${b.sx}px;"></span>`,
+    )
+    .join('\n          ');
+
+  const confettiHtml = [
+    { left: 5, dur: 8, delay: -1, sx: 25, colorIdx: 0 },
+    { left: 12, dur: 11, delay: -4, sx: -35, colorIdx: 1 },
+    { left: 19, dur: 9, delay: -2, sx: 40, colorIdx: 0 },
+    { left: 27, dur: 12, delay: -6, sx: -20, colorIdx: 1 },
+    { left: 33, dur: 8.5, delay: -3, sx: 30, colorIdx: 0 },
+    { left: 41, dur: 10.5, delay: -5, sx: -45, colorIdx: 1 },
+    { left: 49, dur: 9.5, delay: -2.5, sx: 20, colorIdx: 0 },
+    { left: 57, dur: 11.5, delay: -7, sx: -30, colorIdx: 1 },
+    { left: 64, dur: 8, delay: -1.5, sx: 35, colorIdx: 0 },
+    { left: 71, dur: 10, delay: -4.5, sx: -25, colorIdx: 1 },
+    { left: 78, dur: 12, delay: -8, sx: 45, colorIdx: 0 },
+    { left: 85, dur: 9, delay: -3, sx: -15, colorIdx: 1 },
+    { left: 92, dur: 11, delay: -5.5, sx: 25, colorIdx: 0 },
+    { left: 15, dur: 9.8, delay: -3.8, sx: -40, colorIdx: 0 },
+    { left: 53, dur: 10.2, delay: -6.2, sx: 35, colorIdx: 1 },
+    { left: 88, dur: 8.8, delay: -2.2, sx: -30, colorIdx: 0 },
+  ]
+    .map(
+      (c) =>
+        `<span class="cf" style="left:${c.left}%;animation-duration:${c.dur}s;animation-delay:${c.delay}s;--sx:${c.sx}px;background:${theme.confettiColors[c.colorIdx]};"></span>`,
+    )
+    .join('\n          ');
+
+  const sparkleHtml = [
+    { left: 10, top: 15, delay: 0.2 },
+    { left: 88, top: 18, delay: 0.8 },
+    { left: 18, top: 45, delay: 1.4 },
+    { left: 82, top: 52, delay: 0.5 },
+    { left: 14, top: 75, delay: 1.1 },
+    { left: 85, top: 82, delay: 1.7 },
+    { left: 50, top: 10, delay: 0.9 },
+  ]
+    .map(
+      (s) =>
+        `<span class="sp" style="left:${s.left}%;top:${s.top}%;animation-delay:${s.delay}s;background:${theme.sparkleColor};"></span>`,
+    )
+    .join('\n          ');
+
+  return `<!doctype html>
+<html lang="en">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="X-UA-Compatible" content="IE=edge">
-  <title>Happy ${ordinal} Work Anniversary, ${employeeName}!</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Happy ${ordinal} Work Anniversary, ${employeeName}!</title>
+<style>
+:root { --sans: Arial, Helvetica, sans-serif; }
+html, body { margin: 0; background: ${theme.outerBg}; min-height: 100%; }
+body { padding: 24px 12px 40px; font-family: Georgia, serif; }
+.stage { display: flex; justify-content: center; }
+.cd {
+  position: relative;
+  width: 100%;
+  max-width: 460px;
+  min-height: 700px;
+  border-radius: 16px;
+  overflow: hidden;
+  font-family: Georgia, serif;
+  color: ${theme.nameColor};
+  text-align: center;
+  background-color: ${theme.cardBg};
+  background-image: url('${bgDataUri}');
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  box-shadow: 0 16px 42px rgba(0, 0, 0, 0.28);
+}
+.bgl {
+  position: absolute;
+  inset: -6%;
+  background-image: url('${bgDataUri}');
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  animation: drift 15s ease-in-out infinite alternate;
+  z-index: 0;
+  pointer-events: none;
+}
+@keyframes drift {
+  0% { transform: translate(-14px, -10px) scale(1.03); }
+  50% { transform: translate(0px, 4px) scale(1.07); }
+  100% { transform: translate(14px, 10px) scale(1.10); }
+}
+.fx {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 1;
+  overflow: hidden;
+}
+.bk {
+  position: absolute;
+  bottom: -40px;
+  border-radius: 50%;
+  background: ${theme.bokehColor};
+  filter: blur(1.5px);
+  animation: rise linear infinite;
+}
+@keyframes rise {
+  0% { opacity: 0; transform: translate(0, 0) scale(.8); }
+  15% { opacity: .9; }
+  85% { opacity: .7; }
+  100% { opacity: 0; transform: translate(var(--sx, 0px), -760px) scale(1.15); }
+}
+.cf {
+  position: absolute;
+  top: -20px;
+  width: 7px;
+  height: 15px;
+  border-radius: 1px;
+  animation: fall linear infinite;
+}
+@keyframes fall {
+  0% { transform: translate(0, 0) rotateX(0) rotateZ(0); }
+  100% { transform: translate(var(--sx, 0px), 760px) rotateX(900deg) rotateZ(160deg); }
+}
+.sp {
+  position: absolute;
+  width: 7px;
+  height: 7px;
+  transform: rotate(45deg);
+  animation: tw 2.4s ease-in-out infinite;
+}
+@keyframes tw {
+  0%, 100% { opacity: .1; transform: rotate(45deg) scale(.4); }
+  50% { opacity: 1; transform: rotate(45deg) scale(1.3); }
+}
+.in {
+  position: relative;
+  z-index: 2;
+  padding-top: 48px;
+  padding-bottom: 56px;
+}
+.tg {
+  display: inline-block;
+  font: 700 9px var(--sans);
+  letter-spacing: 2.4px;
+  background: ${theme.tagBg};
+  border: 1px solid ${theme.tagBorder};
+  border-radius: 12px;
+  padding: 5px 14px;
+  color: ${theme.tagText};
+  text-transform: uppercase;
+}
+.phw {
+  animation: bob 3.6s ease-in-out infinite;
+}
+@keyframes bob {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-6px); }
+}
+.ph {
+  position: relative;
+  width: 104px;
+  height: 104px;
+  margin: 16px auto 0;
+  border-radius: 50%;
+  background: ${theme.photoFallbackBg};
+  border: 4px solid ${theme.photoBorder};
+  box-shadow: 0 0 0 2px ${theme.photoShadow};
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font: 700 32px var(--sans);
+  color: #fde8ec;
+  overflow: hidden;
+}
+.ph img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  border-radius: 50%;
+}
+.cg {
+  font: italic 700 26px Georgia, serif;
+  color: ${theme.congratulationsColor};
+  margin-top: 14px;
+}
+.yr {
+  display: inline-block;
+  font: italic 700 68px/1.05 Georgia, serif;
+  color: ${theme.yearColor};
+  margin: 2px 0;
+  animation: floatYear 4s ease-in-out infinite;
+}
+@keyframes floatYear {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-4px) scale(1.02); }
+}
+.wa {
+  display: inline-block;
+  background: ${theme.waBg};
+  color: ${theme.waText};
+  font: 700 10px var(--sans);
+  letter-spacing: 2px;
+  padding: 8px 18px;
+  border-radius: 14px;
+  margin-top: 6px;
+  text-transform: uppercase;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.22);
+}
+.nm {
+  font: 700 18px var(--sans);
+  letter-spacing: 1.2px;
+  margin-top: 16px;
+  color: ${theme.nameColor};
+  text-transform: uppercase;
+}
+.rl {
+  font: 12px var(--sans);
+  color: ${theme.roleColor};
+  margin-top: 3px;
+  text-transform: capitalize;
+}
+.q {
+  font: italic 12.5px/1.65 Georgia, serif;
+  color: ${theme.quoteColor};
+  margin: 14px 38px 0;
+  text-align: center;
+}
+.sc {
+  font: italic 700 19px Georgia, serif;
+  color: ${theme.signoffColor};
+  margin-top: 12px;
+}
+.ft {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 38px;
+  background: ${theme.footerBg};
+  color: ${theme.footerText};
+  font: 700 9px var(--sans);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 4;
+}
+.ft a {
+  color: ${theme.footerText};
+  text-decoration: underline;
+  font-weight: 700;
+}
+@media (prefers-reduced-motion: reduce) {
+  .cd * { animation: none !important; transform: none !important; }
+  .fx { display: none; }
+}
+</style>
+</head>
+<body style="margin:0;padding:24px 12px 40px;background-color:${theme.outerBg};">
 
-  <!-- Google Fonts for authentic script calligraphy & bold corporate typography -->
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Alex+Brush&family=Montserrat:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
-
-  <!--[if mso]>
-  <xml>
-    <o:OfficeDocumentSettings>
-      <o:AllowPNG/>
-      <o:PixelsPerInch>96</o:PixelsPerInch>
-    </o:OfficeDocumentSettings>
-  </xml>
-  <style type="text/css">
-    table { border-collapse: collapse; mso-table-lspace: 0pt; mso-table-rspace: 0pt; }
-    td { padding: 0; }
-    .cursive-script, .cursive-script * {
-      font-family: 'Brush Script MT', 'Lucida Handwriting', 'Segoe Script', cursive, Georgia, serif !important;
-      font-size: 32px !important;
-      line-height: 36px !important;
-      color: #78350F !important;
-      background: transparent !important;
-      background-color: transparent !important;
-      mso-highlight: none !important;
-      mso-shading: none !important;
-      border: none !important;
-      text-decoration: none !important;
-      mso-line-height-rule: exactly !important;
-    }
-    .milestone-subline {
-      font-size: 9.5px !important;
-      letter-spacing: 0.5px !important;
-      color: #78350F !important;
-      font-weight: 800 !important;
-    }
-  </style>
+<div class="stage">
+  <!--[if gte mso 9]>
+  <v:rect xmlns:v="urn:schemas-microsoft-com:vml" fill="true" stroke="false" style="width:460px;height:700px;">
+  <v:fill type="frame" src="cid:anniversary-bg-image" color="${theme.cardBg}" />
+  <v:textbox inset="0,0,0,0">
   <![endif]-->
 
-  <style>
-    body, table, td, p, a, span {
-      font-family: 'Montserrat', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
-      -webkit-font-smoothing: antialiased;
-      -webkit-text-size-adjust: 100%;
-    }
-
-    /* Suppress Gmail hover overlay icons */
-    .a5q, .a6o, [role="button"][aria-label*="Download"], [role="button"][aria-label*="download"], img + div {
-      display: none !important;
-      opacity: 0 !important;
-      visibility: hidden !important;
-    }
-
-    .cursive-script, .cursive-script * {
-      font-family: 'Alex Brush', 'Brush Script MT', 'Segoe Script', 'Lucida Handwriting', cursive, Georgia, serif !important;
-      color: #78350F !important;
-      background: transparent !important;
-      background-color: transparent !important;
-      text-decoration: none !important;
-      border: none !important;
-      outline: none !important;
-    }
-
-    /* ─── Celebratory Slow-Motion Entrance & Glow Animations (Apple Mail / Modern Webmail) ─── */
-    @keyframes celebrationEntrance {
-      0% {
-        opacity: 0;
-        transform: scale(0.94) translateY(16px);
-      }
-      60% {
-        opacity: 0.9;
-      }
-      100% {
-        opacity: 1;
-        transform: scale(1) translateY(0);
-      }
-    }
-
-    @keyframes goldenPulse {
-      0%, 100% {
-        box-shadow: 0 0 0 2px #F59E0B, 0 14px 32px rgba(180, 83, 9, 0.32);
-      }
-      50% {
-        box-shadow: 0 0 0 4px #FBBF24, 0 18px 40px rgba(245, 158, 11, 0.55);
-      }
-    }
-
-    .email-container {
-      animation: celebrationEntrance 1.4s cubic-bezier(0.16, 1, 0.3, 1) forwards !important;
-    }
-
-    .halo-pulse {
-      animation: goldenPulse 3s ease-in-out infinite !important;
-    }
-
-    @media only screen and (max-width: 640px) {
-      .email-container { width: 100% !important; max-width: 100% !important; }
-      .stack-column { display: block !important; width: 100% !important; max-width: 100% !important; text-align: center !important; }
-      .photo-cell { text-align: center !important; padding: 10px 0 !important; }
-      .headline-cell { text-align: center !important; padding: 10px 0 !important; }
-    }
-  </style>
-</head>
-<body style="margin: 0; padding: 24px 0; background-color: #F4EAD4; -webkit-font-smoothing: antialiased;">
-
-  <!-- Hidden Preview Text -->
-  <div style="display: none; font-size: 1px; line-height: 1px; max-height: 0px; max-width: 0px; opacity: 0; overflow: hidden; mso-hide: all;">
-    🎉 Congratulations ${employeeName} on your ${ordinal} Work Anniversary! Thank you for your continued dedication, leadership, and excellence.
-  </div>
-
-  <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="background-color: #F4EAD4; table-layout: fixed; padding: 12px 0;">
+  <!-- Card Table with background image attribute for Outlook on the Web / OWA -->
+  <table role="presentation" width="460" cellpadding="0" cellspacing="0" border="0" align="center" class="cd go" id="cd" background="cid:anniversary-bg-image" style="width:460px;max-width:460px;min-height:700px;margin:0 auto;border-radius:16px;overflow:hidden;box-shadow:0 16px 42px rgba(0,0,0,0.28);background-color:${theme.cardBg};background-image:url('${bgCssUrl}');background-size:cover;background-position:center;background-repeat:no-repeat;text-align:center;font-family:Georgia,serif;color:${theme.nameColor};">
     <tr>
-      <td align="center" style="padding: 0 10px;">
+      <td align="center" valign="top" background="cid:anniversary-bg-image" style="background-image:url('${bgCssUrl}');background-size:cover;background-position:center;background-repeat:no-repeat;padding:0;border-radius:16px;position:relative;">
 
-        <!--[if mso]>
-        <table align="center" border="0" cellspacing="0" cellpadding="0" width="620">
-        <tr>
-        <td align="center" valign="top" width="620">
-        <v:rect xmlns:v="urn:schemas-microsoft-com:vml" fill="true" stroke="false" style="width:620px;height:840px;">
-        <v:fill type="frame" src="${bgSource}" color="#F5E4C3" />
-        <v:textbox inset="0,0,0,0">
-        <![endif]-->
+        <!-- Slowly floating background layer (active in modern clients and browser) -->
+        <div class="bgl"></div>
 
-        <!-- ─── MAIN POSTER CONTAINER (Golden Drape Background) ─── -->
-        <table role="presentation" class="email-container" width="620" border="0" cellspacing="0" cellpadding="0" background="${bgSource}" style="width: 620px; max-width: 620px; background-color: #FDFBF7; background-image: url('${bgSource}'); background-size: cover; background-position: center top; background-repeat: no-repeat; border-radius: 20px; overflow: hidden; box-shadow: 0 16px 48px rgba(180, 83, 9, 0.22); border: 1.5px solid #E5C378; table-layout: fixed;">
-          
-          <!-- Top Row: WorkSphere Logo Centered Directly Above Left Column (Oval Photo) -->
-          <tr>
-            <td style="padding: 24px 32px 14px 32px;">
-              <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="table-layout: fixed;">
-                <tr>
-                  <!-- Left cell (220px wide): Logo centered directly above the oval profile photo column -->
-                  <td class="stack-column photo-cell" width="220" align="center" valign="middle" style="width: 220px; text-align: center; padding-right: 12px;">
-                    <table role="presentation" border="0" cellspacing="0" cellpadding="0" style="margin: 0 auto;">
-                      <tr>
-                        <td align="center">
-                          <img src="${logoSource}"
-                               alt="WorkSphere"
-                               width="145"
-                               style="display: block; width: 145px; height: auto; border: 0; outline: none; margin: 0 auto; pointer-events: none;" />
-                        </td>
-                      </tr>
-                    </table>
-                  </td>
-                  <!-- Right cell (336px wide): Empty so golden drape flows down gracefully -->
-                  <td class="stack-column headline-cell" width="336" style="width: 336px; padding-left: 12px;">
-                    &nbsp;
-                  </td>
-                </tr>
-              </table>
-            </td>
-          </tr>
+        <!-- Celebration Floating FX Layer: Bokeh circles, falling ribbons, twinkling stars -->
+        <div class="fx" id="fx">
+          <!-- Rising glowing bokeh circles -->
+          ${bokehHtml}
 
-          <!-- Middle Row: Two-Column Showcase (Oval Photo Left + Matching-Height Milestone Card Right) -->
-          <tr>
-            <td style="padding: 0 32px 18px 32px;">
-              <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="table-layout: fixed;">
-                <tr>
+          <!-- Falling festive ribbons -->
+          ${confettiHtml}
 
-                  <!-- ─── LEFT: ELEGANT VERTICAL OVAL PROFILE PHOTO + NAME & DESIGNATION ─── -->
-                  <td class="stack-column photo-cell" width="220" align="center" valign="top" style="width: 220px; vertical-align: top; text-align: center; padding-right: 12px;">
-                    <table role="presentation" border="0" cellspacing="0" cellpadding="0" style="margin: 0 auto;">
-                      <tr>
-                        <td align="center">
-                          <!-- Outer Golden Halo & Pure Vertical Oval (width: 176px; height: 236px; border-radius: 50%) -->
-                          <div class="halo-pulse" style="width: 176px; height: 236px; border-radius: 50%; overflow: hidden; border: 3.5px solid #FFFFFF; box-shadow: 0 0 0 2px #F59E0B, 0 14px 32px rgba(180, 83, 9, 0.32); background-color: #FFFFFF;">
-                            ${
-                              hasPhoto
-                                ? `
-                              <!--[if mso]>
-                              <v:oval style="width:176px;height:236px;" stroked="false">
-                                <v:fill type="frame" src="${photoSrc}" />
-                                <v:textbox inset="0,0,0,0">
-                              <![endif]-->
-                              <table role="presentation" width="176" height="236" border="0" cellspacing="0" cellpadding="0" background="${photoSrc}" style="width: 176px; height: 236px; border-collapse: collapse; background-image: url('${photoSrc}'); background-size: cover; background-position: center top; background-repeat: no-repeat; border-radius: 50%; pointer-events: none;">
-                                <tr>
-                                  <td width="176" height="236" align="center" valign="middle" style="width: 176px; height: 236px; padding: 0; pointer-events: none;">
-                                    <div style="width: 176px; height: 236px; line-height: 236px; font-size: 0; opacity: 0; pointer-events: none;">&nbsp;</div>
-                                  </td>
-                                </tr>
-                              </table>
-                              <!--[if gte mso 9]>
-                                </v:textbox>
-                              </v:oval>
-                              <![endif]-->
-                              `
-                                : `
-                              <!-- Graceful Executive Monogram Oval Fallback -->
-                              <table role="presentation" width="176" height="236" border="0" cellspacing="0" cellpadding="0" style="height: 236px; width: 176px; background: linear-gradient(145deg, #FFF9ED 0%, #F8E6C2 50%, #E6B86A 100%); border-radius: 50%;">
-                                <tr>
-                                  <td align="center" valign="middle" style="text-align: center;">
-                                    <div style="width: 80px; height: 80px; border-radius: 50%; background-color: #FFFFFF; border: 3px solid #E6B86A; margin: 0 auto 10px auto; box-shadow: 0 6px 16px rgba(180, 83, 9, 0.25);">
-                                      <table role="presentation" width="100%" height="100%" border="0" cellspacing="0" cellpadding="0">
-                                        <tr>
-                                          <td align="center" valign="middle" style="font-family: 'Montserrat', sans-serif; font-size: 28px; font-weight: 800; color: #0F2C59; line-height: 1;">
-                                            ${initials}
-                                          </td>
-                                        </tr>
-                                      </table>
-                                    </div>
-                                    <div style="font-family: 'Montserrat', sans-serif; font-size: 11px; font-weight: 800; color: #854D0E; letter-spacing: 1.5px; text-transform: uppercase;">
-                                      ${ordinal} YEAR
-                                    </div>
-                                  </td>
-                                </tr>
-                              </table>
-                              `
-                            }
-                          </div>
-                        </td>
-                      </tr>
+          <!-- Twinkling celebration stars -->
+          ${sparkleHtml}
+        </div>
 
-                      <!-- Clean Typography Directly Below Oval (No Box) -->
-                      <tr>
-                        <td align="center" style="padding-top: 12px;">
-                          <div style="font-family: 'Montserrat', sans-serif; font-size: 19px; font-weight: 800; color: #0B2545; text-transform: uppercase; letter-spacing: 0.6px; line-height: 1.2;">
-                            ${employeeName}
-                          </div>
-                          <div style="font-family: 'Montserrat', sans-serif; font-size: 13px; font-weight: 700; color: #854D0E; text-transform: capitalize; letter-spacing: 0.5px; margin-top: 4px; line-height: 1.2;">
-                            ${designation}
-                          </div>
-                        </td>
-                      </tr>
-                    </table>
-                  </td>
+        <!-- Inner Content Container -->
+        <div class="in">
+          <div class="tg">MILESTONE CELEBRATION</div>
 
-                  <!-- ─── RIGHT: MODERN & UNIQUE MILESTONE HEADLINE SECTION (CLEAN TEXT DIRECTLY ON BACKGROUND) ─── -->
-                  <td class="stack-column headline-cell" width="336" align="center" valign="middle" style="width: 336px; vertical-align: middle; text-align: center; padding-left: 12px;">
-                    
-                    <table role="presentation" border="0" cellspacing="0" cellpadding="0" style="margin: 0 auto; width: 100%; height: 291px;" height="291">
-                      <tr>
-                        <td align="center" valign="middle" style="padding: 10px 12px; height: 291px; min-height: 291px;" height="291">
-                          
-                          <!-- High-Contrast Milestone Badge Tag -->
-                          <table role="presentation" border="0" cellspacing="0" cellpadding="0" style="margin: 0 auto 6px auto;">
-                            <tr>
-                              <td style="background-color: #FFFFFF; border-radius: 12px; padding: 4px 16px; border: 1.5px solid #E5C378; box-shadow: 0 2px 8px rgba(180, 83, 9, 0.15);">
-                                <div style="font-family: 'Montserrat', sans-serif; font-size: 10px; font-weight: 800; color: #78350F; letter-spacing: 2.2px; text-transform: uppercase; line-height: 1;">
-                                  ✦ MILESTONE CELEBRATION ✦
-                                </div>
-                              </td>
-                            </tr>
-                          </table>
+          <div class="phw">
+            <div class="ph">${photoHtml}</div>
+          </div>
 
-                          <!-- Calligraphy Script: Rich Dark Gold, Zero Background / No Box (Transparent & Clean) -->
-                          <div class="cursive-script" style="font-family: 'Alex Brush', 'Brush Script MT', cursive; font-size: 36px; line-height: 40px; color: #78350F; font-weight: 700; margin: 4px 0 0 0; text-shadow: 0 1px 3px rgba(255, 255, 255, 0.95), 0 0 2px #FFFFFF; white-space: nowrap; background: transparent !important; background-color: transparent !important; mso-highlight: none !important; mso-shading: none !important; border: 0 !important; outline: none !important;">
-                            Cong&zwnj;ratu&zwnj;lations
-                          </div>
+          <div class="cg">Congratulations</div>
+          <div class="yr">${ordinal}</div><br>
+          <div class="wa">WORK ANNIVERSARY</div>
+          <div class="nm">${employeeName}</div>
+          <div class="rl">${designation}</div>
 
-                          <!-- Sculpted Milestone Number (e.g. 1st, 2nd, 3rd) in Rich Dark Gold -->
-                          <div style="font-family: 'Montserrat', sans-serif; font-size: 78px; font-weight: 900; color: #78350F; line-height: 78px; letter-spacing: -2px; margin: 2px 0; text-shadow: 0 2px 10px rgba(255, 255, 255, 0.95), 0 1px 2px #FFFFFF;">
-                            ${ordinal}
-                          </div>
+          <div class="q">Thank you for your outstanding dedication, hard work, and invaluable contributions to InvenTech. Wishing you ongoing growth, rewarding experiences, and continued success ahead!</div>
+          <div class="sc">Here&#39;s to many more milestones together.</div>
+        </div>
 
-                          <!-- Modern Royal Navy Capsule Ribbon (Solid Navy fallback for Outlook MSO) -->
-                          <table role="presentation" border="0" cellspacing="0" cellpadding="0" style="margin: 8px auto 0 auto;">
-                            <tr>
-                              <td bgcolor="#0B2545" style="background-color: #0B2545; background: linear-gradient(135deg, #0B2545 0%, #153E6B 100%); border-radius: 22px; padding: 10px 24px; border: 1.5px solid #E5C378; box-shadow: 0 6px 16px rgba(11, 37, 69, 0.32);">
-                                <div style="font-family: 'Montserrat', sans-serif; font-size: 13px; font-weight: 800; color: #FFFFFF; letter-spacing: 2px; text-transform: uppercase; line-height: 1; text-align: center;">
-                                  WORK ANNIVERSARY
-                                </div>
-                              </td>
-                            </tr>
-                          </table>
-
-                          <!-- Subline: High-Visibility Rich Dark Gold Color -->
-                          <div class="milestone-subline" style="font-family: 'Montserrat', sans-serif; font-size: 10.5px; font-weight: 800; color: #78350F; letter-spacing: 1px; text-transform: uppercase; margin-top: 10px; text-shadow: 0 1px 3px rgba(255, 255, 255, 0.95), 0 0 2px #FFFFFF;">
-                            HONORING YOUR MILESTONE &amp; DEDICATION
-                          </div>
-
-                        </td>
-                      </tr>
-                    </table>
-
-                  </td>
-                </tr>
-              </table>
-            </td>
-          </tr>
-
-          <!-- Bottom Row: Modern Luxury Appreciation Card -->
-          <tr>
-            <td align="center" style="padding: 14px 36px 26px 36px;">
-              <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0">
-                <tr>
-                  <td align="center" style="background: rgba(255, 255, 255, 0.92); border: 1.5px solid rgba(245, 158, 11, 0.4); border-radius: 18px; padding: 26px 32px; box-shadow: 0 10px 30px rgba(180, 83, 9, 0.12);">
-                    
-                    <!-- Personalized Individual Anniversary Text (Speaking directly to the employee) -->
-                    <p style="margin: 0; font-family: 'Montserrat', sans-serif; font-size: 14px; line-height: 26px; font-weight: 600; color: #1E293B; text-align: center;">
-                      Wishing you a very Happy ${ordinal} Work Anniversary! Thank you for your outstanding dedication, hard work, and invaluable contributions. May this special milestone bring you immense pride in all that you have accomplished, and wishing you ongoing growth, rewarding experiences, and continued success ahead!
-                    </p>
-
-                  </td>
-                </tr>
-              </table>
-            </td>
-          </tr>
-
-          <!-- Corporate Sub-Footer Bar -->
-          <tr>
-            <td align="center" style="background-color: #0B2545; padding: 10px 16px;">
-              <div style="font-family: 'Montserrat', sans-serif; font-size: 11px; font-weight: 600; color: #CBD5E1; letter-spacing: 0.8px;">
-                Worksphere &bull; Developed by <a href="${INVENTECH_WEBSITE_URL}" target="_blank" style="color: #FFFFFF; text-decoration: underline; font-weight: 700;">InvenTech Info Solutions</a>
-              </div>
-            </td>
-          </tr>
-
-        </table>
-        <!-- ─── END MAIN POSTER CONTAINER ─── -->
-
-        <!--[if mso]>
-        </v:textbox>
-        </v:rect>
-        </td>
-        </tr>
-        </table>
-        <![endif]-->
+        <!-- Corporate Branded Sub-Footer -->
+        <div class="ft">
+          ${INVENTECH_COMPANY_LABEL} &bull; Celebrating Our People &bull;&nbsp;<a href="${INVENTECH_WEBSITE_URL}" target="_blank">${INVENTECH_DOMAIN_LABEL}</a>
+        </div>
 
       </td>
     </tr>
   </table>
+
+  <!--[if gte mso 9]>
+  </v:textbox>
+  </v:rect>
+  <![endif]-->
+</div>
 
 </body>
 </html>

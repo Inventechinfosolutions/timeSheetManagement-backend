@@ -8,4 +8,10 @@ export * from './employee-receipt.template';
 export * from './confirmation.template';
 export * from './batch-request-notification.template';
 
+export * from './work-anniversary-themes';
 export * from './work-anniversary.template';
+export * from '../utils/anniversary-theme-picker.util';
+export {
+  getWorkAnniversaryTemplateMjml,
+  buildWorkAnniversaryMjml,
+} from './work-anniversary-mjml.template';

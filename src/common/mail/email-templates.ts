@@ -1,27 +1,17 @@
-import * as fs from 'fs';
-import * as path from 'path';
 import { NotePermission } from '../../notes/enums/note-permission.enum';
+import {
+  INVENTECH_WORDMARK_PATH,
+  IN_LOGO_PATH,
+  loadAssetBase64,
+} from '../../assets';
 
-let inLogoBase64 = '';
-try {
-  const possiblePaths = [
-    path.join(__dirname, '../../../assets/in-logo.png'),
-    path.join(__dirname, '../../assets/in-logo.png'),
-    path.join(__dirname, '../assets/in-logo.png'),
-    path.join(process.cwd(), 'assets/in-logo.png'),
-    path.join(process.cwd(), 'src/assets/in-logo.png'),
-    'c:\\Timesheet\\timeSheetManagement-backend\\assets\\in-logo.png',
-  ];
-  for (const p of possiblePaths) {
-    if (fs.existsSync(p)) {
-      const buffer = fs.readFileSync(p);
-      inLogoBase64 = `data:image/png;base64,${buffer.toString('base64')}`;
-      break;
-    }
-  }
-} catch (err) {
-  // Ignore fallback
-}
+const loadedLogo = loadAssetBase64(INVENTECH_WORDMARK_PATH) || loadAssetBase64(IN_LOGO_PATH);
+const inLogoBase64 = loadedLogo ? `data:image/png;base64,${loadedLogo}` : '';
+
+export const INVENTECH_BRAND = {
+  name: 'INVENTECH',
+  subtitle: 'Info Solutions',
+} as const;
 
 export const IN_LOGO_SRC =
   inLogoBase64 ||
@@ -319,8 +309,8 @@ export const getNoteEmailTemplate = (
                      style="display:block;width:42px;height:42px;border-radius:6px;border:0;background-color:#ffffff;object-fit:contain;" />
               </td>
               <td style="vertical-align:middle;">
-                <span style="font-family:'Segoe UI',Arial,sans-serif;font-size:19px;font-weight:bold;color:#ffffff;letter-spacing:1px;line-height:1.2;display:block;">INVENTECH</span>
-                <span style="font-family:Arial,sans-serif;font-size:10px;color:#d0eaff;letter-spacing:1.2px;text-transform:uppercase;font-weight:600;display:block;">Info Solutions</span>
+                <span style="font-family:'Segoe UI',Arial,sans-serif;font-size:19px;font-weight:bold;color:#ffffff;letter-spacing:1px;line-height:1.2;display:block;">${INVENTECH_BRAND.name}</span>
+                <span style="font-family:Arial,sans-serif;font-size:10px;color:#d0eaff;letter-spacing:1.2px;text-transform:uppercase;font-weight:600;display:block;">${INVENTECH_BRAND.subtitle}</span>
               </td>
             </tr>
           </table>
