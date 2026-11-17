@@ -11,7 +11,6 @@ import { MasterDepartment } from '../master/models/master-department.entity';
 import { LockType } from '../master/enums/lock-type.enum';
 import { MasterHolidayService } from '../master/service/master-holiday.service';
 import { NotificationsService } from '../notifications/Services/notifications.service';
-import { BirthdayNotificationService } from '../notifications/Services/birthday-notification.service';
 import { UserStatus } from '../users/enums/user-status.enum';
 import { MonthStatus } from '../employeeTimeSheet/enums/month-status.enum';
 
@@ -34,7 +33,6 @@ export class AttendanceCronService {
 
     private readonly masterHolidayService: MasterHolidayService,
     private readonly notificationsService: NotificationsService,
-    private readonly birthdayNotificationService: BirthdayNotificationService,
   ) { }
 
   // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -566,26 +564,5 @@ export class AttendanceCronService {
   async weekendReminder() {
     this.logger.debug('Running Weekend Reminder...');
     await this.notificationsService.sendWeekendReminder();
-  }
-
-
-  /**
-   * Daily 10:00 AM IST (all 365 days) — Birthday Wishes
-   * Checks dateOfBirth in employee_details for all active employees.
-   * Sends email + in-app notification to employees whose birthday is today.
-   * Deduplication handled via notifications DB table (same pattern as work anniversary).
-   */
-  @Cron('0 10 * * *', { timeZone: 'Asia/Kolkata' })
-  async dailyBirthdayCheck() {
-    this.logger.log('[BIRTHDAY] Running daily birthday check (10:00 AM IST)...');
-    try {
-      const result = await this.birthdayNotificationService.sendDailyBirthdayWishes();
-      this.logger.log(
-        `[BIRTHDAY] Done: ${result.sent} sent, ${result.skipped} skipped out of ${result.processed} eligible.`,
-      );
-      return result;
-    } catch (error) {
-      this.logger.error(`[BIRTHDAY] Error in dailyBirthdayCheck: ${error.message}`, error.stack);
-    }
   }
 }

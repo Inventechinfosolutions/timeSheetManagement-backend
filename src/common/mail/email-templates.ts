@@ -5,12 +5,10 @@ import { NotePermission } from '../../notes/enums/note-permission.enum';
 let inLogoBase64 = '';
 try {
   const possiblePaths = [
-    path.join(__dirname, '../../../assets/in-logo.png'),
-    path.join(__dirname, '../../assets/in-logo.png'),
-    path.join(__dirname, '../assets/in-logo.png'),
-    path.join(process.cwd(), 'assets/in-logo.png'),
+    path.join(process.cwd(), 'src/assets/inventech-full-logo.png'),
+    path.join(__dirname, '../../assets/inventech-full-logo.png'),
     path.join(process.cwd(), 'src/assets/in-logo.png'),
-    'c:\\Timesheet\\timeSheetManagement-backend\\assets\\in-logo.png',
+    path.join(__dirname, '../../assets/in-logo.png'),
   ];
   for (const p of possiblePaths) {
     if (fs.existsSync(p)) {

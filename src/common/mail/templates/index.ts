@@ -7,5 +7,7 @@ export * from './general-notification.template';
 export * from './employee-receipt.template';
 export * from './confirmation.template';
 export * from './batch-request-notification.template';
-export * from './birthdayMail/birthday.template';
+export * from './festival/festival.template';
+export * from './birthday/birthday.template';
 export * from './colleague-birthday.template';
+export * from './template-picker.util';
