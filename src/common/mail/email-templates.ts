@@ -3,9 +3,13 @@ import {
   INVENTECH_WORDMARK_PATH,
   IN_LOGO_PATH,
   loadAssetBase64,
+  resolveAssetPath,
 } from '../../assets';
 
-const loadedLogo = loadAssetBase64(INVENTECH_WORDMARK_PATH) || loadAssetBase64(IN_LOGO_PATH);
+const loadedLogo =
+  loadAssetBase64(INVENTECH_WORDMARK_PATH) ||
+  loadAssetBase64(IN_LOGO_PATH) ||
+  loadAssetBase64(resolveAssetPath('inventech-full-logo.png'));
 const inLogoBase64 = loadedLogo ? `data:image/png;base64,${loadedLogo}` : '';
 
 export const INVENTECH_BRAND = {

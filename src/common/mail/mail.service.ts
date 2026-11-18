@@ -116,16 +116,16 @@ export class MailService {
       );
       if (!alreadyHasLogo) {
         const logoCandidates = [
-          path.join(process.cwd(), 'assets/in-logo.png'),
+          path.join(process.cwd(), 'src/assets/inventech-full-logo.png'),
+          path.join(__dirname, '../../assets/inventech-full-logo.png'),
+          path.join(__dirname, '../../../src/assets/inventech-full-logo.png'),
           path.join(process.cwd(), 'src/assets/in-logo.png'),
-          path.join(__dirname, '../../../assets/in-logo.png'),
           path.join(__dirname, '../../assets/in-logo.png'),
-          'c:\\Timesheet\\timeSheetManagement-backend\\assets\\in-logo.png',
         ];
         for (const lp of logoCandidates) {
           if (fs.existsSync(lp)) {
             finalAttachments.push({
-              filename: 'in-logo.png',
+              filename: 'inventech-logo.png',
               path: lp,
               cid: 'inventech-logo',
               contentType: 'image/png',

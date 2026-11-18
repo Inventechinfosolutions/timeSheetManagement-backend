@@ -5,18 +5,22 @@ import * as fs from 'fs';
  * Resolved paths for application and anniversary assets.
  * Evaluates dynamically to support both source (.ts) and compiled (.js in dist) execution.
  */
-export const ASSETS_ROOT_DIR = [
-  path.join(process.cwd(), 'src', 'assets'),
-  path.join(process.cwd(), 'assets'),
-  path.resolve(__dirname),
-].find((dir) => fs.existsSync(dir)) || path.join(process.cwd(), 'src', 'assets');
+export const ASSETS_ROOT_DIR =
+  [
+    path.join(process.cwd(), 'src', 'assets'),
+    path.join(process.cwd(), 'assets'),
+    path.resolve(__dirname),
+  ].find((dir) => fs.existsSync(dir)) ||
+  path.join(process.cwd(), 'src', 'assets');
 
-export const ANNIVERSARY_TEMPLATES_DIR = [
-  path.join(process.cwd(), 'src', 'assets', 'anniversary_templates'),
-  path.join(process.cwd(), 'assets', 'anniversary_templates'),
-  path.join(__dirname, 'anniversary_templates'),
-  path.join(ASSETS_ROOT_DIR, 'anniversary_templates'),
-].find((dir) => fs.existsSync(dir)) || path.join(process.cwd(), 'src', 'assets', 'anniversary_templates');
+export const ANNIVERSARY_TEMPLATES_DIR =
+  [
+    path.join(process.cwd(), 'src', 'assets', 'anniversary_templates'),
+    path.join(process.cwd(), 'assets', 'anniversary_templates'),
+    path.join(__dirname, 'anniversary_templates'),
+    path.join(ASSETS_ROOT_DIR, 'anniversary_templates'),
+  ].find((dir) => fs.existsSync(dir)) ||
+  path.join(process.cwd(), 'src', 'assets', 'anniversary_templates');
 
 /**
  * Resolves an asset path, checking the local `src/assets/` directory first,
@@ -25,7 +29,9 @@ export const ANNIVERSARY_TEMPLATES_DIR = [
 export function resolveAssetPath(filename: string, subfolder = ''): string {
   const candidates = [
     subfolder ? path.join(ANNIVERSARY_TEMPLATES_DIR, filename) : null,
-    subfolder ? path.join(process.cwd(), 'src', 'assets', subfolder, filename) : null,
+    subfolder
+      ? path.join(process.cwd(), 'src', 'assets', subfolder, filename)
+      : null,
     subfolder ? path.join(process.cwd(), 'assets', subfolder, filename) : null,
     subfolder ? path.join(ASSETS_ROOT_DIR, subfolder, filename) : null,
     subfolder ? path.join(__dirname, subfolder, filename) : null,
@@ -41,13 +47,17 @@ export function resolveAssetPath(filename: string, subfolder = ''): string {
     }
   }
 
-  // Fallback to primary candidate path if file not found yet
-  return subfolder ? path.join(ANNIVERSARY_TEMPLATES_DIR, filename) : path.join(ASSETS_ROOT_DIR, filename);
+  return subfolder
+    ? path.join(ANNIVERSARY_TEMPLATES_DIR, filename)
+    : path.join(ASSETS_ROOT_DIR, filename);
 }
 
 // ── Company Branding Logo Assets ──────────────────────────────────────────────
 export const IN_LOGO_PATH = resolveAssetPath('in-logo.png');
-export const INVENTECH_WORDMARK_PATH = resolveAssetPath('inventech-wordmark.png', 'anniversary_templates');
+export const INVENTECH_WORDMARK_PATH = resolveAssetPath(
+  'inventech-wordmark.png',
+  'anniversary_templates',
+);
 export const INVENTECH_LOGO_PATH = INVENTECH_WORDMARK_PATH || IN_LOGO_PATH;
 export const WORKSPHERE_LOGO_PATH = resolveAssetPath('worksphere-logo.png');
 
@@ -121,3 +131,5 @@ export function loadAssetBase64(filePath: string): string | null {
   return buffer ? buffer.toString('base64') : null;
 }
 
+// Birthday / festival CDN template registry (UAT)
+export * from './templates';
