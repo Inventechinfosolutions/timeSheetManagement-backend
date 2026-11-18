@@ -7,9 +7,9 @@ import { WorkAnniversaryService } from '../Services/work-anniversary.service';
 /**
  * Dedicated Celebration Cron Service
  * Handles scheduled daily automated checks for:
- * 1. Birthday wishes & colleague announcements (10:00 AM IST)
- * 2. Work anniversary wishes (10:00 AM IST)
- * 3. Festival celebration wishes (10:00 AM IST)
+ * 1. Birthday wishes & colleague announcements (owned by email/birthday branch schedule)
+ * 2. Work anniversary wishes (10:00 AM IST) — single schedule (not in attendance cron)
+ * 3. Festival celebration wishes (owned by email/birthday branch schedule)
  *
  * Keeps celebration cron logic completely separated from attendance cron jobs.
  */
@@ -45,7 +45,7 @@ export class CelebrationCronService {
   }
 
   /**
-   * Daily 10:00 AM IST — Work Anniversary Wishes
+   * Daily 10:00 AM IST — Work Anniversary Wishes (sole cron; attendance cron duplicate removed)
    */
   @Cron('0 10 * * *', { timeZone: 'Asia/Kolkata' })
   async dailyWorkAnniversaryCheck() {
