@@ -7,9 +7,9 @@ import { WorkAnniversaryService } from '../Services/work-anniversary.service';
 /**
  * Dedicated Celebration Cron Service
  * Handles scheduled daily automated checks for:
- * 1. Birthday wishes & colleague announcements (owned by email/birthday branch schedule)
- * 2. Work anniversary wishes (10:00 AM IST) — single schedule (not in attendance cron)
- * 3. Festival celebration wishes (owned by email/birthday branch schedule)
+ * 1. Birthday wishes & colleague announcements (10:15 AM IST)
+ * 2. Work anniversary wishes (10:00 AM IST) — schedule owned by anniversary branch
+ * 3. Festival celebration wishes (10:30 AM IST)
  *
  * Keeps celebration cron logic completely separated from attendance cron jobs.
  */
@@ -24,11 +24,11 @@ export class CelebrationCronService {
   ) {}
 
   /**
-   * Daily 10:00 AM IST — Birthday Wishes & Colleague Announcement
+   * Daily 10:15 AM IST — Birthday Wishes & Colleague Announcement
    */
-  @Cron('0 10 * * *', { timeZone: 'Asia/Kolkata' })
+  @Cron('15 10 * * *', { timeZone: 'Asia/Kolkata' })
   async dailyBirthdayCheck() {
-    this.logger.log('[BIRTHDAY] Running daily birthday check (10:00 AM IST)...');
+    this.logger.log('[BIRTHDAY] Running daily birthday check (10:15 AM IST)...');
     try {
       const result =
         await this.birthdayNotificationService.sendDailyBirthdayWishes();
@@ -45,7 +45,8 @@ export class CelebrationCronService {
   }
 
   /**
-   * Daily 10:00 AM IST — Work Anniversary Wishes (sole cron; attendance cron duplicate removed)
+   * Daily 10:00 AM IST — Work Anniversary Wishes
+   * (Left unchanged on this branch; anniversary schedule/dedupe fixed on anniversary branch.)
    */
   @Cron('0 10 * * *', { timeZone: 'Asia/Kolkata' })
   async dailyWorkAnniversaryCheck() {
@@ -68,12 +69,12 @@ export class CelebrationCronService {
   }
 
   /**
-   * Daily 10:00 AM IST — Festival Celebration Wishes
+   * Daily 10:30 AM IST — Festival Celebration Wishes
    */
-  @Cron('0 10 * * *', { timeZone: 'Asia/Kolkata' })
+  @Cron('30 10 * * *', { timeZone: 'Asia/Kolkata' })
   async dailyFestivalCheck() {
     this.logger.log(
-      '[FESTIVAL] Running daily festival check (10:00 AM IST)...',
+      '[FESTIVAL] Running daily festival check (10:30 AM IST)...',
     );
     try {
       const result =

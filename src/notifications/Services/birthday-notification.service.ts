@@ -507,7 +507,7 @@ export class BirthdayNotificationService {
 
         const colleagueAttachments = getColleagueMailAttachments(colleagueTemplate.id);
 
-        // 6. Queue email asynchronously
+        // Same queue path as anniversary / festival
         await this.mailService.sendMailAsync(
           colleague.email,
           subject,
@@ -515,7 +515,9 @@ export class BirthdayNotificationService {
           html,
           undefined,
           undefined,
-          colleagueAttachments && colleagueAttachments.length > 0 ? (colleagueAttachments as any) : undefined,
+          colleagueAttachments && colleagueAttachments.length > 0
+            ? (colleagueAttachments as any)
+            : undefined,
         );
         sentCount++;
       } catch (err) {
