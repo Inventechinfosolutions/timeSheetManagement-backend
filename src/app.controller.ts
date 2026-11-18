@@ -1,6 +1,7 @@
 import { Controller, Get, Post, Logger } from '@nestjs/common';
 import { AppService } from './app.service';
 import { AttendanceCronService } from './cron/attendance.cron.service';
+import { AppraisalDeadlineCronService } from './appraisal/services/appraisal_deadline.cron';
 
 @Controller()
 export class AppController {
@@ -9,6 +10,7 @@ export class AppController {
   constructor(
     private readonly appService: AppService,
     private readonly attendanceCronService: AttendanceCronService,
+    private readonly appraisalDeadlineCronService: AppraisalDeadlineCronService,
   ) {}
 
   @Get()
@@ -43,5 +45,12 @@ export class AppController {
   async runMonthlyLock() {
     this.logger.log('Manually running monthly lock cron');
     return this.attendanceCronService.handleMonthlyLeaveUpdate();
+  }
+
+  @Post('cron/appraisal-deadline')
+  async runAppraisalDeadline() {
+    this.logger.log('Manually running appraisal deadline cron');
+    const result = await this.appraisalDeadlineCronService.remindOrCloseOpenReviews();
+    return { message: 'Appraisal deadline cron completed', ...result };
   }
 }

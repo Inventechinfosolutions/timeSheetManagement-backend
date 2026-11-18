@@ -1,0 +1,149 @@
+import { QuaterlyEnum } from '../../master/enums/quaterly.enums';
+
+export enum ReviewEmployeeType {
+  EMPLOYEE = 'EMPLOYEE',
+  INTERN = 'INTERN',
+  MANAGER = 'MANAGER',
+}
+
+export enum ReviewAssignedBy {
+  MANAGER = 'MANAGER',
+  EMPLOYEE = 'EMPLOYEE',
+  INTERN = 'INTERN',
+  ADMIN = 'ADMIN',
+}
+
+export enum QuarterlyReviewStatus {
+  NOT_STARTED = 'NOT_STARTED',
+  DRAFT = 'DRAFT',
+  PENDING = 'PENDING',
+  IN_PROGRESS = 'IN_PROGRESS',
+  EVALUATION_IN_PROGRESS = 'EVALUATION_IN_PROGRESS',
+  /** Employee-assigner finished evaluation; waiting for manager final comment. */
+  AWAITING_MANAGER_FINAL_REVIEW = 'AWAITING_MANAGER_FINAL_REVIEW',
+  SUBMITTED = 'SUBMITTED',
+  UNDER_REVIEW = 'UNDER_REVIEW',
+  REVIEWED = 'REVIEWED',
+  COMPLETED = 'COMPLETED',
+  REJECTED = 'REJECTED',
+  APPROVED = 'APPROVED',
+  EDIT_GRANTED = 'EDIT_GRANTED',
+  ASSIGNED = 'ASSIGNED',
+  /** Reopened after deadline miss / unlock — employee can submit again. */
+  REASSIGNED = 'REASSIGNED',
+  PERFORMANCE_RECEIVED = 'PERFORMANCE_RECEIVED',
+  REQUESTED_FOR_EDIT = 'REQUESTED_FOR_EDIT',
+  APPROVED_FOR_EDITING = 'APPROVED_FOR_EDITING',
+  RE_SUBMITTED = 'RE_SUBMITTED',
+  NOT_UPDATED = 'NOT_UPDATED',
+  LOCKED = 'LOCKED',
+  ALLOWED_TO_EDIT = 'ALLOWED_TO_EDIT',
+}
+export const QuaterlyReviewStatus = QuarterlyReviewStatus;
+export type QuaterlyReviewStatus = QuarterlyReviewStatus;
+
+export { QuaterlyEnum, QuarterlyEnum } from '../../master/enums/quaterly.enums';
+
+export enum ReviewPeriod {
+  QUARTERLY = 'QUARTERLY',
+  YEARLY = 'YEARLY',
+}
+
+export const YEARLY_QUARTERS = [
+  QuaterlyEnum.Q1,
+  QuaterlyEnum.Q2,
+  QuaterlyEnum.Q3,
+  QuaterlyEnum.Q4,
+] as const;
+
+export enum PerformanceStrengthsEnum {
+  TECHNICAL_EXCELLENCE = 'TECHNICAL_EXCELLENCE',
+  CONSISTENT_DELIVERY = 'CONSISTENT_DELIVERY',
+  LEADERSHIP_INITIATIVE = 'LEADERSHIP_INITIATIVE',
+  STRONG_COMMUNICATION = 'STRONG_COMMUNICATION',
+  PROBLEM_SOLVING = 'PROBLEM_SOLVING',
+  TEAM_PLAYER = 'TEAM_PLAYER',
+  FAST_LEARNER = 'FAST_LEARNER',
+  EXCEPTIONAL = 'EXCEPTIONAL',
+  GOOD = 'GOOD',
+}
+
+export enum AreasOfImprovementEnum {
+  TIME_MANAGEMENT = 'TIME_MANAGEMENT',
+  TECHNICAL_SKILLS = 'TECHNICAL_SKILLS',
+  COMMUNICATION = 'COMMUNICATION',
+  ATTENTION_TO_DETAIL = 'ATTENTION_TO_DETAIL',
+  OWNERSHIP = 'OWNERSHIP',
+  DOCUMENTATION = 'DOCUMENTATION',
+  NEEDS_IMPROVEMENT = 'NEEDS_IMPROVEMENT',
+  NONE = 'NONE',
+}
+
+export enum AdditionalRemarksEnum {
+  EXCEEDS_EXPECTATIONS = 'EXCEEDS_EXPECTATIONS',
+  MEETS_EXPECTATIONS = 'MEETS_EXPECTATIONS',
+  NEEDS_IMPROVEMENT = 'NEEDS_IMPROVEMENT',
+  OUTSTANDING_PERFORMANCE = 'OUTSTANDING_PERFORMANCE',
+  SATISFACTORY = 'SATISFACTORY',
+  UNSATISFACTORY = 'UNSATISFACTORY',
+}
+
+export enum RatingVisibilityStatus {
+  RATED = 'RATED',
+  PENDING_REVIEW = 'PENDING_REVIEW',
+}
+
+export enum AppraisalNoticeType {
+  QUARTER_ASSIGNED = 'APPRAISAL_QUARTER_ASSIGNED',
+  QUARTER_REASSIGNED = 'APPRAISAL_QUARTER_REASSIGNED',
+  SUBMISSION_CONFIRMED = 'APPRAISAL_SUBMISSION_CONFIRMED',
+  SUBMISSION_RECEIVED = 'APPRAISAL_SUBMISSION_RECEIVED',
+  ASSIGNER_EVALUATION_SUBMITTED = 'APPRAISAL_ASSIGNER_EVALUATION_SUBMITTED',
+  EDIT_REQUESTED = 'APPRAISAL_EDIT_REQUESTED',
+  EDIT_REQUEST_SENT = 'APPRAISAL_EDIT_REQUEST_SENT',
+  EDIT_GRANTED = 'APPRAISAL_EDIT_GRANTED',
+  EDIT_REJECTED = 'APPRAISAL_EDIT_REJECTED',
+  REVIEW_COMPLETED = 'APPRAISAL_REVIEW_COMPLETED',
+  DEADLINE_REMINDER = 'APPRAISAL_DEADLINE_REMINDER',
+  ONE_DAY_DEADLINE_REMINDER = 'APPRAISAL_ONE_DAY_DEADLINE_REMINDER',
+}
+
+export enum RatingScaleEnum {
+  UNSATISFACTORY = 1,
+  NEEDS_IMPROVEMENT = 2,
+  MEETS_EXPECTATIONS = 3,
+  EXCEEDS_EXPECTATIONS = 4,
+  OUTSTANDING = 5,
+}
+
+export const RATING_DESCRIPTIONS: Record<number, string> = {
+  1: 'Needs Improvement',
+  2: 'Developing',
+  3: 'Meets Expectations',
+  4: 'Exceeds Expectations',
+  5: 'Outstanding',
+};
+
+export enum CareerGrowthRecommendationEnum {
+  NO_IMMEDIATE_RECOMMENDATION = 'No Immediate Recommendation',
+  ROLE_GROWTH_CONSIDERATION = 'Role Growth Consideration',
+  TECHNICAL_SKILL_DEVELOPMENT = 'Technical Skill Development',
+  LEADERSHIP_DEVELOPMENT = 'Leadership Development',
+  READY_FOR_ADDITIONAL_RESPONSIBILITIES = 'Ready for Additional Responsibilities',
+}
+
+export enum ReviewOutcomeEnum {
+  NEEDS_IMPROVEMENT = 'Needs Improvement',
+  DEVELOPING = 'Developing',
+  MEETS_EXPECTATIONS = 'Meets Expectations',
+  EXCEEDS_EXPECTATIONS = 'Exceeds Expectations',
+  OUTSTANDING = 'Outstanding',
+}
+
+export enum PerformanceActionEnum {
+  NO_ACTION_REQUIRED = 'No Action Required',
+  CONTINUE_CURRENT_DEVELOPMENT = 'Continue Current Development',
+  ADDITIONAL_TRAINING_REQUIRED = 'Additional Training Required',
+  PERFORMANCE_MONITORING_REQUIRED = 'Performance Monitoring Required',
+  PERFORMANCE_IMPROVEMENT_PLAN_RECOMMENDED = 'Performance Improvement Plan Recommended',
+}
