@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import dayjs from 'dayjs';
 import { EmployeeDetails } from '../../employeeTimeSheet/entities/employeeDetails.entity';
 import { Notification } from '../entities/notification.entity';
 import { MailService } from '../../common/mail/mail.service';
@@ -20,8 +21,8 @@ export class NotificationsService {
     private readonly notificationRepo: Repository<Notification>,
     @InjectRepository(ManagerMapping)
     private readonly managerMappingRepo: Repository<ManagerMapping>,
-    private readonly mailService: MailService,
-  ) { }
+    private readonly mailService: MailService
+  ) {}
 
   async sendWeeklyReminder(): Promise<number> {
     this.logger.log('Starting Weekly Attendance Reminder broadcast...');
@@ -364,4 +365,3 @@ export class NotificationsService {
     }
   }
 }
-

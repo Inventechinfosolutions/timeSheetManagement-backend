@@ -62,6 +62,8 @@ export class AttendanceNotificationController {
     }
   }
 
+  // ─── Notification Inbox Endpoints ───────────────────────────────────────────
+
   @Get(':employeeId/inbox')
   @ApiOperation({ summary: 'Get unread notifications for an employee' })
   async getNotifications(@Param('employeeId') employeeId: string) {

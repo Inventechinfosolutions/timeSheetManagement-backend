@@ -1,7 +1,9 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { NotificationsService } from './Services/notifications.service';
+import { WorkAnniversaryService } from './Services/work-anniversary.service';
 import { AttendanceNotificationController } from './Controllers/attendance-notification.controller';
+import { WorkAnniversaryController } from './Controllers/work-anniversary.controller';
 import { BirthdayNotificationController } from './Controllers/birthday-notification.controller';
 import { FestivalNotificationController } from './Controllers/festival-notification.controller';
 import { BirthdayNotificationService } from './Services/birthday-notification.service';
@@ -29,17 +31,20 @@ import { MasterHolidays } from '../master/models/master-holidays.entity';
   ],
   controllers: [
     AttendanceNotificationController,
+    WorkAnniversaryController,
     BirthdayNotificationController,
     FestivalNotificationController,
   ],
   providers: [
     NotificationsService,
+    WorkAnniversaryService,
     BirthdayNotificationService,
     FestivalNotificationService,
     CelebrationCronService,
   ],
   exports: [
     NotificationsService,
+    WorkAnniversaryService,
     BirthdayNotificationService,
     FestivalNotificationService,
     CelebrationCronService,
