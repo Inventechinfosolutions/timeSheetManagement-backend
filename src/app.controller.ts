@@ -2,6 +2,7 @@ import { Controller, Get, Post, Logger } from '@nestjs/common';
 import { AppService } from './app.service';
 import { AttendanceCronService } from './cron/attendance.cron.service';
 import { AppraisalDeadlineCronService } from './appraisal/services/appraisal_deadline.cron';
+import { CelebrationCronService } from './notifications/cron/celebration.cron.service';
 
 @Controller()
 export class AppController {
@@ -11,6 +12,7 @@ export class AppController {
     private readonly appService: AppService,
     private readonly attendanceCronService: AttendanceCronService,
     private readonly appraisalDeadlineCronService: AppraisalDeadlineCronService,
+    private readonly celebrationCronService: CelebrationCronService,
   ) {}
 
   @Get()
@@ -57,7 +59,7 @@ export class AppController {
   @Post('cron/work-anniversary')
   async runWorkAnniversary() {
     this.logger.log('Manually running work anniversary cron');
-    const result = await this.attendanceCronService.dailyWorkAnniversaryCheck();
+    const result = await this.celebrationCronService.dailyWorkAnniversaryCheck();
     return { message: 'Work anniversary check cron completed', result };
   }
 }

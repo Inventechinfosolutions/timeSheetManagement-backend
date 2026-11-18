@@ -1,6 +1,5 @@
 import * as sharp from 'sharp';
 import * as GifEncoder from 'gif-encoder-2';
-import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import {
@@ -24,7 +23,7 @@ export interface AnniversaryGifParams {
   years: number;
   /** Employee job title / designation (dynamic) */
   designation?: string | null;
-  /** Employee ID (used for cache key) */
+  /** Employee ID (optional metadata for callers) */
   employeeId?: string;
   /** Path to the source anniversary-bg.gif asset (kept for caller compatibility) */
   gifSourcePath: string;
@@ -32,7 +31,7 @@ export interface AnniversaryGifParams {
   photoBuffer?: Buffer;
   /** Optional custom path to company logo */
   logoPath?: string;
-  /** Bypass disk/memory cache if true */
+  /** Kept for caller compatibility (no cache — always rebuilds like birthday) */
   force?: boolean;
 }
 
@@ -41,6 +40,7 @@ export interface AnniversaryGifParams {
  */
 export interface AnniversaryGifResult {
   buffer: Buffer;
+  /** Empty when built in-memory (no disk cache; same approach as birthday attachments) */
   filePath: string;
   base64: string;
 }
@@ -54,15 +54,7 @@ const getGifEncoder = (GifEncoder as any).default || GifEncoder;
  */
 const GIF_WIDTH = 760;
 const GIF_HEIGHT = 456;
-const CACHE_DIR = path.join(process.cwd(), 'assets', 'anniversary_cache');
-const CACHE_MIN_BYTES = 40000;
-const CACHE_VERSION = 'v32';
 const DEFAULT_DESIGNATION = 'Team Member';
-
-/**
- * In-memory buffer cache: key = `${safeEmpKey}_${safeYears}_${templateVariant}_${contentSig}_${CACHE_VERSION}`
- */
-const memoryCache = new Map<string, AnniversaryGifResult>();
 
 /**
  * Smooth periodic 2D drift helper shared across animated background templates.
@@ -4495,13 +4487,13 @@ const resolveTemplateIndexFromPath = (gifSourcePath?: string): number => {
 };
 
 /**
- * Generates or retrieves from cache the combined animated GIF banner.
+ * Builds a fresh combined animated GIF banner every call (no cache).
  * Uses the animated background template at `gifSourcePath` when available
  * (or renders the matching luxury animated backdrop directly), then composites
  * the dynamic Worksphere logo, circular gold-framed profile portrait, and dynamic milestone text.
  *
  * @param params - dynamic parameters for the employee
- * @returns AnniversaryGifResult containing buffer, filePath, and base64 string
+ * @returns AnniversaryGifResult with in-memory buffer + base64 (filePath empty)
  */
 export async function generateAnniversaryBannerGif(
   params: AnniversaryGifParams,
@@ -4510,63 +4502,20 @@ export async function generateAnniversaryBannerGif(
     name,
     years,
     designation,
-    employeeId,
     gifSourcePath,
     photoBuffer,
     logoPath,
-    force = false,
   } = params;
 
+  // Always rebuild (no memory/disk cache) — same fresh-build approach as birthday mail
   const safeYears = Math.max(1, years || 1);
   const resolvedTemplateIndex = resolveTemplateIndexFromPath(gifSourcePath);
   const resolvedSourcePath = (gifSourcePath && fs.existsSync(gifSourcePath))
     ? gifSourcePath
     : getAnniversaryTemplatePath(resolvedTemplateIndex);
-  const bgFileBase = resolvedSourcePath
-    ? path.basename(resolvedSourcePath, path.extname(resolvedSourcePath)).replace(/[^a-zA-Z0-9_-]/g, '_').toLowerCase()
-    : `anniversary_bg${resolvedTemplateIndex > 1 ? resolvedTemplateIndex : ''}`;
   const templateSynth = TEMPLATE_SYNTHESIS_MAP[resolvedTemplateIndex] || TEMPLATE_SYNTHESIS_MAP[1];
-  const safeEmpKey = (employeeId || name || 'emp')
-    .replace(/[^a-zA-Z0-9_-]/g, '_')
-    .toLowerCase();
   const hasPhoto = !!(photoBuffer && photoBuffer.length > 0);
   const resolvedDesignation = designation || DEFAULT_DESIGNATION;
-  const contentHash = crypto.createHash('sha256');
-  contentHash.update(`${name}\0${resolvedDesignation}\0${logoPath || ''}\0`);
-  if (hasPhoto && photoBuffer) {
-    contentHash.update(photoBuffer);
-  }
-  const contentSig = contentHash.digest('hex').slice(0, 10);
-  const templateVariant = `${bgFileBase}_${hasPhoto ? 'circle_gold' : 'text'}`;
-  const cacheKey = `${safeEmpKey}_${safeYears}_${templateVariant}_${contentSig}_${CACHE_VERSION}`;
-
-  // 1. Check in-memory cache
-  if (!force && memoryCache.has(cacheKey)) {
-    return memoryCache.get(cacheKey)!;
-  }
-
-  // 2. Check disk cache
-  if (!fs.existsSync(CACHE_DIR)) {
-    fs.mkdirSync(CACHE_DIR, { recursive: true });
-  }
-  const cachedFilePath = path.join(CACHE_DIR, `banner_${cacheKey}.gif`);
-
-  if (!force && fs.existsSync(cachedFilePath)) {
-    try {
-      const buffer = fs.readFileSync(cachedFilePath);
-      if (buffer.length > CACHE_MIN_BYTES) {
-        const result: AnniversaryGifResult = {
-          buffer,
-          filePath: cachedFilePath,
-          base64: buffer.toString('base64'),
-        };
-        memoryCache.set(cacheKey, result);
-        return result;
-      }
-    } catch {
-      // If corrupted, re-generate below
-    }
-  }
 
   // Inspect source animated GIF dimensions & frame timing from template on disk
   const hasSourceBg = Boolean(resolvedSourcePath && fs.existsSync(resolvedSourcePath));
@@ -4716,19 +4665,9 @@ export async function generateAnniversaryBannerGif(
   encoder.finish();
   const buffer: Buffer = (encoder as any).out.getData();
 
-  // 7. Save to disk cache
-  try {
-    fs.writeFileSync(cachedFilePath, buffer);
-  } catch {
-    // Non-fatal if disk write fails
-  }
-
-  const result: AnniversaryGifResult = {
+  return {
     buffer,
-    filePath: cachedFilePath,
+    filePath: '',
     base64: buffer.toString('base64'),
   };
-
-  memoryCache.set(cacheKey, result);
-  return result;
 }
