@@ -21,4 +21,5 @@ export {
 export * from './festival/festival.template';
 export * from './birthday/birthday.template';
 export * from './colleague-birthday.template';
-export * from './template-picker.util';
+// Avoid clash with anniversary-theme-picker (also exports shuffleArray / ShuffledTemplatePicker)
+export { SequentialTemplatePicker } from './template-picker.util';
