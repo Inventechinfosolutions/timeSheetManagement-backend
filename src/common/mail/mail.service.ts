@@ -86,22 +86,46 @@ export class MailService {
       'noreply@timesheet.com';
 
     const finalAttachments: any[] = attachments ? [...attachments] : [];
+    if (html && (html.includes('cid:worksphere-logo') || html.includes('cid:ws-logo'))) {
+      const alreadyHasWsLogo = finalAttachments.some(
+        (a) => a.cid === 'worksphere-logo' || a.cid === 'ws-logo',
+      );
+      if (!alreadyHasWsLogo) {
+        const wsLogoCandidates = [
+          path.join(process.cwd(), 'assets/worksphere-logo.png'),
+          path.join(process.cwd(), 'src/assets/worksphere-logo.png'),
+          path.join(__dirname, '../../../assets/worksphere-logo.png'),
+          path.join(__dirname, '../../assets/worksphere-logo.png'),
+        ];
+        for (const lp of wsLogoCandidates) {
+          if (fs.existsSync(lp)) {
+            finalAttachments.push({
+              filename: 'worksphere-logo.png',
+              path: lp,
+              cid: 'worksphere-logo',
+              contentType: 'image/png',
+            });
+            break;
+          }
+        }
+      }
+    }
     if (html && (html.includes('cid:inventech-logo') || html.includes('cid:in-logo'))) {
       const alreadyHasLogo = finalAttachments.some(
         (a) => a.cid === 'inventech-logo' || a.cid === 'in-logo',
       );
       if (!alreadyHasLogo) {
         const logoCandidates = [
-          path.join(process.cwd(), 'assets/in-logo.png'),
+          path.join(process.cwd(), 'src/assets/inventech-full-logo.png'),
+          path.join(__dirname, '../../assets/inventech-full-logo.png'),
+          path.join(__dirname, '../../../src/assets/inventech-full-logo.png'),
           path.join(process.cwd(), 'src/assets/in-logo.png'),
-          path.join(__dirname, '../../../assets/in-logo.png'),
           path.join(__dirname, '../../assets/in-logo.png'),
-          'c:\\Timesheet\\timeSheetManagement-backend\\assets\\in-logo.png',
         ];
         for (const lp of logoCandidates) {
           if (fs.existsSync(lp)) {
             finalAttachments.push({
-              filename: 'in-logo.png',
+              filename: 'inventech-logo.png',
               path: lp,
               cid: 'inventech-logo',
               contentType: 'image/png',

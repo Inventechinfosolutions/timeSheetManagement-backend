@@ -14,6 +14,15 @@ export class MailProcessor {
     this.logger.debug(`Processing email job ${job.id}...`);
     const { to, subject, text, html, cc, replyTo, attachments } = job.data;
     
+    // Restore serialized Buffer objects from Bull queue Redis payload
+    if (Array.isArray(attachments)) {
+      for (const att of attachments) {
+        if (att && att.content && att.content.type === 'Buffer' && Array.isArray(att.content.data)) {
+          att.content = Buffer.from(att.content.data);
+        }
+      }
+    }
+    
     try {
       await this.mailService.sendMail(to, subject, text, html, cc, replyTo, attachments);
       this.logger.debug(`Email job ${job.id} completed.`);
