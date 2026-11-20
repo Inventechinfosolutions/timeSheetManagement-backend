@@ -28,6 +28,7 @@ import { Note } from './notes/entities/note.entity';
 import { NoteRecipient } from './notes/entities/note-recipient.entity';
 import { InboxModule } from './inbox/inbox.module';
 import { Inbox } from './inbox/entities/inbox.entity';
+import { MeetingRoomModule } from './meetingRoom/meeting-room.module';
 import { CacheModule } from '@nestjs/cache-manager';
 import { BullModule } from '@nestjs/bull';
 import * as redisStore from 'cache-manager-redis-store';
@@ -43,10 +44,12 @@ function getEnvFiles(): string[] {
       const baseEnv = fs.readFileSync(baseEnvPath, 'utf8');
       const profileMatch = baseEnv.match(/^PROFILE=(.+)$/m);
       process.env.PROFILE = profileMatch?.[1]?.trim();
+    } else if (fs.existsSync(path.resolve(process.cwd(), '.env.local'))) {
+      process.env.PROFILE = 'local';
     }
   }
  
-  const profile = process.env.PROFILE;
+  const profile = process.env.PROFILE || 'local';
   const envFiles = [`.env.${profile}`, '.env'];
   console.log(`[Config] Using PROFILE="${profile}" -> env files: ${envFiles.join(', ')}`);
   return envFiles;
@@ -88,6 +91,7 @@ function getEnvFiles(): string[] {
     NotificationsModule,
     NotesModule,
     InboxModule,
+    MeetingRoomModule,
     BullModule.forRootAsync({
       imports: [ConfigModule],
       useFactory: (configService: ConfigService) => ({
