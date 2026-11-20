@@ -535,3 +535,199 @@ export const getNotificationEmailTemplate = (
 </body>
 </html>`;
 };
+
+export interface MeetingEmailPayload {
+  recipientName: string;
+  organizerName: string;
+  organizerDepartment?: string | null;
+  roomNumber: string;
+  floorNumber: string;
+  dimensionSqFt: number;
+  bookingDate: string; // Formatted human-readable date, e.g. "Friday, Nov 20, 2026"
+  timeRange: string;   // e.g. "03:00 PM - 04:00 PM"
+  title?: string | null;
+  attendeeNames?: string[];
+  portalUrl?: string;
+}
+
+const escapeEmailHtml = (val: string | number | null | undefined): string =>
+  String(val ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+
+const renderMeetingEmailBase = (
+  headerBadge: string,
+  accentHex: string,
+  badgeBgHex: string,
+  badgeTextHex: string,
+  statusPillText: string,
+  greetingHtml: string,
+  payload: MeetingEmailPayload,
+): string => {
+  const year = new Date().getFullYear();
+  const portalUrl = payload.portalUrl || 'https://worksphere.inventech-developer.in';
+  const attendeesLine =
+    payload.attendeeNames && payload.attendeeNames.length > 0
+      ? payload.attendeeNames.map((n) => escapeEmailHtml(n)).join(', ')
+      : 'No additional members listed';
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>${escapeEmailHtml(headerBadge)}</title>
+</head>
+<body style="margin:0;padding:0;width:100%;background-color:#f4f7fe;font-family:Arial,sans-serif;">
+<table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#f4f7fe;padding:24px 0;">
+<tr>
+<td align="center">
+<table width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:680px;margin:0 auto;background-color:#ffffff;border-radius:14px;overflow:hidden;border:1px solid #e2e8f0;">
+  <tr>
+    <td style="background:linear-gradient(135deg, #0a8fe7 0%, #1e46a1 100%);background-color:#0a8fe7;padding:20px 32px;">
+      <table width="100%" cellpadding="0" cellspacing="0" border="0">
+        <tr>
+          <td align="left" style="vertical-align:middle;">
+            <table cellpadding="0" cellspacing="0" border="0">
+              <tr>
+                <td style="vertical-align:middle;padding-right:12px;">
+                  <img src="cid:inventech-logo" alt="InvenTech Logo" width="40" height="40" style="display:block;width:40px;height:40px;border-radius:6px;background-color:#ffffff;object-fit:contain;" />
+                </td>
+                <td style="vertical-align:middle;">
+                  <span style="font-size:17px;font-weight:bold;color:#ffffff;letter-spacing:0.8px;display:block;">INVENTECH</span>
+                  <span style="font-size:10px;color:#d0eaff;letter-spacing:1px;text-transform:uppercase;font-weight:600;display:block;">Info Solutions</span>
+                </td>
+              </tr>
+            </table>
+          </td>
+          <td align="right" style="vertical-align:middle;">
+            <span style="font-family:Georgia,serif;font-size:21px;font-weight:bold;color:#ffffff;display:block;">WORKSPHERE</span>
+            <span style="font-size:10px;color:#cce9ff;letter-spacing:1px;text-transform:uppercase;font-weight:600;display:block;margin-top:2px;">${escapeEmailHtml(headerBadge)}</span>
+          </td>
+        </tr>
+      </table>
+    </td>
+  </tr>
+
+  <tr>
+    <td style="padding:32px;">
+      <div style="margin-bottom:16px;">
+        <span style="display:inline-block;padding:5px 12px;border-radius:999px;background-color:${badgeBgHex};color:${badgeTextHex};font-size:11px;font-weight:bold;letter-spacing:0.6px;text-transform:uppercase;">
+          ${escapeEmailHtml(statusPillText)}
+        </span>
+      </div>
+
+      <p style="margin:0 0 12px 0;font-size:15px;color:#1e293b;font-weight:bold;">
+        Hello ${escapeEmailHtml(payload.recipientName)},
+      </p>
+      <p style="margin:0 0 22px 0;font-size:14px;line-height:1.7;color:#475569;">
+        ${greetingHtml}
+      </p>
+
+      <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#f8fafc;border:1px solid #e2e8f0;border-left:4px solid ${accentHex};border-radius:10px;margin-bottom:24px;">
+        <tr>
+          <td style="padding:18px 22px;">
+            ${
+              payload.title
+                ? `<div style="font-size:16px;font-weight:bold;color:#1b2559;margin-bottom:12px;">${escapeEmailHtml(payload.title)}</div>`
+                : ''
+            }
+            <table width="100%" cellpadding="0" cellspacing="0" border="0" style="font-size:13.5px;color:#334155;">
+              <tr>
+                <td style="padding:5px 0;width:150px;color:#64748b;font-weight:600;">Meeting Room:</td>
+                <td style="padding:5px 0;font-weight:bold;color:#1e293b;">Room ${escapeEmailHtml(payload.roomNumber)} (Floor ${escapeEmailHtml(payload.floorNumber)}) &bull; ${escapeEmailHtml(payload.dimensionSqFt)} sq ft</td>
+              </tr>
+              <tr>
+                <td style="padding:5px 0;color:#64748b;font-weight:600;">Date:</td>
+                <td style="padding:5px 0;font-weight:bold;color:#1e293b;">${escapeEmailHtml(payload.bookingDate)}</td>
+              </tr>
+              <tr>
+                <td style="padding:5px 0;color:#64748b;font-weight:600;">Time Slot:</td>
+                <td style="padding:5px 0;font-weight:bold;color:${accentHex};">${escapeEmailHtml(payload.timeRange)}</td>
+              </tr>
+              <tr>
+                <td style="padding:5px 0;color:#64748b;font-weight:600;">Booked By:</td>
+                <td style="padding:5px 0;color:#1e293b;">${escapeEmailHtml(payload.organizerName)}${
+                  payload.organizerDepartment ? ` (${escapeEmailHtml(payload.organizerDepartment)})` : ''
+                }</td>
+              </tr>
+              <tr>
+                <td style="padding:5px 0;vertical-align:top;color:#64748b;font-weight:600;">Participants:</td>
+                <td style="padding:5px 0;color:#334155;line-height:1.5;">${attendeesLine}</td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+      </table>
+
+      <a href="${escapeEmailHtml(portalUrl)}" style="background-color:#4318FF;color:#ffffff;text-decoration:none;padding:12px 28px;font-size:13px;font-weight:bold;display:inline-block;border-radius:8px;">
+        OPEN WORKSPHERE &#8594;
+      </a>
+
+      <table width="100%" cellpadding="0" cellspacing="0" style="border-top:1px solid #e2e8f0;margin-top:28px;padding-top:16px;">
+        <tr><td><p style="margin:0;font-size:11.5px;color:#94a3b8;line-height:1.6;">
+          This is an automated notification from WorkSphere Meeting Room Booking.<br>&copy; ${year} InvenTech Info Solutions. All rights reserved.
+        </p></td></tr>
+      </table>
+    </td>
+  </tr>
+</table>
+</td>
+</tr>
+</table>
+</body>
+</html>`;
+};
+
+export const getMeetingBookingInviteEmailTemplate = (payload: MeetingEmailPayload): { subject: string; text: string; html: string } => {
+  const subject = payload.title
+    ? `Meeting Invitation: ${payload.title} — Room ${payload.roomNumber} (${payload.bookingDate})`
+    : `Meeting Room Invitation: Room ${payload.roomNumber} on ${payload.bookingDate} (${payload.timeRange})`;
+  const text = `Hello ${payload.recipientName},\n\nA meeting room has been booked by ${payload.organizerName} and you have been invited to attend.\n\nRoom: ${payload.roomNumber} (Floor ${payload.floorNumber}, ${payload.dimensionSqFt} sq ft)\nDate: ${payload.bookingDate}\nTime Slot: ${payload.timeRange}${payload.title ? `\nSubject: ${payload.title}` : ''}\n\nRegards,\nWorkSphere`;
+  const html = renderMeetingEmailBase(
+    'Meeting Invitation',
+    '#4318FF',
+    '#EEF2FF',
+    '#4318FF',
+    'New Meeting Scheduled',
+    `<strong>${escapeEmailHtml(payload.organizerName)}</strong> has booked a meeting room and invited you to join the session on <strong>${escapeEmailHtml(payload.bookingDate)}</strong> at <strong>${escapeEmailHtml(payload.timeRange)}</strong>.`,
+    payload,
+  );
+  return { subject, text, html };
+};
+
+export const getMeetingBookingReminderEmailTemplate = (payload: MeetingEmailPayload): { subject: string; text: string; html: string } => {
+  const subject = payload.title
+    ? `Reminder: ${payload.title} — Room ${payload.roomNumber} (${payload.bookingDate}, ${payload.timeRange})`
+    : `Meeting Reminder: Room ${payload.roomNumber} on ${payload.bookingDate} (${payload.timeRange})`;
+  const text = `Hello ${payload.recipientName},\n\nThis is a friendly reminder for your upcoming meeting organized by ${payload.organizerName}.\n\nRoom: ${payload.roomNumber} (Floor ${payload.floorNumber}, ${payload.dimensionSqFt} sq ft)\nDate: ${payload.bookingDate}\nTime Slot: ${payload.timeRange}${payload.title ? `\nSubject: ${payload.title}` : ''}\n\nRegards,\nWorkSphere`;
+  const html = renderMeetingEmailBase(
+    'Meeting Reminder',
+    '#D97706',
+    '#FEF3C7',
+    '#B45309',
+    'Upcoming Meeting Reminder',
+    `This is a reminder for your upcoming meeting in <strong>Room ${escapeEmailHtml(payload.roomNumber)} (Floor ${escapeEmailHtml(payload.floorNumber)})</strong> scheduled on <strong>${escapeEmailHtml(payload.bookingDate)}</strong> during <strong>${escapeEmailHtml(payload.timeRange)}</strong>.`,
+    payload,
+  );
+  return { subject, text, html };
+};
+
+export const getMeetingBookingCancelledEmailTemplate = (payload: MeetingEmailPayload): { subject: string; text: string; html: string } => {
+  const subject = payload.title
+    ? `Cancelled: ${payload.title} — Room ${payload.roomNumber} (${payload.bookingDate})`
+    : `Meeting Cancelled: Room ${payload.roomNumber} on ${payload.bookingDate} (${payload.timeRange})`;
+  const text = `Hello ${payload.recipientName},\n\nPlease note that the meeting scheduled in Room ${payload.roomNumber} (Floor ${payload.floorNumber}) on ${payload.bookingDate} (${payload.timeRange}) has been cancelled by the Administrator.\n\nRegards,\nWorkSphere`;
+  const html = renderMeetingEmailBase(
+    'Meeting Cancelled',
+    '#DC2626',
+    '#FEE2E2',
+    '#B91C1C',
+    'Slot Cancelled',
+    `The meeting scheduled in <strong>Room ${escapeEmailHtml(payload.roomNumber)} (Floor ${escapeEmailHtml(payload.floorNumber)})</strong> on <strong>${escapeEmailHtml(payload.bookingDate)}</strong> at <strong>${escapeEmailHtml(payload.timeRange)}</strong> has been <strong>cancelled by Admin</strong>. You no longer need to attend this slot.`,
+    payload,
+  );
+  return { subject, text, html };
+};
